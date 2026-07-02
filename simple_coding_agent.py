@@ -20,6 +20,7 @@ target_path = QWEN_PATH
 loaded_model_name = "Qwen 2.5 Coder 7B (Agent Mode V11 Payload-Safe)"
 
 ALLOW_PATCH = "--allow-patch" in sys.argv
+FORCE_TESTING = "--force-testing" in sys.argv
 
 
 # --- HYPER-ROBUST PAYLOAD PARSER ---
@@ -150,8 +151,6 @@ def parse_robust_tool_call(response_content, tool_json_str):
         return {"name": tool_name, "args": args}
 
     elif tool_name == "extract_code_blocks":
-        # Because we're passing lists, standard JSON loading is safer here.
-        # Make sure your LLM outputs clean JSON for this tool call.
         try:
             return {"name": tool_name, "args": json.loads(cleaned).get("args", {})}
         except json.JSONDecodeError:
@@ -288,53 +287,65 @@ print("  /quit  -> Terminate agent")
 print("═" * 60)
 
 # 6. Main Agent Loop
+automated_followup = None  # Buffer for system-generated prompt injections
+
 while True:
-    print("\n[You] (Type /send to submit, /cancel to scratch draft, /undo to delete last line):")
-    user_lines = []
-    while True:
-        try:
-            line = input()
-        except EOFError:
-            break
+    user_input = ""
 
-        trimmed = line.strip()
+    # Check if we have an automated follow-up prompt queued
+    if automated_followup:
+        user_input = automated_followup
+        automated_followup = None
+        print(f"\n[Automated User]: {user_input}")
+    else:
+        # Standard human input loop
+        print("\n[You] (Type /send to submit, /cancel to scratch draft, /undo to delete last line):")
+        user_lines = []
+        while True:
+            try:
+                line = input()
+            except EOFError:
+                break
 
-        if trimmed == "/send":
-            break
-        if trimmed == "/quit":
-            print("Exiting. Goodbye!")
-            sys.exit(0)
+            trimmed = line.strip()
 
-        # FIX: Wipes history AND current draft buffer completely
-        if trimmed == "/clear":
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-            session_cwd = os.getcwd()
-            is_split_mode = False
-            original_split_file = None
-            sandbox_directory = None
-            user_lines = []
-            print("🧹 Memory and current draft completely cleared!")
-            break  # Breaks back to the main loop to display a fresh prompt
+            if trimmed == "/send":
+                break
+            if trimmed == "/quit":
+                print("Exiting. Goodbye!")
+                sys.exit(0)
 
-        # NEW FEATURE: Scratches the current input draft without touching AI memory
-        if trimmed == "/cancel":
-            user_lines = []
-            print("❌ Current draft discarded. Start typing your new prompt below:")
-            break  # Breaks back to the main loop to refresh the prompt
+            if trimmed == "/clear":
+                messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                session_cwd = os.getcwd()
+                is_split_mode = False
+                original_split_file = None
+                sandbox_directory = None
+                automated_followup = None
+                user_lines = []
+                print("🧹 Memory and current draft completely cleared!")
+                break
 
-        # NEW FEATURE: Removes just the last line entered so you can fix typos
-        if trimmed == "/undo":
-            if user_lines:
-                removed = user_lines.pop()
-                print(f"🗑️  Removed line: \"{removed}\"")
-                print(f"Current buffer status ({len(user_lines)} lines active). Continue typing...")
-            else:
-                print("⚠️ Buffer is already empty.")
-            continue
+            if trimmed == "/cancel":
+                user_lines = []
+                print("❌ Current draft discarded. Start typing your new prompt below:")
+                break
 
-        user_lines.append(line)
+            if trimmed == "/undo":
+                if user_lines:
+                    removed = user_lines.pop()
+                    print(f"🗑️  Removed line: \"{removed}\"")
+                    print(f"Current buffer status ({len(user_lines)} lines active). Continue typing...")
+                else:
+                    print("⚠️ Buffer is already empty.")
+                continue
 
-    user_input = "\n".join(user_lines).strip()
+            user_lines.append(line)
+
+        # If a macro like /clear broke the inner loop, don't build user_input
+        user_input = "\n".join(user_lines).strip()
+
+    # Restart loop if no input was gathered
     if not user_input:
         continue
 
@@ -454,6 +465,8 @@ while True:
         messages.append({"role": "user", "content": user_input})
 
     # Internal Agent Execution Loop
+    file_was_modified = False  # Track if any files change during this cycle
+
     while True:
         print(f"\n[Agent]: ", end="", flush=True)
         response_content = ""
@@ -485,15 +498,14 @@ while True:
             messages.append({"role": "assistant", "content": response_content})
 
             # --- SYSTEM GUARDRAIL INTERCEPTOR FOR SANDBOX MODE ---
-            # Triggers when the agent confirms it has finished refactoring tasks
             if is_split_mode and (
                     "refactor phase complete" in response_content.lower() or "task complete" in response_content.lower()):
                 print("\n⚙️  [System Guardrail] Analyzing sandbox refactoring health...")
 
-                # Step 1: Check structural integrity (Are all methods present?)
+                # Step 1: Check structural integrity
                 passed, report = file_splitter.verify_refactor_integrity(original_split_file, sandbox_directory)
 
-                # Step 2: Native Linter Check (Are all imports resolved?)
+                # Step 2: Native Linter Check
                 if passed:
                     for root, _, files in os.walk(sandbox_directory):
                         for file in files:
@@ -507,7 +519,7 @@ while True:
                                         f"Dependency Error in '{file}':\n{linter_error}\n"
                                         "Use your patch_file or write_file tool to add the missing imports at the top of the file."
                                     )
-                                    break  # Fail fast: Stop checking after the first error
+                                    break
                         if not passed:
                             break
 
@@ -532,12 +544,11 @@ while True:
                     break
                 else:
                     print(f"❌ Verification Failed:\n{report}")
-                    # Feed the error straight back to the model as an automated user prompt
                     messages.append({
                         "role": "user",
                         "content": f"System Verification Failed:\n{report}\n\nPlease use your tools to correct this error. When done, output 'Refactor Phase Complete'."
                     })
-                    continue  # Force the agent loop to continue and fix its mistakes
+                    continue
             # -----------------------------------------------------
 
             # Extract tool arguments
@@ -546,7 +557,6 @@ while True:
             if tool_match:
                 tool_json_str = tool_match.group(1).strip()
             else:
-                # search for a json block that actually contains "name", not just the first one
                 for md_match in re.finditer(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL):
                     candidate = md_match.group(1).strip()
                     if '"name"' in candidate:
@@ -578,16 +588,6 @@ while True:
                             })
                             continue
 
-                    if tool_name in ["write_file", "append_file"]:
-                        content = tool_args.get('content', '')
-                        if not content.strip():
-                            print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
-                            messages.append({
-                                "role": "user",
-                                "content": f"System Alert: You attempted to call {tool_name} with an empty payload. If you have no changes to make, do NOT call a tool. Announce completion instead."
-                            })
-                            continue
-
                     print(f"\n⚠️  AGENT REQUESTS PERMISSION TO EXECUTE: {tool_name}")
                     if tool_name in ["write_file", "append_file"]:
                         print(f"Resolved Target File: {tool_args.get('filepath')}")
@@ -610,26 +610,26 @@ while True:
                             s_line = tool_args.get("start_line", 1)
                             m_lines = tool_args.get("max_lines", 75)
                             tool_result = read_file(tool_args.get("filepath"), start_line=s_line, max_lines=m_lines)
+
                         elif tool_name == "write_file":
+                            file_was_modified = True  # Flag code modification
                             content = tool_args.get("content", "")
                             content = re.sub(r"^```[a-zA-Z]*\n", "", content)
                             content = re.sub(r"\n```$", "", content)
 
                             tool_result = write_file(tool_args.get("filepath"), content)
 
-                            # --- UNIVERSAL LINTER GUARDRAIL ---
                             linter_error = native_linter.check_python_syntax_and_imports(tool_args.get("filepath"))
                             if linter_error:
                                 tool_result += f"\n\n⚠️ CRITICAL WARNING: The file was written, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
-                            # ----------------------------------
 
-                            # Custom rule depending on mode
                             if is_split_mode:
                                 tool_reinforcement = "\n\n(System Rule: Write successful. Continue splitting code into files. If done, output 'Refactor Phase Complete'.)"
                             else:
                                 tool_reinforcement = "\n\n(System Rule: Write successful. Do NOT output the file's contents. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
 
                         elif tool_name == "append_file":
+                            file_was_modified = True  # Flag code modification
                             content = tool_args.get("content", "")
                             content = re.sub(r"^```[a-zA-Z]*\n", "", content)
                             content = re.sub(r"\n```$", "", content)
@@ -641,6 +641,7 @@ while True:
                                 tool_reinforcement = "\n\n(System Rule: Append successful. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
 
                         elif tool_name == "patch_file":
+                            file_was_modified = True  # Flag code modification
                             tool_result = patch_file(tool_args.get("filepath"), tool_args.get("search_text"),
                                                      tool_args.get("replace_text"))
                             if is_split_mode:
@@ -649,6 +650,7 @@ while True:
                                 tool_reinforcement = "\n\n(System Rule: Patch successful. Do not summarize. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
 
                         elif tool_name == "run_cmd":
+                            file_was_modified = False  # Reset flag upon test/execution
                             tool_result = run_cmd(tool_args.get("command"))
                         else:
                             tool_result = "Error: Unknown tool."
@@ -675,6 +677,13 @@ while True:
                     print(f"\n❌ [Parser Interceptor] Halted a syntax loop. Returning loop control to user.")
                     messages.append({"role": "user", "content": error_msg})
                     break
+
+            # --- AUTOMATED FOLLOW-UP TRIGGER ---
+            # If the agent reached a plain text response (finished calling tools) and modified a file
+            if FORCE_TESTING and file_was_modified and not is_split_mode:
+                print("\n[System]: Catching unverified changes. Automatically queuing follow-up test prompt.")
+                automated_followup = "Great. Now run the tests or execute the file using `run_cmd` to verify your changes."
+
             break
 
         except Exception as e:
