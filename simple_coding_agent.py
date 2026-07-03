@@ -363,15 +363,14 @@ while True:
             messages.append({"role": "assistant", "content": response_content})
 
             # --- SYSTEM GUARDRAIL INTERCEPTOR FOR SANDBOX MODE ---
-            # 💡 MODIFIED: Added 'refactor fully verified' to the trigger list
-            if is_split_mode and any(phrase in response_content.lower() for phrase in
-                                     ["refactor phase complete", "task complete", "refactor fully verified"]):
+            if is_split_mode and (
+                    "refactor phase complete" in response_content.lower() or "task complete" in response_content.lower()):
                 print("\n⚙️  [System Guardrail] Analyzing sandbox refactoring health...")
 
-                # Step 1: Check structural integrity (Are all methods present?)
+                # Step 1: Check structural integrity
                 passed, report = file_splitter.verify_refactor_integrity(original_split_file, sandbox_directory)
 
-                # Step 2: Native Linter Check (Are all imports resolved?)
+                # Step 2: Native Linter Check
                 if passed:
                     for root, _, files in os.walk(sandbox_directory):
                         for file in files:
@@ -385,29 +384,13 @@ while True:
                                         f"Dependency Error in '{file}':\n{linter_error}\n"
                                         "Use your patch_file or write_file tool to add the missing imports at the top of the file."
                                     )
-                                    break  # Fail fast: Stop checking after the first error
+                                    break
                         if not passed:
                             break
 
                 # Step 3: Resolution
                 if passed:
-                    # 💡 NEW: If force-testing is active, and the agent hasn't explicitly verified execution yet
-                    if FORCE_TESTING and "refactor fully verified" not in response_content.lower():
-                        print("🧪 Force Testing Active: Instructing agent to find and run its entry point file.")
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                "The sandbox passed structural syntax checks. "
-                                "Now, look at the files you created, locate the main entry point, runtime script, or test file, "
-                                "and use your `run_cmd` tool to execute it to verify everything works without crashing. "
-                                "If it fails, use your tools to fix it. Once you have successfully verified execution, "
-                                "explicitly state 'Refactor Fully Verified' in plain text."
-                            )
-                        })
-                        continue  # Re-enters the internal loop, forcing the agent to run the file
-
-                    # If FORCE_TESTING is off, OR the agent successfully ran the file and said "Refactor Fully Verified"
-                    print("✅ Sandbox passed structural, dependency, and runtime verification checks!")
+                    print("✅ Sandbox passed structural AND dependency checks!")
                     print(f"Files are safely staged in: {sandbox_directory}")
                     approval = input("Would you like to promote these files to production? (y/n): ").strip().lower()
 
@@ -426,12 +409,11 @@ while True:
                     break
                 else:
                     print(f"❌ Verification Failed:\n{report}")
-                    # Feed the error straight back to the model as an automated user prompt
                     messages.append({
                         "role": "user",
                         "content": f"System Verification Failed:\n{report}\n\nPlease use your tools to correct this error. When done, output 'Refactor Phase Complete'."
                     })
-                    continue  # Force the agent loop to continue and fix its mistakes
+                    continue
             # -----------------------------------------------------
 
             # Extract tool arguments
