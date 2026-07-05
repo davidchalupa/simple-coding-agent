@@ -9,7 +9,7 @@ import pytest
 import simple_coding_agent
 
 
-def run_automated_test(input_queue):
+def run_automated_test(input_queue, max_calls_limit=10):
     print("🧪 Starting Automated Agent Flow Test...", flush=True)
 
     original_cwd = os.getcwd()  # STORE THE ORIGINAL DIRECTORY
@@ -20,7 +20,7 @@ def run_automated_test(input_queue):
     simple_coding_agent.session_cwd = test_sandbox
     simple_coding_agent.FORCE_TESTING = True
 
-    safety_counter = {"calls": 0, "max_calls": 50}
+    safety_counter = {"calls": 0, "max_calls": max_calls_limit}
 
     def smart_input_mocker(prompt=""):
         safety_counter["calls"] += 1
@@ -142,7 +142,9 @@ def test_agent_workflow_two_sum():
 #     input_queue = [
 #         # --- PHASE 1: Implementation ---
 #         "Can you give me a code that solves the 0/1 knapsack problem with integer weights and capacity and save",
-#         "the code to knapsack_01.py?",
+#           "the code to knapsack_01.py?",
+#
+#
 #         "/send",
 #
 #         # --- PHASE 2: Testing ---

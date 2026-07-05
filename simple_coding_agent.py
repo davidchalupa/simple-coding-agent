@@ -483,8 +483,29 @@ def main():
                 # --- AUTOMATED FOLLOW-UP TRIGGER ---
                 # If the agent reached a plain text response (finished calling tools) and modified a file
                 if FORCE_TESTING and file_was_modified and not is_split_mode:
-                    print("\n[System]: Catching unverified changes. Automatically queuing follow-up test prompt.")
-                    automated_followup = "Great. Now run the tests or execute the file using `run_cmd` to verify your changes."
+                    # Check if the file written looks like a test file
+                    raw_path = tool_args.get("filepath", "")
+
+                    if raw_path:
+                        path_obj = Path(raw_path)
+                        filename = path_obj.name.lower()
+
+                        is_test_filename = filename.startswith("test_") or filename.endswith("_test.py")
+
+                        is_test_file = is_test_filename and filename.endswith(".py")
+                    else:
+                        is_test_file = False
+
+                    if is_test_file:
+                        print(
+                            "\n[System]: Catching unverified test changes. Automatically queuing follow-up test prompt.")
+                        automated_followup = "Great. Now use `run_cmd` to run this test file (e.g., using `pytest` or `python -m unittest`) to verify your logic."
+                    else:
+                        # Optional: Instead of running a silent script, prompt the agent to WRITE the tests next.
+                        print("\n[System]: Main script modified. Queuing prompt to write tests.")
+                        # we will not use follow-up in this case for now
+                        automated_followup = None
+                        # automated_followup = "Great. Now write a separate unit test file to verify this logic."
 
                 break
 
