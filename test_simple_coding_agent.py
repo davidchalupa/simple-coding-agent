@@ -24,7 +24,9 @@ def run_automated_test():
 
     input_queue = [
         # --- PHASE 1: Implementation ---
-        "Write a Python script named `two_sum.py` with a function `two_sum(nums, target)` that solves the LeetCode Two Sum problem. Return the indices of the two numbers.",
+        "Write a Python script named `two_sum.py` with a function `two_sum(nums, target)` that returns the indices "
+        "of the two numbers in nums array such that they add up to target. "
+        "You may assume that each input would have exactly one solution, and you may not use the same element twice. ",
         "/send",
 
         # (Because FORCE_TESTING is True, the agent will automatically self-trigger a check here)
