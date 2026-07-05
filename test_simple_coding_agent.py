@@ -9,7 +9,7 @@ import pytest
 import simple_coding_agent
 
 
-def run_automated_test(input_queue, max_calls_limit=10):
+def run_automated_test(input_queue, file_name, test_file_name, max_calls_limit=10):
     print("🧪 Starting Automated Agent Flow Test...", flush=True)
 
     original_cwd = os.getcwd()  # STORE THE ORIGINAL DIRECTORY
@@ -60,10 +60,11 @@ def run_automated_test(input_queue, max_calls_limit=10):
         print("📊 Phase 1: Generation Results", flush=True)
         print(f"Files generated in sandbox: {sandbox_files}", flush=True)
 
-        if "two_sum.py" in sandbox_files and "test_two_sum.py" in sandbox_files:
+        if file_name in sandbox_files and test_file_name in sandbox_files:
             print("✅ SUCCESS: The expected files were generated.", flush=True)
         else:
             print("❌ FAILED: The expected files were not found in the sandbox.", flush=True)
+            pytest.fail("Files missing in the sandbox!")
             return  # Exit early if files are missing
 
         # --- Phase 2: Independent Verification ---
@@ -117,43 +118,43 @@ def test_agent_workflow_two_sum():
         "/quit"
     ]
 
-    run_automated_test(input_queue)
+    run_automated_test(input_queue, file_name="two_sum.py", test_file_name="test_two_sum.py")
 
 
-# def test_agent_workflow_lcs():
-#     input_queue = [
-#         # --- PHASE 1: Implementation ---
-#         "Can you write the code for longest common subsequence of two strings that returns the actual subsequence ",
-#         "string and save the code to lcs.py? ",
-#         "/send",
-#
-#         # --- PHASE 2: Testing ---
-#         "Excellent. Can you now write unit tests for lcs.py and save them to test_lcs.py?",
-#         "/send",
-#
-#         # --- PHASE 3: Graceful Exit ---
-#         "/quit"
-#     ]
-#
-#     run_automated_test(input_queue)
-#
-#
-# def test_agent_workflow_knapsack_01():
-#     input_queue = [
-#         # --- PHASE 1: Implementation ---
-#         "Can you give me a code that solves the 0/1 knapsack problem with integer weights and capacity and save",
-#           "the code to knapsack_01.py?",
-#
-#
-#         "/send",
-#
-#         # --- PHASE 2: Testing ---
-#         "Excellent. Can you now write unittests for knapsack_01.py? Make sure you use relative imports so we can ",
-#         "run the test. Make sure that expected values checked are correct. Save the tests to test_knapsack_01.py. ",
-#         "/send",
-#
-#         # --- PHASE 3: Graceful Exit ---
-#         "/quit"
-#     ]
-#
-#     run_automated_test(input_queue)
+def test_agent_workflow_lcs():
+    input_queue = [
+        # --- PHASE 1: Implementation ---
+        "Can you write the code for longest common subsequence of two strings that returns the actual subsequence ",
+        "string and save the code to lcs.py? ",
+        "/send",
+
+        # --- PHASE 2: Testing ---
+        "Excellent. Can you now write unit tests for lcs.py and save them to test_lcs.py?",
+        "/send",
+
+        # --- PHASE 3: Graceful Exit ---
+        "/quit"
+    ]
+
+    run_automated_test(input_queue, file_name="lcs.py", test_file_name="test_lcs.py")
+
+
+def test_agent_workflow_knapsack_01():
+    input_queue = [
+        # --- PHASE 1: Implementation ---
+        "Can you give me a code that solves the 0/1 knapsack problem with integer weights and capacity and save",
+        "the code to knapsack_01.py?",
+
+
+        "/send",
+
+        # --- PHASE 2: Testing ---
+        "Excellent. Can you now write unittests for knapsack_01.py? Make sure you use relative imports so we can ",
+        "run the test. Make sure that expected values checked are correct. Save the tests to test_knapsack_01.py. ",
+        "/send",
+
+        # --- PHASE 3: Graceful Exit ---
+        "/quit"
+    ]
+
+    run_automated_test(input_queue, file_name="knapsack_01.py", test_file_name="test_knapsack_01.py")
