@@ -499,7 +499,20 @@ def main():
                     if is_test_file:
                         print(
                             "\n[System]: Catching unverified test changes. Automatically queuing follow-up test prompt.")
-                        automated_followup = "Great. Now use `run_cmd` to run this test file (e.g., using `pytest` or `python -m unittest`) to verify your logic."
+                        # automated_followup = (
+                        #     "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
+                        #     "CRITICAL: If the tests fail, do NOT just explain the error. You MUST immediately use `patch_file` or `write_file` "
+                        #     "to fix the bugs in the source code or the test file, and then run the tests again until they pass."
+                        # )
+                        # this is a possibly hardened version of the follow-up enforcing checking of possibly
+                        # hallucinated expected values
+                        automated_followup = (
+                            "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
+                            "CRITICAL: If a test fails, DO NOT blindly rewrite the main implementation code. "
+                            "First, verify if the test file itself is flawed (e.g., incorrect expected values, bad inputs, or flawed assertions). "
+                            "Use `patch_file` or `write_file` to fix whichever file is actually incorrect (the test or the source code), "
+                            "and rerun the tests until everything passes."
+                        )
                     else:
                         # Optional: Instead of running a silent script, prompt the agent to WRITE the tests next.
                         print("\n[System]: Main script modified. Queuing prompt to write tests.")

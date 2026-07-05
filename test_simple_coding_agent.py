@@ -9,7 +9,7 @@ import pytest
 import simple_coding_agent
 
 
-def run_automated_test(input_queue, file_name, test_file_name, max_calls_limit=10):
+def run_automated_test(input_queue, file_name, test_file_name, max_calls_limit=30):
     print("🧪 Starting Automated Agent Flow Test...", flush=True)
 
     original_cwd = os.getcwd()  # STORE THE ORIGINAL DIRECTORY
@@ -114,6 +114,10 @@ def test_agent_workflow_two_sum():
         "Excellent. Now write a test file named `test_two_sum.py` using the `unittest` framework to test the `two_sum.py` script you just created. Include at least 3 different edge cases.",
         "/send",
 
+        # --- PHASE 2.5: Enforcing fixes to reduce flakiness ---
+        "If any tests failed during your verification, fix them now using your tools. If they all passed, just reply 'All good'.",
+        "/send",
+
         # --- PHASE 3: Graceful Exit ---
         "/quit"
     ]
@@ -129,7 +133,14 @@ def test_agent_workflow_lcs():
         "/send",
 
         # --- PHASE 2: Testing ---
-        "Excellent. Can you now write unit tests for lcs.py and save them to test_lcs.py?",
+        "Excellent. Can you now write unit tests for lcs.py and save them to test_lcs.py? Include only test cases with a unique solution. "
+        "Do not include any that may have two or more solutions. ",
+        "/send",
+
+        # --- PHASE 2.5: Hardened Active Verification: a stronger strategy to reduce hallucinations needed here ---
+        "Run the test suite one final time using your `run_cmd` tool to verify your changes. "
+        "If you see ANY failures or AssertionErrors in the terminal output, you must immediately patch the source code or the test file to correct the expected values. "
+        "Do NOT say 'All good' until you have executed the tool and the console explicitly shows that all tests passed.",
         "/send",
 
         # --- PHASE 3: Graceful Exit ---
@@ -142,15 +153,19 @@ def test_agent_workflow_lcs():
 def test_agent_workflow_knapsack_01():
     input_queue = [
         # --- PHASE 1: Implementation ---
-        "Can you give me a code that solves the 0/1 knapsack problem with integer weights and capacity and save",
-        "the code to knapsack_01.py?",
-
-
+        "Can you give me a code that solves the 0/1 knapsack problem with integer weights and capacity and save the code to knapsack_01.py? "
+        "Crucial: The function should ONLY return the maximum value (an integer). Do not return the list of selected items.",
         "/send",
 
         # --- PHASE 2: Testing ---
-        "Excellent. Can you now write unittests for knapsack_01.py? Make sure you use relative imports so we can ",
-        "run the test. Make sure that expected values checked are correct. Save the tests to test_knapsack_01.py. ",
+        "Excellent. Can you now write unittests for knapsack_01.py? "
+        "Make sure that expected values checked are correct. Save the tests to test_knapsack_01.py.",
+        "/send",
+
+        # --- PHASE 2.5: Hardened Active Verification: a stronger strategy to reduce hallucinations needed here ---
+        "Run the test suite one final time using your `run_cmd` tool to verify your changes. "
+        "If you see ANY failures or AssertionErrors in the terminal output, you must immediately patch the source code or the test file to correct the expected values. "
+        "Do NOT say 'All good' until you have executed the tool and the console explicitly shows that all tests passed.",
         "/send",
 
         # --- PHASE 3: Graceful Exit ---
