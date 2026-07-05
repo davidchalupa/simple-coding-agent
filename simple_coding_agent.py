@@ -21,6 +21,7 @@ CONTEXT_WINDOW = 8192  # Ensure maximum headroom for analysis
 target_path = str(QWEN_PATH)
 loaded_model_name = "Qwen 2.5 Coder 7B (Agent Mode V11 Payload-Safe)"
 
+ALLOW_APPEND = "--allow-append" in sys.argv
 ALLOW_PATCH = "--allow-patch" in sys.argv
 FORCE_TESTING = "--force-testing" in sys.argv
 
@@ -59,7 +60,7 @@ def initialize_agent():
         sys.exit(1)
 
     # 5. System Prompt & State Tracking
-    SYSTEM_PROMPT = build_system_prompt(ALLOW_PATCH)
+    SYSTEM_PROMPT = build_system_prompt(allow_patch=ALLOW_PATCH, allow_append=ALLOW_APPEND, force_testing=FORCE_TESTING)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
 
@@ -73,6 +74,11 @@ def main():
     print(f"🤖 Local Agent Initialized: [{loaded_model_name}]")
     if ALLOW_PATCH:
         print("🔧 [STATUS] Patching Enabled")
+    if ALLOW_APPEND:
+        print("🔧 [STATUS] Appending Enabled")
+    if FORCE_TESTING:
+        print("🔧 [STATUS] Forced Testing Enabled")
+    print("🔧 [SYSTEM PROMPT]\n" + SYSTEM_PROMPT)
 
     print("\n🚀 Available Modes & Macros:")
     print("  /requirements [--no-version] [path]")
