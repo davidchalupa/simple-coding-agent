@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 from llama_cpp import Llama
+from pathlib import Path
 
 from coding_agent.tool_definitions import read_file, write_file, append_file, patch_file, run_cmd
 from coding_agent.system_prompt_builder import build_system_prompt
@@ -14,9 +15,10 @@ from coding_agent import native_linter
 from coding_agent import payload_parser
 
 # 1. Configuration
-QWEN_PATH = "models/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+script_dir = Path(__file__).resolve().parent
+QWEN_PATH = script_dir / "models"/ "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
 CONTEXT_WINDOW = 8192  # Ensure maximum headroom for analysis
-target_path = QWEN_PATH
+target_path = str(QWEN_PATH)
 loaded_model_name = "Qwen 2.5 Coder 7B (Agent Mode V11 Payload-Safe)"
 
 ALLOW_PATCH = "--allow-patch" in sys.argv
