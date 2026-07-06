@@ -515,9 +515,10 @@ def main():
                         )
                     else:
                         # Optional: Instead of running a silent script, prompt the agent to WRITE the tests next.
-                        print("\n[System]: Main script modified. Queuing prompt to write tests.")
                         # we will not use follow-up in this case for now
+                        print("\n[System]: Main script written / modified.")
                         automated_followup = None
+                        # print("\n[System]: Main script written / modified. Queuing prompt to write tests.")
                         # automated_followup = "Great. Now write a separate unit test file to verify this logic."
 
                 break
