@@ -35,6 +35,7 @@ is_split_mode = False
 original_split_file = None
 sandbox_directory = None
 automated_followup = None  # Buffer for system-generated prompt injections
+has_prompted_for_tests = False
 
 
 def initialize_agent():
@@ -64,7 +65,7 @@ def initialize_agent():
 
 
 def main():
-    global messages, session_cwd, is_split_mode, original_split_file, sandbox_directory, automated_followup
+    global messages, session_cwd, is_split_mode, original_split_file, sandbox_directory, automated_followup, has_prompted_for_tests
 
     # Run the initialization sequence
     initialize_agent()
@@ -496,7 +497,7 @@ def main():
                     else:
                         is_test_file = False
 
-                    if is_test_file:
+                    if is_test_file and not has_prompted_for_tests:
                         print(
                             "\n[System]: Catching unverified test changes. Automatically queuing follow-up test prompt.")
                         # automated_followup = (
@@ -504,15 +505,28 @@ def main():
                         #     "CRITICAL: If the tests fail, do NOT just explain the error. You MUST immediately use `patch_file` or `write_file` "
                         #     "to fix the bugs in the source code or the test file, and then run the tests again until they pass."
                         # )
-                        # this is a possibly hardened version of the follow-up enforcing checking of possibly
-                        # hallucinated expected values
+                        # # this is a possibly hardened version of the follow-up enforcing checking of possibly
+                        # # hallucinated expected values
+                        # automated_followup = (
+                        #     "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
+                        #     "CRITICAL: If a test fails, DO NOT blindly rewrite the main implementation code. "
+                        #     "First, verify if the test file itself is flawed (e.g., incorrect expected values, bad inputs, or flawed assertions). "
+                        #     "Use `patch_file` or `write_file` to fix whichever file is actually incorrect (the test or the source code), "
+                        #     "and rerun the tests until everything passes."
+                        # )
+                        # another hardened version of the automated follow-up prompt to enforce Chain-of-Thought (CoT)
+                        # this is to ensure the agent writes out its diagnosis before it is allowed to call a tool
                         automated_followup = (
                             "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
-                            "CRITICAL: If a test fails, DO NOT blindly rewrite the main implementation code. "
-                            "First, verify if the test file itself is flawed (e.g., incorrect expected values, bad inputs, or flawed assertions). "
-                            "Use `patch_file` or `write_file` to fix whichever file is actually incorrect (the test or the source code), "
-                            "and rerun the tests until everything passes."
+                            "CRITICAL: If a test fails, you must follow these steps strictly:\n"
+                            "1. Do NOT output a tool call immediately.\n"
+                            "2. In plain text, explicitly write out the math or logic for the failing test (e.g., 'Target is -6. -2 is at index 1, -4 is at index 3. Expected is [1, 3]').\n"
+                            "3. Check your actual source code. Does it raise a ValueError, or return an empty list?\n"
+                            "4. ONLY after writing this analysis, use `patch_file` or `write_file` to fix the test or source code.\n"
+                            "5. Rerun the tests until they pass."
                         )
+                        # Prevent this from firing again on subsequent fixes!
+                        has_prompted_for_tests = True
                     else:
                         # Optional: Instead of running a silent script, prompt the agent to WRITE the tests next.
                         # we will not use follow-up in this case for now
