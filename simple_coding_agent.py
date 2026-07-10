@@ -514,15 +514,26 @@ def main():
                         #     "Use `patch_file` or `write_file` to fix whichever file is actually incorrect (the test or the source code), "
                         #     "and rerun the tests until everything passes."
                         # )
-                        # another hardened version of the automated follow-up prompt to enforce Chain-of-Thought (CoT)
-                        # this is to ensure the agent writes out its diagnosis before it is allowed to call a tool
+                        # # another hardened version of the automated follow-up prompt to enforce Chain-of-Thought (CoT)
+                        # # this is to ensure the agent writes out its diagnosis before it is allowed to call a tool
+                        # automated_followup = (
+                        #     "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
+                        #     "CRITICAL: If a test fails, you must follow these steps strictly:\n"
+                        #     "1. Do NOT output a tool call immediately.\n"
+                        #     "2. In plain text, explicitly write out the math or logic for the failing test (e.g., 'Target is -6. -2 is at index 1, -4 is at index 3. Expected is [1, 3]').\n"
+                        #     "3. Check your actual source code. Does it raise a ValueError, or return an empty list?\n"
+                        #     "4. ONLY after writing this analysis, use `patch_file` or `write_file` to fix the test or source code.\n"
+                        #     "5. Rerun the tests until they pass."
+                        # )
+                        # yet another hardened version of the follow-up prompt to make sure the agent checks for test
+                        # correctness
                         automated_followup = (
                             "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
                             "CRITICAL: If a test fails, you must follow these steps strictly:\n"
                             "1. Do NOT output a tool call immediately.\n"
-                            "2. In plain text, explicitly write out the math or logic for the failing test (e.g., 'Target is -6. -2 is at index 1, -4 is at index 3. Expected is [1, 3]').\n"
-                            "3. Check your actual source code. Does it raise a ValueError, or return an empty list?\n"
-                            "4. ONLY after writing this analysis, use `patch_file` or `write_file` to fix the test or source code.\n"
+                            "2. Audit the failing test case: Does the test input actually violate the original problem constraints? (e.g., 'Two Sum' requires exactly one valid pair, so a single-element array is an invalid test).\n"
+                            "3. If the test itself is invalid, use `patch_file` or `write_file` to DELETE or FIX the bad test in the test file.\n"
+                            "4. If the test is valid, analyze why your source code failed, and fix the source code.\n"
                             "5. Rerun the tests until they pass."
                         )
                         # Prevent this from firing again on subsequent fixes!

@@ -110,12 +110,19 @@ def test_agent_workflow_two_sum():
         "You may assume that each input would have exactly one solution, and you may not use the same element twice. ",
         "/send",
 
-        # --- PHASE 2: Testing ---
-        "Excellent. Now write a test file named `test_two_sum.py` using the `unittest` framework to test the `two_sum.py` script you just created. Include at least 3 different edge cases.",
+        # --- PHASE 2: Invariant-Driven Testing ---
+        "Excellent. Now write a test file named `test_two_sum.py` using the `unittest` framework to test `two_sum.py`. "
+        "CRITICAL INSTRUCTION: Do not hardcode exact expected index arrays (e.g., do not assert `res == [1, 2]`). "
+        "Instead, write invariant-driven tests. For every test case, call `result = two_sum(nums, target)`, and assert the properties: "
+        "1. `len(result) == 2` "
+        "2. `result[0] != result[1]` "
+        "3. `nums[result[0]] + nums[result[1]] == target`. "
+        "Include at least 3 diverse edge cases (including negative numbers) using this exact property-checking pattern.",
         "/send",
 
         # --- PHASE 2.5: Enforcing fixes to reduce flakiness ---
-        "If any tests failed during your verification, fix them now using your tools. If they all passed, just reply 'All good'.",
+        "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
+        "If they all passed, just reply 'All good'.",
         "/send",
 
         # --- PHASE 3: Graceful Exit ---

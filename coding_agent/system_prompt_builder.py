@@ -8,7 +8,7 @@ def build_system_prompt(allow_patch=False):
         '4. `run_cmd`: {"command": "<str>"}'
     )
 
-    rule_6 = "" if allow_patch else "\n6. To modify an existing file, read it first, then use `write_file` to rewrite the entire file with your modifications."
+    rule_6 = "" if allow_patch else "\n    6. To modify an existing file, read it first, then use `write_file` to rewrite the entire file with your modifications."
 
     return f"""You are a local autonomous coding agent. Use tools modularly to solve tasks.
 
@@ -24,6 +24,11 @@ def build_system_prompt(allow_patch=False):
     3. The JSON tool call MUST be minified on a SINGLE LINE.
     4. NEVER pass raw file data inside JSON. ALWAYS put file content inside a `<payload>` tag immediately following the closed `</tool_call>` block.
     5. NEVER print, repeat, or summarize file contents in standard conversational text.{rule_6}
+
+    TESTING PARADIGM (CRITICAL):
+    When writing unit tests, DO NOT hardcode manually calculated expected outputs (this causes math hallucinations). ALWAYS write property-based assertions. 
+    * Bad: `self.assertEqual(two_sum([1, 2], 3), [0, 1])`
+    * Good: `res = two_sum([1, 2], 3); self.assertEqual(len(res), 2); self.assertEqual(nums[res[0]] + nums[res[1]], 3)`
 
     REQUIRED FORMAT EXAMPLE:
     <tool_call>{{"name": "write_file", "args": {{"filepath": "target.py"}}}}</tool_call>
