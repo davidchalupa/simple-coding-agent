@@ -135,19 +135,27 @@ def test_agent_workflow_two_sum():
 def test_agent_workflow_lcs():
     input_queue = [
         # --- PHASE 1: Implementation ---
-        "Can you write the code for longest common subsequence of two strings that returns the actual subsequence ",
+        "Can you write the code for longest common subsequence of two strings that returns the actual subsequence "
         "string and save the code to lcs.py? ",
         "/send",
 
-        # --- PHASE 2: Testing ---
-        "Excellent. Can you now write unit tests for lcs.py and save them to test_lcs.py? Include only test cases with a unique solution. "
-        "Do not include any that may have two or more solutions. ",
+        # --- PHASE 2: Invariant-Driven Testing with Trivial Constructions ---
+        "Excellent. Now write unit tests for lcs.py and save them to test_lcs.py using the unittest framework. "
+        "CRITICAL INSTRUCTION: Since multiple valid longest subsequences can exist, do not assert exact string matches. "
+        "Instead, write a helper function `is_subsequence(sub, s)`. "
+        "Furthermore, to avoid miscalculating expected lengths, strictly use these 3 trivial constructions for your test cases: "
+        "1. Identical strings (e.g., s1='abc', s2='abc', expected_length=3) "
+        "2. Empty string (e.g., s1='abc', s2='', expected_length=0) "
+        "3. Strict subset (e.g., s1='abc', s2='xaxbxcx', expected_length=3). "
+        "For each, assert: 1. `is_subsequence(result, s1)`, 2. `is_subsequence(result, s2)`, and 3. `len(result) == expected_length`.",
         "/send",
 
-        # --- PHASE 2.5: Hardened Active Verification: a stronger strategy to reduce hallucinations needed here ---
-        "Run the test suite one final time using your `run_cmd` tool to verify your changes. "
-        "If you see ANY failures or AssertionErrors in the terminal output, you must immediately patch the source code or the test file to correct the expected values. "
-        "Do NOT say 'All good' until you have executed the tool and the console explicitly shows that all tests passed.",
+        # --- PHASE 2.5: Hardened Verification & Loop-Breaking ---
+        "Run the test suite one final time using your `run_cmd` tool. "
+        "CRITICAL RULE: If a test fails, DO NOT immediately rewrite `lcs.py`. Small AI models frequently write incorrect expected values in test files. "
+        "First, manually verify if the `expected_length` in `test_lcs.py` is mathematically correct. If the test expectation is wrong, patch the test file! "
+        "Only patch `lcs.py` if you are 100% sure the test is correct. "
+        "Do NOT say 'All good' until the console explicitly shows that all tests passed.",
         "/send",
 
         # --- PHASE 3: Graceful Exit ---
@@ -164,12 +172,18 @@ def test_agent_workflow_knapsack_01():
         "Crucial: The function should ONLY return the maximum value (an integer). Do not return the list of selected items.",
         "/send",
 
-        # --- PHASE 2: Testing ---
-        "Excellent. Can you now write unittests for knapsack_01.py? "
-        "Make sure that expected values checked are correct. Save the tests to test_knapsack_01.py.",
+        # --- PHASE 2: Invariant-Driven Testing ---
+        "Excellent. Now write unittests for knapsack_01.py and save them to test_knapsack_01.py using the unittest framework. "
+        "CRITICAL INSTRUCTION: Instead of only checking exact expected answers, use Metamorphic property-based testing. "
+        "For a given list of weights and values, assert the following structural invariants: "
+        "1. `self.assertEqual(knapsack(0, weights, values), 0)` (Zero capacity always yields 0) "
+        "2. `self.assertEqual(knapsack(capacity, [], []), 0)` (No items always yields 0) "
+        "3. `self.assertLessEqual(knapsack(capacity, weights, values), sum(values))` (Max value cannot exceed the sum of all item values) "
+        "4. `self.assertGreaterEqual(knapsack(capacity + 1, weights, values), knapsack(capacity, weights, values))` (Increasing capacity never decreases the result). "
+        "Include these property checks alongside at least 2 standard deterministic cases.",
         "/send",
 
-        # --- PHASE 2.5: Hardened Active Verification: a stronger strategy to reduce hallucinations needed here ---
+        # --- PHASE 2.5: Hardened Active Verification ---
         "Run the test suite one final time using your `run_cmd` tool to verify your changes. "
         "If you see ANY failures or AssertionErrors in the terminal output, you must immediately patch the source code or the test file to correct the expected values. "
         "Do NOT say 'All good' until you have executed the tool and the console explicitly shows that all tests passed.",
@@ -180,3 +194,4 @@ def test_agent_workflow_knapsack_01():
     ]
 
     run_automated_test(input_queue, file_name="knapsack_01.py", test_file_name="test_knapsack_01.py")
+
