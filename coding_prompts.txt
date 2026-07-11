@@ -1,9 +1,6 @@
 /readme ..\minesweeper-solve
-Can you write the code for longest common subsequence of two strings that returns the actual subsequence string and save the code to lcs/lcs.py?
 /send
-Can you now write unit tests for lcs/lcs.py and save them to lcs/test_lcs.py?
+/split test_data/test_split/graph_drawing_explorer.py
 /send
-Can you give me a code that solves the 0/1 knapsack problem with integer weights and capacity and save the code to knapsack/knapsack_01.py?
-/send
-Can you now write unittests for knapsack_01.py? Make sure you use relative imports so we can run the test. Make sure that expected values checked are correct. Save the tests to knapsack/test_knapsack_01.py.
+/split --execute test_data/test_split_execute/ecommerce_order_processor.py
 /send

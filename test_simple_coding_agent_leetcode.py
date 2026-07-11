@@ -74,6 +74,7 @@ def run_automated_test(input_queue, file_name, test_file_name, max_calls_limit=3
 
         # Inject the sandbox directory into the PYTHONPATH for the subprocess
         current_env = os.environ.copy()
+        current_env = os.environ.copy()
         current_env["PYTHONPATH"] = os.path.pathsep.join([test_sandbox, current_env.get("PYTHONPATH", "")])
 
         result = subprocess.run(
@@ -100,7 +101,6 @@ def run_automated_test(input_queue, file_name, test_file_name, max_calls_limit=3
         os.chdir(original_cwd)
         shutil.rmtree(test_sandbox)
         print(f"\n🧹 Cleaned up temporary sandbox.", flush=True)
-
 
 def test_agent_workflow_two_sum():
     input_queue = [
