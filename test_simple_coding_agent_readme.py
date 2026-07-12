@@ -119,7 +119,7 @@ def test_agent_readme_generation():
     repo_name = "minesweeper-solve"
     input_queue = [
         # Execute the macro on the current sandbox directory
-        "/readme ./" + repo_name,
+        "/readme --deep ./" + repo_name,
         "/send",
 
         # Provide closure to the LLM to end its tool-calling loop (just in case)

@@ -85,3 +85,60 @@ def generate_requirements_native(target_dir, no_version=False):
 
     except Exception as e:
         return f"Error executing native requirements handler: {e}"
+
+
+def gather_deep_context(startpath):
+    """
+    Scans for Python files, collects initial file contents,
+    and attempts to discover and execute an entry point's --help command.
+    """
+    ignore_dirs = {'.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__', '.idea', '.vscode', 'dist', 'build'}
+    py_files = []
+
+    # 1. Traversal to catch code files
+    for root, dirs, files in os.walk(startpath):
+        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+        for f in files:
+            if f.endswith('.py') and not f.startswith('.'):
+                py_files.append(os.path.join(root, f))
+
+    code_summary = ""
+    entry_point_candidate = None
+
+    for filepath in py_files:
+        rel_path = os.path.relpath(filepath, startpath)
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
+                lines = file.readlines()
+
+            # Extract up to 120 lines to capture layout, imports, and docstrings
+            content_snippet = "".join(lines[:120])
+            code_summary += f"\n--- FILE: {rel_path} ---\n{content_snippet}\n"
+
+            # Look for entry point markers
+            file_text = "".join(lines)
+            if "__main__" in file_text or "argparse" in file_text or "click" in file_text or "typer" in file_text:
+                # Prioritize names that sound like entry configurations
+                if not entry_point_candidate or any(kw in f.lower() for kw in ["main", "app", "cli", "run"]):
+                    entry_point_candidate = filepath
+        except Exception as e:
+            code_summary += f"\n--- FILE: {rel_path} (Error reading: {e}) ---\n"
+
+    # 2. Query help menu execution
+    cli_help = "No explicit entry point with an executable help menu confidently discovered."
+    if entry_point_candidate:
+        rel_entry = os.path.relpath(entry_point_candidate, startpath)
+        try:
+            # Safe short-timeout invocation
+            result = subprocess.run(
+                f'python "{entry_point_candidate}" --help',
+                shell=True, capture_output=True, text=True, cwd=startpath, timeout=5
+            )
+            if result.returncode == 0:
+                cli_help = f"Discovered Entry Point: {rel_entry}\nOutput of 'python {rel_entry} --help':\n{result.stdout}"
+            else:
+                cli_help = f"Discovered Potential Entry Point: {rel_entry}, but '--help' returned a non-zero exit code.\nStderr: {result.stderr}"
+        except Exception as e:
+            cli_help = f"Attempted to run help diagnostic on {rel_entry} but encountered error: {e}"
+
+    return code_summary, cli_help

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from coding_agent.tool_definitions import read_file, write_file, append_file, patch_file, run_cmd
 from coding_agent.system_prompt_builder import build_system_prompt
-from coding_agent.native_helpers import get_repo_structure, generate_requirements_native
+from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import file_splitter
 from coding_agent import native_linter
@@ -78,8 +78,8 @@ def main():
     print("\n🚀 Available Modes & Macros:")
     print("  /requirements [--no-version] [path]")
     print("      -> Natively generate requirements.txt")
-    print("\n  /readme [--conceptual] [path]")
-    print("      -> AI-driven repo documentation")
+    print("\n  /readme [--conceptual] [--deep] [path]")
+    print("      -> AI-driven repo documentation (Use --deep / -d for file contents & CLI parsing)")
     print("\n  /split [--execute] [filepath]")
     print("      -> Refactor monoliths (Advisor mode or Logic Extraction mode)")
     print("         [--execute] adds risk: agent will attempt full code refactoring")
@@ -182,7 +182,11 @@ def main():
         # --- MACRO: /readme ---
         elif user_input.startswith("/readme"):
             conceptual_focus = "--conceptual" in user_input or "-c" in user_input
-            cleaned_args = user_input.replace("--conceptual", "").replace("-c", "").split(" ", 1)
+            deep_focus = "--deep" in user_input or "-d" in user_input
+
+            # Clean up all possible configuration flags from arguments
+            cleaned_args = user_input.replace("--conceptual", "").replace("-c", "").replace("--deep", "").replace(
+                "-d", "").split(" ", 1)
             target_dir = cleaned_args[1].strip() if len(cleaned_args) > 1 and cleaned_args[1].strip() else "."
 
             abs_target_dir = os.path.abspath(os.path.expanduser(target_dir))
@@ -207,12 +211,20 @@ def main():
             if conceptual_focus:
                 print("🧠 [Mode Change] Conceptual Focus: Focusing on project concept.")
 
+            # Deep Mode Trigger Interceptor
+            code_summary = None
+            cli_help = None
+            if deep_focus:
+                print("👀 [Mode Change] Deep Scan: Extracting script code segments and querying CLI help hooks...")
+                code_summary, cli_help = gather_deep_context(abs_target_dir)
+
             strategy_steps = hidden_readme_prompt_builder.build_strategy_steps(
-                readme_path, ALLOW_PATCH, conceptual_focus=conceptual_focus
+                readme_path, ALLOW_PATCH, conceptual_focus=conceptual_focus, deep_focus=deep_focus
             )
 
             hidden_readme_prompt = hidden_readme_prompt_builder.build_hidden_readme_prompt(
-                abs_target_dir, repo_tree, existing_readme, strategy_steps
+                abs_target_dir, repo_tree, existing_readme, strategy_steps, code_summary=code_summary,
+                cli_help=cli_help
             )
 
             messages = [
