@@ -119,6 +119,34 @@ def test_agent_readme_generation():
     repo_name = "minesweeper-solve"
     input_queue = [
         # Execute the macro on the current sandbox directory
+        "/readme ./" + repo_name,
+        "/send",
+
+        # Provide closure to the LLM to end its tool-calling loop (just in case)
+        "Looks good, task complete.",
+        "/send",
+
+        # Trigger graceful exit
+        "/quit"
+    ]
+
+    # Max calls limit increased slightly in case it uses read_file tools to inspect code first
+    run_automated_readme_test(
+        input_queue=input_queue,
+        zip_file_path=zip_target,
+        repo_name=repo_name,
+        max_calls_limit=40
+    )
+
+def test_agent_readme_generation_deep():
+    """
+    Tests the /readme macro by extracting a sample repo and running the agent on it.
+    """
+    zip_target = "test_data/minesweeper-solve.zip"
+
+    repo_name = "minesweeper-solve"
+    input_queue = [
+        # Execute the macro on the current sandbox directory
         "/readme --deep ./" + repo_name,
         "/send",
 
