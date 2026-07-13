@@ -291,16 +291,37 @@ def main():
                 )
 
                 finish_reason = None
-                for chunk in stream:
-                    choice = chunk['choices'][0]
-                    if choice.get('finish_reason'):
-                        finish_reason = choice['finish_reason']
 
-                    delta = choice.get('delta')
-                    if 'content' in delta:
-                        piece = delta['content']
-                        print(piece, end="", flush=True)
-                        response_content += piece
+                # --- INNER STREAM WRAPPED FOR INTERRUPT HANDLING ---
+                try:
+                    for chunk in stream:
+                        choice = chunk['choices'][0]
+                        if choice.get('finish_reason'):
+                            finish_reason = choice['finish_reason']
+
+                        delta = choice.get('delta')
+                        if 'content' in delta:
+                            piece = delta['content']
+                            print(piece, end="", flush=True)
+                            response_content += piece
+
+                except KeyboardInterrupt:
+                    print("\n\n🛑 [Generation Interrupted by User]")
+
+                    # CRITICAL CLEANUP: If the agent was mid-tool-call, strip the broken JSON
+                    # so a malformed state doesn't pollute the next LLM generation pass.
+                    if "<tool_call> " in response_content and "</tool_call>" not in response_content:
+                        response_content = re.sub(r"<tool_call>.*$", "", response_content, flags=re.DOTALL).strip()
+
+                    # Append whatever the agent managed to say before you cut it off
+                    if response_content:
+                        messages.append({"role": "assistant", "content": response_content + " [Interrupted]"})
+                    else:
+                        # If it hadn't even started typing, just pop the last user message
+                        # if you want to completely scratch your last prompt.
+                        pass
+
+                    break  # Break out of the Agent Execution Loop to return to the main input prompt
 
                 is_truncated = (finish_reason == "length")
 
