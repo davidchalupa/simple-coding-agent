@@ -195,3 +195,43 @@ def test_agent_workflow_knapsack_01():
 
     run_automated_test(input_queue, file_name="knapsack_01.py", test_file_name="test_knapsack_01.py")
 
+
+def test_agent_workflow_trap():
+    input_queue = [
+        # --- PHASE 1: Implementation ---
+        "Write a Python script to solve the problem below, with detailed comments for each step of the algorithm.",
+        "Given n non-negative integers representing an elevation map where the width of each bar is 1, compute how much water it can trap after raining.",
+        "Example 1:",
+        "Elevation map:",
+        ".......x....",
+        "...x---xx-x.",
+        ".x-xx-xxxxxx",
+        "Input: height = [0,1,0,2,1,0,1,3,2,1,2,1]",
+        "Output: 6",
+        "Explanation: In the elevation map above . means empty cell, x means rock, - means water. This map is represented by array [0,1,0,2,1,0,1,3,2,1,2,1]. In this case, 6 units of rain water are being trapped.",
+        "Example 2:",
+        "Input: height = [4,2,0,3,2,5]",
+        "Output: 9",
+        "/send",
+
+        # --- PHASE 1.5: Saving ---
+        "Great. Now save the script written above to file named trap.py.",
+        "/send",
+
+        # --- PHASE 2: Testing ---
+        "Excellent. Now write unittests for trap.py and save them to test_trap.py using the unittest framework. "
+        "Include only tests for the two examples given above. These are sufficient.",
+        "/send",
+
+        # --- PHASE 2.5: Hardened Active Verification ---
+        "Run the test suite one final time using your `run_cmd` tool to verify your changes. "
+        "If you see ANY failures or AssertionErrors in the terminal output, you must immediately patch the source code or the test file to correct the expected values. "
+        "Do NOT say 'All good' until you have executed the tool and the console explicitly shows that all tests passed.",
+        "/send",
+
+        # --- PHASE 3: Graceful Exit ---
+        "/quit"
+    ]
+
+    run_automated_test(input_queue, file_name="trap.py", test_file_name="test_trap.py")
+
