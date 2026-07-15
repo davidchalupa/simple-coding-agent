@@ -199,7 +199,7 @@ def test_agent_workflow_knapsack_01():
 def test_agent_workflow_trap():
     input_queue = [
         # --- PHASE 1: Implementation ---
-        "Write a Python script to solve the problem below, with detailed comments for each step of the algorithm.",
+        "Write a Python script to solve the problem below, with comments in the code explaining the rationale of the algorithm.",
         "Given n non-negative integers representing an elevation map where the width of each bar is 1, compute how much water it can trap after raining.",
         "Example 1:",
         "Elevation map:",
