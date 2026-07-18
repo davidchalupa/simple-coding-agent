@@ -12,6 +12,8 @@ class ECommerceOrderProcessor:
     def __init__(self, db_connection_string):
         self.db_string = db_connection_string
         self.tax_rate = 0.08
+        # State tracker added so unit tests can assert on side-effects
+        self.executed_queries = []
 
     def load_order_data(self, filepath):
         if not os.path.exists(filepath):
@@ -49,6 +51,10 @@ class ECommerceOrderProcessor:
         # Simulating a DB write
         timestamp = datetime.now().isoformat()
         db_record = f"INSERT INTO orders (id, customer, total, date) VALUES ('{order_id}', '{customer_id}', {total}, '{timestamp}')"
+
+        # Track the query for testing validation
+        self.executed_queries.append(db_record)
+
         print(f"[DB LOG] Connecting to {self.db_string}...")
         print(f"[DB LOG] Executing: {db_record}")
         return True
@@ -73,6 +79,5 @@ class ECommerceOrderProcessor:
 
 
 if __name__ == "__main__":
-    # Fake usage
     processor = ECommerceOrderProcessor("postgres://user:pass@localhost:5432/ecommerce")
     # processor.process_order("sample_order.json")

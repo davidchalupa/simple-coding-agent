@@ -9,10 +9,11 @@ import pytest
 import simple_coding_agent
 
 
-def run_automated_split_test(input_queue, target_file_path, max_calls_limit=30):
+def run_automated_split_test(input_queue, target_file_path, max_calls_limit=30, validation_test_file=None):
     """
     Custom runner for the /split macro that copies a REAL existing file
     from the repository into a temporary sandbox for safe analysis and refactoring.
+    Optionally runs a validation unit test at the end to ensure logic remains intact.
     """
     print("🧪 Starting Automated Agent Flow Test for /split...", flush=True)
 
@@ -113,6 +114,37 @@ def run_automated_split_test(input_queue, target_file_path, max_calls_limit=30):
         if not check_passed:
             pytest.fail("Syntax verification failed on split files!")
 
+        # --- Phase 3: Logic Verification (Unit Tests) ---
+        if validation_test_file:
+            print("\n" + "=" * 60, flush=True)
+            print("🧪 Phase 3: Logic Verification (Equivalency Check)", flush=True)
+
+            test_source_path = os.path.join(original_cwd, validation_test_file)
+            if not os.path.exists(test_source_path):
+                pytest.fail(f"Validation test file not found at: {test_source_path}")
+
+            test_sandbox_dest = os.path.join(test_sandbox, validation_test_file)
+            os.makedirs(os.path.dirname(test_sandbox_dest), exist_ok=True)
+            shutil.copy2(test_source_path, test_sandbox_dest)
+            print(f"🌱 Copied validation test file to sandbox: {validation_test_file}", flush=True)
+
+            # Change directory directly to where the split files reside to ensure clean local imports
+            os.chdir(target_check_dir)
+            current_env["PYTHONPATH"] = os.path.pathsep.join([target_check_dir, current_env.get("PYTHONPATH", "")])
+
+            result = subprocess.run(
+                [sys.executable, "-m", "unittest", os.path.basename(validation_test_file)],
+                capture_output=True,
+                text=True,
+                env=current_env
+            )
+
+            if result.returncode != 0:
+                print(f"❌ LOGIC VERIFICATION FAILED:\n{result.stdout}\n{result.stderr}", flush=True)
+                pytest.fail("Unit tests failed on the refactored code! The agent hallucinated or broke functionality.")
+            else:
+                print(f"✅ Logic Verification Passed. The split code is functionally equivalent.\n{result.stderr}", flush=True)
+
     finally:
         os.chdir(original_cwd)
         shutil.rmtree(test_sandbox)
@@ -149,6 +181,7 @@ def test_agent_split_execute_mode():
     Tests the /split --execute macro on a real existing file.
     """
     target_file = "test_data/test_split_execute/ecommerce_order_processor.py"
+    validation_test = "test_data/test_split_execute/test_ecommerce_order_processor.py"
 
     input_queue = [
         # --- PHASE 1: Execution ---
@@ -166,5 +199,6 @@ def test_agent_split_execute_mode():
     run_automated_split_test(
         input_queue=input_queue,
         target_file_path=target_file,
-        max_calls_limit=45
+        max_calls_limit=45,
+        validation_test_file=validation_test
     )
