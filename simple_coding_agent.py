@@ -6,7 +6,7 @@ import shutil
 from llama_cpp import Llama
 from pathlib import Path
 
-from coding_agent.tool_definitions import read_file, write_file, append_file, patch_file, run_cmd
+from coding_agent.tool_definitions import read_file, write_file, append_file, patch_file, run_cmd, extract_code_blocks
 from coding_agent.system_prompt_builder import build_system_prompt
 from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context
 from coding_agent import hidden_readme_prompt_builder
@@ -16,7 +16,7 @@ from coding_agent import payload_parser
 
 # 1. Configuration
 script_dir = Path(__file__).resolve().parent
-QWEN_PATH = script_dir / "models"/ "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+QWEN_PATH = script_dir / "models" / "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
 CONTEXT_WINDOW = 8192  # Ensure maximum headroom for analysis
 target_path = str(QWEN_PATH)
 loaded_model_name = "Qwen 2.5 Coder 7B (Agent Mode V11 Payload-Safe)"
@@ -32,6 +32,7 @@ session_cwd = os.getcwd()
 
 # --- SANDBOX STATE TRACKING ---
 is_split_mode = False
+is_execute_mode = False  # Track if we are using AST interception
 original_split_file = None
 sandbox_directory = None
 automated_followup = None  # Buffer for system-generated prompt injections
@@ -65,7 +66,7 @@ def initialize_agent():
 
 
 def main():
-    global messages, session_cwd, is_split_mode, original_split_file, sandbox_directory, automated_followup, has_prompted_for_tests
+    global messages, session_cwd, is_split_mode, is_execute_mode, original_split_file, sandbox_directory, automated_followup, has_prompted_for_tests
 
     # Run the initialization sequence
     initialize_agent()
@@ -121,6 +122,7 @@ def main():
                     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
                     session_cwd = os.getcwd()
                     is_split_mode = False
+                    is_execute_mode = False
                     original_split_file = None
                     sandbox_directory = None
                     automated_followup = None
@@ -250,8 +252,8 @@ def main():
 
             if execute_mode:
                 print(
-                    f"\n⚠️  [WARNING] Execution Mode Active: The agent will attempt to migrate the full implementation logic.")
-                print("   This is recommended ONLY for smaller files / simpler refactors.")
+                    f"\n⚠️  [WARNING] Execution Mode Active: System will use AST natively based on LLM JSON mapping.")
+                print("   This isolates the agent from hallucinating logic blocks.")
                 print(f"🔍 Initializing Sandbox and Parsing AST structure for {abs_target_file}...")
             else:
                 print(f"\n🔍 Initializing Sandbox (Advisor Mode) for {abs_target_file}...")
@@ -260,6 +262,7 @@ def main():
             _, sandbox_directory = file_splitter.setup_refactor_sandbox(abs_target_file)
             original_split_file = abs_target_file
             is_split_mode = True
+            is_execute_mode = execute_mode
 
             # 2. Divert agent's current working directory to the sandbox!
             session_cwd = sandbox_directory
@@ -267,7 +270,8 @@ def main():
             # Pass the flag to the prompt builder
             split_prompt = file_splitter.build_split_prompt(abs_target_file, session_cwd, execute_mode=execute_mode)
 
-            split_prompt += "\n\nFormat your plan now. Do not write file contents yet. Wait for confirmation."
+            if not execute_mode:
+                split_prompt += "\n\nFormat your plan now. Do not write file contents yet. Wait for confirmation."
 
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -309,19 +313,12 @@ def main():
                     print("\n\n🛑 [Generation Interrupted by User]")
 
                     # CRITICAL CLEANUP: If the agent was mid-tool-call, strip the broken JSON
-                    # so a malformed state doesn't pollute the next LLM generation pass.
                     if "<tool_call> " in response_content and "</tool_call>" not in response_content:
                         response_content = re.sub(r"<tool_call>.*$", "", response_content, flags=re.DOTALL).strip()
 
-                    # Append whatever the agent managed to say before you cut it off
                     if response_content:
                         messages.append({"role": "assistant", "content": response_content + " [Interrupted]"})
-                    else:
-                        # If it hadn't even started typing, just pop the last user message
-                        # if you want to completely scratch your last prompt.
-                        pass
-
-                    break  # Break out of the Agent Execution Loop to return to the main input prompt
+                    break
 
                 is_truncated = (finish_reason == "length")
 
@@ -331,6 +328,47 @@ def main():
 
                 print()
                 messages.append({"role": "assistant", "content": response_content})
+
+                # --- NEW: AST EXTRACTION INTERCEPTOR FOR EXECUTE MODE ---
+                if is_split_mode and is_execute_mode and "```json" in response_content:
+                    json_match = re.search(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL)
+                    if json_match:
+                        try:
+                            split_plan = json.loads(json_match.group(1))
+                            print("\n⚙️  [System] Intercepted JSON routing plan. Executing AST extraction natively...")
+
+                            extraction_results = []
+                            for target_filename, blocks in split_plan.items():
+                                if not isinstance(blocks, list):
+                                    continue
+                                target_filepath = os.path.join(sandbox_directory, target_filename)
+                                # Deterministically extract the blocks without LLM generation
+                                result = extract_code_blocks(original_split_file, target_filepath, blocks)
+                                extraction_results.append(f"[{target_filename}]: {result}")
+
+                            report = "\n".join(extraction_results)
+                            print(report)
+
+                            system_feedback = (
+                                f"System Alert: AST Extraction successfully executed based on your JSON map.\n"
+                                f"Results:\n{report}\n\n"
+                                f"Next Step: The files contain the logic, but lack dependencies. Use `patch_file` or `write_file` "
+                                f"to add the necessary `import` statements at the top of these newly created files. "
+                                f"Additionally, update the original file to import these extracted components and remove the old extracted code. "
+                                f"When the refactor is fully wired and syntactically correct, output 'Refactor Phase Complete'."
+                            )
+
+                            messages.append({"role": "user", "content": system_feedback})
+                            is_execute_mode = False  # Reset so we don't extract twice on the next loop iteration
+                            continue  # Jump to next loop iteration so the agent can write imports
+
+                        except json.JSONDecodeError:
+                            print("\n❌ [System] Failed to parse JSON plan.")
+                            messages.append({
+                                "role": "user",
+                                "content": "System Alert: Your JSON block was invalid and could not be parsed. Please output ONLY valid JSON in the ```json block."
+                            })
+                            continue
 
                 # --- SYSTEM GUARDRAIL INTERCEPTOR FOR SANDBOX MODE ---
                 if is_split_mode and (
@@ -375,6 +413,7 @@ def main():
 
                         # Reset Mode
                         is_split_mode = False
+                        is_execute_mode = False
                         session_cwd = os.path.dirname(original_split_file)
                         break
                     else:
@@ -460,7 +499,7 @@ def main():
                                     tool_result += f"\n\n⚠️ CRITICAL WARNING: The file was written, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
 
                                 if is_split_mode:
-                                    tool_reinforcement = "\n\n(System Rule: Write successful. Continue splitting code into files. If done, output 'Refactor Phase Complete'.)"
+                                    tool_reinforcement = "\n\n(System Rule: Write successful. If your wiring is done, output 'Refactor Phase Complete'.)"
                                 else:
                                     tool_reinforcement = "\n\n(System Rule: Write successful. Do NOT output the file's contents. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
 
@@ -472,7 +511,7 @@ def main():
 
                                 tool_result = append_file(tool_args.get("filepath"), content)
                                 if is_split_mode:
-                                    tool_reinforcement = "\n\n(System Rule: Append successful. Continue your task. If done, output 'Refactor Phase Complete'.)"
+                                    tool_reinforcement = "\n\n(System Rule: Append successful. If your wiring is done, output 'Refactor Phase Complete'.)"
                                 else:
                                     tool_reinforcement = "\n\n(System Rule: Append successful. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
 
@@ -481,7 +520,7 @@ def main():
                                 tool_result = patch_file(tool_args.get("filepath"), tool_args.get("search_text"),
                                                          tool_args.get("replace_text"))
                                 if is_split_mode:
-                                    tool_reinforcement = "\n\n(System Rule: Patch successful. Continue your task. If done, output 'Refactor Phase Complete'.)"
+                                    tool_reinforcement = "\n\n(System Rule: Patch successful. If your wiring is done, output 'Refactor Phase Complete'.)"
                                 else:
                                     tool_reinforcement = "\n\n(System Rule: Patch successful. Do not summarize. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
 
@@ -515,17 +554,13 @@ def main():
                         break
 
                 # --- AUTOMATED FOLLOW-UP TRIGGER ---
-                # If the agent reached a plain text response (finished calling tools) and modified a file
                 if FORCE_TESTING and file_was_modified and not is_split_mode:
-                    # Check if the file written looks like a test file
                     raw_path = tool_args.get("filepath", "")
 
                     if raw_path:
                         path_obj = Path(raw_path)
                         filename = path_obj.name.lower()
-
                         is_test_filename = filename.startswith("test_") or filename.endswith("_test.py")
-
                         is_test_file = is_test_filename and filename.endswith(".py")
                     else:
                         is_test_file = False
@@ -533,33 +568,6 @@ def main():
                     if is_test_file and not has_prompted_for_tests:
                         print(
                             "\n[System]: Catching unverified test changes. Automatically queuing follow-up test prompt.")
-                        # automated_followup = (
-                        #     "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
-                        #     "CRITICAL: If the tests fail, do NOT just explain the error. You MUST immediately use `patch_file` or `write_file` "
-                        #     "to fix the bugs in the source code or the test file, and then run the tests again until they pass."
-                        # )
-                        # # this is a possibly hardened version of the follow-up enforcing checking of possibly
-                        # # hallucinated expected values
-                        # automated_followup = (
-                        #     "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
-                        #     "CRITICAL: If a test fails, DO NOT blindly rewrite the main implementation code. "
-                        #     "First, verify if the test file itself is flawed (e.g., incorrect expected values, bad inputs, or flawed assertions). "
-                        #     "Use `patch_file` or `write_file` to fix whichever file is actually incorrect (the test or the source code), "
-                        #     "and rerun the tests until everything passes."
-                        # )
-                        # # another hardened version of the automated follow-up prompt to enforce Chain-of-Thought (CoT)
-                        # # this is to ensure the agent writes out its diagnosis before it is allowed to call a tool
-                        # automated_followup = (
-                        #     "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
-                        #     "CRITICAL: If a test fails, you must follow these steps strictly:\n"
-                        #     "1. Do NOT output a tool call immediately.\n"
-                        #     "2. In plain text, explicitly write out the math or logic for the failing test (e.g., 'Target is -6. -2 is at index 1, -4 is at index 3. Expected is [1, 3]').\n"
-                        #     "3. Check your actual source code. Does it raise a ValueError, or return an empty list?\n"
-                        #     "4. ONLY after writing this analysis, use `patch_file` or `write_file` to fix the test or source code.\n"
-                        #     "5. Rerun the tests until they pass."
-                        # )
-                        # yet another hardened version of the follow-up prompt to make sure the agent checks for test
-                        # correctness
                         automated_followup = (
                             "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
                             "CRITICAL: If a test fails, you must follow these steps strictly:\n"
@@ -569,15 +577,10 @@ def main():
                             "4. If the test is valid, analyze why your source code failed, and fix the source code.\n"
                             "5. Rerun the tests until they pass."
                         )
-                        # Prevent this from firing again on subsequent fixes!
                         has_prompted_for_tests = True
                     else:
-                        # Optional: Instead of running a silent script, prompt the agent to WRITE the tests next.
-                        # we will not use follow-up in this case for now
                         print("\n[System]: Main script written / modified.")
                         automated_followup = None
-                        # print("\n[System]: Main script written / modified. Queuing prompt to write tests.")
-                        # automated_followup = "Great. Now write a separate unit test file to verify this logic."
 
                 break
 

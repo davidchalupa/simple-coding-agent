@@ -36,16 +36,11 @@ def analyze_file_metrics(filepath):
                 top_level_functions += 1
                 structure_lines.append(f"- top-level function {node.name}()")
 
-        # --- HEURISTIC ENGINE ---
-        # Detect if a single class dominates the entire file's structural footprint
         is_god_class = False
         god_class_name = ""
 
         if classes:
-            # Find the largest class
             largest_class = max(classes, key=lambda x: x["method_count"])
-
-            # If a class has more than 12 methods AND holds more than 60% of all functional blocks
             total_blocks = total_methods + top_level_functions
             if largest_class["method_count"] >= 12 and total_blocks > 0:
                 share = largest_class["method_count"] / total_blocks
@@ -99,7 +94,8 @@ def build_split_prompt(filepath, target_dir, execute_mode=False):
         )
 
     if execute_mode:
-        # --- NEW EXECUTION MODE PROMPT ---
+        # --- AST-ASSISTED EXECUTION PROMPT ---
+        # The prompt asks purely for JSON. No code generation is requested.
         prompt = f"""You are a senior Software Architect. Your task is to design a refactoring split blueprint.
 
 [Context]
@@ -115,30 +111,18 @@ Layout Footprint:
 - Ensure that core entry execution setups or initialization points remain clearly in the root file.
 
 [Required Output Layout Format]
-1. EXPLANATION: Write out your structural design reasoning out loud first. Justify your module division choices using generic domain terms.
-2. JSON PLAN: Provide exactly one markdown ```json block mapping recommended filenames to lists of their respective target methods.
-3. IMMEDIATE EXECUTION: You must immediately begin executing your plan. Use your `write_file` tool to create the FIRST file from your plan. 
-   - CRITICAL: Write the FULL, working implementation for this new file.
-   - Migrate the actual operational logic from the original file into this new structure.
-   - Ensure all necessary imports for your extracted logic are included.
-   - You MUST use the strict XML tag format for your tool call.
+1. EXPLANATION: Write out your structural design reasoning out loud first. Justify your module division choices.
+2. JSON PLAN: Provide exactly one markdown json block mapping recommended filenames to lists of their respective target classes or methods from the AST Map.
 
-Example Tool Call Format:
-<tool_call>
+Example JSON mapping format:
 {{
-    "name": "write_file", 
-    "args": {{"filepath": "extracted_service.py"}}
+    "extracted_service.py": ["DataCalculator", "helper_function"],
+    "models.py": ["UserClass", "SessionClass"]
 }}
-</tool_call>
-<payload>
-import json
 
-class DataCalculator:
-    def process_data(self, data):
-        return [d * 2 for d in data if d > 0]
-</payload>
-
-Start executing the logic migration for the first file immediately after your JSON plan.
+CRITICAL INSTRUCTION: 
+STOP after writing the JSON block. Do NOT use tools. Do NOT write any file contents. 
+The system will use deterministic AST extraction to safely move the code blocks based on your JSON map automatically.
 """
     else:
         # --- VERBATIM ORIGINAL ADVISOR PROMPT (NO REGRESSIONS) ---
@@ -158,7 +142,7 @@ Layout Footprint:
 
 [Required Output Layout Format]
 1. EXPLANATION: Write out your structural design reasoning out loud first. Justify your module division choices using generic domain terms.
-2. JSON PLAN: Provide exactly one markdown ```json block mapping recommended filenames to lists of their respective target methods.
+2. JSON PLAN: Provide exactly one markdown json block mapping recommended filenames to lists of their respective target methods.
 3. IMMEDIATE EXECUTION: You must immediately begin executing your plan. Use your `write_file` tool to create the FIRST file from your plan. 
    - CRITICAL: Write ONLY the structural boilerplate skeleton. 
    - You MUST use `pass` for every single method body to ensure perfectly valid Python syntax. 

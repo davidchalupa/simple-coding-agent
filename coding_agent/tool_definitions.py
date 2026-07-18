@@ -91,8 +91,11 @@ def run_cmd(command):
 def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_class=None):
     """
     Deterministically extracts exact source code blocks from the source file
-    and writes them to the target file.
+    and writes them to the target file, including global imports.
     """
+    import os
+    import ast
+
     try:
         with open(source_filepath, 'r', encoding='utf-8') as f:
             source = f.read()
@@ -100,7 +103,15 @@ def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_c
         tree = ast.parse(source)
         extracted_code = []
 
-        # If the LLM wants these methods grouped in a new class
+        # 1. Grab all global imports from the original file
+        imports = []
+        for node in tree.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                segment = ast.get_source_segment(source, node)
+                if segment:
+                    imports.append(segment)
+
+        # 2. Extract the requested blocks
         if wrap_in_class:
             extracted_code.append(f"class {wrap_in_class}:")
             indent_prefix = "    "
@@ -113,20 +124,24 @@ def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_c
                 if node.name in block_names:
                     segment = ast.get_source_segment(source, node)
                     if segment:
-                        # Fix indentation if we are wrapping top-level methods into a new class
                         if wrap_in_class and not isinstance(node, ast.ClassDef):
                             segment = "\n".join(indent_prefix + line if line.strip() else line
                                                 for line in segment.splitlines())
-
                         extracted_code.append(segment)
                         found_blocks += 1
 
         if found_blocks == 0:
-            return f"Error: None of the requested blocks ({block_names}) were found in the source file."
+            return f"Error: None of the requested blocks ({block_names}) were found."
 
-        # Write the exact code securely to the sandbox
+        # 3. Write to the new file safely
+        is_new_file = not os.path.exists(target_filepath)
         os.makedirs(os.path.dirname(target_filepath), exist_ok=True)
+
         with open(target_filepath, 'a', encoding='utf-8') as f:
+            # If creating the file for the first time, inject the original imports at the top
+            if is_new_file and imports:
+                f.write("\n".join(imports) + "\n\n")
+
             f.write("\n\n".join(extracted_code) + "\n\n")
 
         return f"Success: Extracted {found_blocks} blocks and appended to {os.path.basename(target_filepath)}"
