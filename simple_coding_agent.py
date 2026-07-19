@@ -89,6 +89,7 @@ def main():
     print("  /send  -> Submit your prompt")
     print("  /clear -> Wipe conversation memory & reset environment")
     print("  /quit  -> Terminate agent")
+    print("  CTRL+C -> Interrupt active text generation (best in native terminal)")
     print("═" * 60)
 
     # 6. Main Agent Loop
@@ -297,6 +298,7 @@ def main():
                 finish_reason = None
 
                 # --- INNER STREAM WRAPPED FOR INTERRUPT HANDLING ---
+                # CTRL+C should terminate the generation
                 try:
                     for chunk in stream:
                         choice = chunk['choices'][0]
@@ -309,6 +311,11 @@ def main():
                             print(piece, end="", flush=True)
                             response_content += piece
 
+
+                # NOTE ON IDE LIMITATIONS:
+                # - This should work fine when running the script in standard console (PowerShell or Bash).
+                # - PyCharm: By default, PyCharm's Run console swallows SIGINT, meaning CTRL+C won't interrupt generation.
+                #   - WORKAROUND: Enable "Emulate terminal in output console" in PyCharm's "Run Configurations > Modify Options".
                 except KeyboardInterrupt:
                     print("\n\n🛑 [Generation Interrupted by User]")
 
