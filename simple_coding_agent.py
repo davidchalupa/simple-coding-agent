@@ -38,6 +38,112 @@ sandbox_directory = None
 automated_followup = None  # Buffer for system-generated prompt injections
 has_prompted_for_tests = False
 
+import builtins
+
+# --- INPUT HANDLER STATE ---
+_prompt_session = None
+
+
+def is_interactive_session() -> bool:
+    """Detects if we are running in a real terminal vs an automated test."""
+    # 1. Check if standard streams are attached to a TTY
+    if not (getattr(sys.stdin, 'isatty', lambda: False)() and getattr(sys.stdout, 'isatty', lambda: False)()):
+        return False
+
+    # 2. Check if builtins.input has been patched (e.g., by unittest.mock in pytest)
+    if hasattr(builtins.input, "__wrapped__") or "mock" in type(builtins.input).__name__.lower():
+        return False
+
+    return True
+
+
+def _fallback_input() -> str:
+    """The legacy input loop, 100% compatible with existing automated tests."""
+    print("\n[You] (Type /send to submit, /cancel to scratch draft, /undo to delete last line):")
+    user_lines = []
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+
+        trimmed = line.strip()
+
+        if trimmed == "/send":
+            break
+        if trimmed in ["/quit", "/clear", "/cancel"]:
+            return trimmed
+        if trimmed == "/undo":
+            if user_lines:
+                removed = user_lines.pop()
+                print(f"🗑️  Removed line: \"{removed}\"")
+            else:
+                print("⚠️ Buffer is already empty.")
+            continue
+
+        user_lines.append(line)
+
+    return "\n".join(user_lines).strip()
+
+
+def get_user_prompt() -> str:
+    """Smart input handler: Returns prompt_toolkit in TTY, falls back to raw input() for tests."""
+    global _prompt_session
+
+    if not is_interactive_session():
+        return _fallback_input()
+
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.history import FileHistory
+        from prompt_toolkit.key_binding import KeyBindings
+    except ImportError:
+        print("\n⚠️  'prompt_toolkit' not found. Falling back to basic input.")
+        print("   (To enable history and arrow keys: pip install prompt_toolkit)")
+        return _fallback_input()
+
+    # Initialize the session once to retain memory efficiently
+    if _prompt_session is None:
+        bindings = KeyBindings()
+
+        # Custom binding: Make standard Enter work, but if the user types /send, submit instantly.
+        @bindings.add('enter')
+        def _(event):
+            buffer = event.app.current_buffer
+            if buffer.document.current_line.strip() == '/send':
+                event.current_buffer.validate_and_handle()
+            else:
+                buffer.insert_text('\n')
+
+        # Standard multi-line submission binding
+        @bindings.add('escape', 'enter')
+        def _(event):
+            event.current_buffer.validate_and_handle()
+
+        history_file = os.path.expanduser("~/.coding_agent_history")
+
+        # Ensure the history file exists to avoid permissions crashes
+        Path(history_file).touch(exist_ok=True)
+
+        _prompt_session = PromptSession(
+            history=FileHistory(history_file),
+            key_bindings=bindings,
+            multiline=True
+        )
+
+    print("\n[You] (Alt+Enter or type /send on a new line to submit):")
+    try:
+        user_text = _prompt_session.prompt("> ")
+    except (EOFError, KeyboardInterrupt):
+        return "/quit"
+
+    # Clean up the "/send" trigger from the end of the text if it was used
+    lines = user_text.split('\n')
+    if lines and lines[-1].strip() == '/send':
+        lines.pop()
+
+    return "\n".join(lines).strip()
+
 
 def initialize_agent():
     """Initializes the LLM and sets up the system prompt. Safe to call multiple times."""
@@ -102,53 +208,28 @@ def main():
             automated_followup = None
             print(f"\n[Automated User]: {user_input}")
         else:
-            # Standard human input loop
-            print("\n[You] (Type /send to submit, /cancel to scratch draft, /undo to delete last line):")
-            user_lines = []
-            while True:
-                try:
-                    line = input()
-                except EOFError:
-                    break
+            # --- NEW SMART INPUT HANDLER ---
+            user_input = get_user_prompt()
 
-                trimmed = line.strip()
+            if user_input == "/quit":
+                print("Exiting. Goodbye!")
+                sys.exit(0)
 
-                if trimmed == "/send":
-                    break
-                if trimmed == "/quit":
-                    print("Exiting. Goodbye!")
-                    sys.exit(0)
+            if user_input == "/clear":
+                messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                session_cwd = os.getcwd()
+                is_split_mode = False
+                is_execute_mode = False
+                original_split_file = None
+                sandbox_directory = None
+                automated_followup = None
+                has_prompted_for_tests = False
+                print("🧹 Memory and environment completely cleared!")
+                continue
 
-                if trimmed == "/clear":
-                    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-                    session_cwd = os.getcwd()
-                    is_split_mode = False
-                    is_execute_mode = False
-                    original_split_file = None
-                    sandbox_directory = None
-                    automated_followup = None
-                    user_lines = []
-                    print("🧹 Memory and current draft completely cleared!")
-                    break
-
-                if trimmed == "/cancel":
-                    user_lines = []
-                    print("❌ Current draft discarded. Start typing your new prompt below:")
-                    break
-
-                if trimmed == "/undo":
-                    if user_lines:
-                        removed = user_lines.pop()
-                        print(f"🗑️  Removed line: \"{removed}\"")
-                        print(f"Current buffer status ({len(user_lines)} lines active). Continue typing...")
-                    else:
-                        print("⚠️ Buffer is already empty.")
-                    continue
-
-                user_lines.append(line)
-
-            # If a macro like /clear broke the inner loop, don't build user_input
-            user_input = "\n".join(user_lines).strip()
+            if user_input == "/cancel":
+                print("❌ Current draft discarded.")
+                continue
 
         # Restart loop if no input was gathered
         if not user_input:

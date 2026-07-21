@@ -7,3 +7,4 @@ huggingface_hub
 tqdm
 pypdf2
 pytest
+prompt_toolkit
