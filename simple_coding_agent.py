@@ -106,12 +106,30 @@ def get_user_prompt() -> str:
     if _prompt_session is None:
         bindings = KeyBindings()
 
-        # Custom binding: Make standard Enter work, but if the user types /send, submit instantly.
+        # Custom binding: Make standard Enter work, but intercept commands
         @bindings.add('enter')
         def _(event):
             buffer = event.app.current_buffer
-            if buffer.document.current_line.strip() == '/send':
+            current_line = buffer.document.current_line.strip()
+            full_text = buffer.text.strip()
+
+            # Commands that should never require /send
+            instant_commands = ['/quit', '/clear', '/cancel']
+            macro_prefixes = ('/readme', '/requirements', '/split')
+
+            # 1. User typed /send to finish a multi-line prompt
+            if current_line == '/send':
                 event.current_buffer.validate_and_handle()
+
+            # 2. User typed an exact instant command (e.g., /quit)
+            elif full_text in instant_commands:
+                event.current_buffer.validate_and_handle()
+
+            # 3. User is running a single-line macro (e.g., /split target.py)
+            elif full_text.startswith(macro_prefixes) and '\n' not in full_text:
+                event.current_buffer.validate_and_handle()
+
+            # 4. Otherwise, behave like normal multi-line text and add a new line
             else:
                 buffer.insert_text('\n')
 
