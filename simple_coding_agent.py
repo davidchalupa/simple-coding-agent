@@ -6,6 +6,7 @@ import shutil
 from llama_cpp import Llama
 from pathlib import Path
 
+from coding_agent.input_handler import get_user_prompt
 from coding_agent.tool_definitions import read_file, write_file, append_file, patch_file, run_cmd, extract_code_blocks
 from coding_agent.system_prompt_builder import build_system_prompt
 from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context
@@ -37,130 +38,6 @@ original_split_file = None
 sandbox_directory = None
 automated_followup = None  # Buffer for system-generated prompt injections
 has_prompted_for_tests = False
-
-import builtins
-
-# --- INPUT HANDLER STATE ---
-_prompt_session = None
-
-
-def is_interactive_session() -> bool:
-    """Detects if we are running in a real terminal vs an automated test."""
-    # 1. Check if standard streams are attached to a TTY
-    if not (getattr(sys.stdin, 'isatty', lambda: False)() and getattr(sys.stdout, 'isatty', lambda: False)()):
-        return False
-
-    # 2. Check if builtins.input has been patched (e.g., by unittest.mock in pytest)
-    if hasattr(builtins.input, "__wrapped__") or "mock" in type(builtins.input).__name__.lower():
-        return False
-
-    return True
-
-
-def _fallback_input() -> str:
-    """The legacy input loop, 100% compatible with existing automated tests."""
-    print("\n[You] (Type /send to submit, /cancel to scratch draft, /undo to delete last line):")
-    user_lines = []
-    while True:
-        try:
-            line = input()
-        except EOFError:
-            break
-
-        trimmed = line.strip()
-
-        if trimmed == "/send":
-            break
-        if trimmed in ["/quit", "/clear", "/cancel"]:
-            return trimmed
-        if trimmed == "/undo":
-            if user_lines:
-                removed = user_lines.pop()
-                print(f"🗑️  Removed line: \"{removed}\"")
-            else:
-                print("⚠️ Buffer is already empty.")
-            continue
-
-        user_lines.append(line)
-
-    return "\n".join(user_lines).strip()
-
-
-def get_user_prompt() -> str:
-    """Smart input handler: Returns prompt_toolkit in TTY, falls back to raw input() for tests."""
-    global _prompt_session
-
-    if not is_interactive_session():
-        return _fallback_input()
-
-    try:
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.history import FileHistory
-        from prompt_toolkit.key_binding import KeyBindings
-    except ImportError:
-        print("\n⚠️  'prompt_toolkit' not found. Falling back to basic input.")
-        print("   (To enable history and arrow keys: pip install prompt_toolkit)")
-        return _fallback_input()
-
-    # Initialize the session once to retain memory efficiently
-    if _prompt_session is None:
-        bindings = KeyBindings()
-
-        # Custom binding: Make standard Enter work, but intercept commands
-        @bindings.add('enter')
-        def _(event):
-            buffer = event.app.current_buffer
-            current_line = buffer.document.current_line.strip()
-            full_text = buffer.text.strip()
-
-            # Commands that should never require /send
-            instant_commands = ['/quit', '/clear', '/cancel']
-            macro_prefixes = ('/readme', '/requirements', '/split')
-
-            # 1. User typed /send to finish a multi-line prompt
-            if current_line == '/send':
-                event.current_buffer.validate_and_handle()
-
-            # 2. User typed an exact instant command (e.g., /quit)
-            elif full_text in instant_commands:
-                event.current_buffer.validate_and_handle()
-
-            # 3. User is running a single-line macro (e.g., /split target.py)
-            elif full_text.startswith(macro_prefixes) and '\n' not in full_text:
-                event.current_buffer.validate_and_handle()
-
-            # 4. Otherwise, behave like normal multi-line text and add a new line
-            else:
-                buffer.insert_text('\n')
-
-        # Standard multi-line submission binding
-        @bindings.add('escape', 'enter')
-        def _(event):
-            event.current_buffer.validate_and_handle()
-
-        history_file = os.path.expanduser("~/.coding_agent_history")
-
-        # Ensure the history file exists to avoid permissions crashes
-        Path(history_file).touch(exist_ok=True)
-
-        _prompt_session = PromptSession(
-            history=FileHistory(history_file),
-            key_bindings=bindings,
-            multiline=True
-        )
-
-    print("\n[You] (Alt+Enter or type /send on a new line to submit):")
-    try:
-        user_text = _prompt_session.prompt("> ")
-    except (EOFError, KeyboardInterrupt):
-        return "/quit"
-
-    # Clean up the "/send" trigger from the end of the text if it was used
-    lines = user_text.split('\n')
-    if lines and lines[-1].strip() == '/send':
-        lines.pop()
-
-    return "\n".join(lines).strip()
 
 
 def initialize_agent():
