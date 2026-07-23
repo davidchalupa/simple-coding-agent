@@ -7,7 +7,8 @@ from llama_cpp import Llama
 from pathlib import Path
 
 from coding_agent.input_handler import get_user_prompt
-from coding_agent.tool_definitions import read_file, write_file, append_file, patch_file, run_cmd, extract_code_blocks
+from coding_agent.tool_definitions import read_file, extract_code_blocks
+from coding_agent.execute_tool import execute_tool
 from coding_agent.system_prompt_builder import build_system_prompt
 from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context
 from coding_agent import hidden_readme_prompt_builder
@@ -464,54 +465,10 @@ def main():
                         tool_reinforcement = ""
 
                         if approval == 'y':
-                            if tool_name == "read_file":
-                                s_line = tool_args.get("start_line", 1)
-                                m_lines = tool_args.get("max_lines", 75)
-                                tool_result = read_file(tool_args.get("filepath"), start_line=s_line, max_lines=m_lines)
-
-                            elif tool_name == "write_file":
-                                file_was_modified = True  # Flag code modification
-                                content = tool_args.get("content", "")
-                                content = re.sub(r"^```[a-zA-Z]*\n", "", content)
-                                content = re.sub(r"\n```$", "", content)
-
-                                tool_result = write_file(tool_args.get("filepath"), content)
-
-                                linter_error = native_linter.check_python_syntax_and_imports(tool_args.get("filepath"))
-                                if linter_error:
-                                    tool_result += f"\n\n⚠️ CRITICAL WARNING: The file was written, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
-
-                                if is_split_mode:
-                                    tool_reinforcement = "\n\n(System Rule: Write successful. If your wiring is done, output 'Refactor Phase Complete'.)"
-                                else:
-                                    tool_reinforcement = "\n\n(System Rule: Write successful. Do NOT output the file's contents. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
-
-                            elif tool_name == "append_file":
-                                file_was_modified = True  # Flag code modification
-                                content = tool_args.get("content", "")
-                                content = re.sub(r"^```[a-zA-Z]*\n", "", content)
-                                content = re.sub(r"\n```$", "", content)
-
-                                tool_result = append_file(tool_args.get("filepath"), content)
-                                if is_split_mode:
-                                    tool_reinforcement = "\n\n(System Rule: Append successful. If your wiring is done, output 'Refactor Phase Complete'.)"
-                                else:
-                                    tool_reinforcement = "\n\n(System Rule: Append successful. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
-
-                            elif tool_name == "patch_file":
-                                file_was_modified = True  # Flag code modification
-                                tool_result = patch_file(tool_args.get("filepath"), tool_args.get("search_text"),
-                                                         tool_args.get("replace_text"))
-                                if is_split_mode:
-                                    tool_reinforcement = "\n\n(System Rule: Patch successful. If your wiring is done, output 'Refactor Phase Complete'.)"
-                                else:
-                                    tool_reinforcement = "\n\n(System Rule: Patch successful. Do not summarize. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
-
-                            elif tool_name == "run_cmd":
-                                file_was_modified = False  # Reset flag upon test/execution
-                                tool_result = run_cmd(tool_args.get("command"))
-                            else:
-                                tool_result = "Error: Unknown tool."
+                            # --- REFACTORED TOOL DISPATCH ---
+                            tool_result, tool_reinforcement, was_mod = execute_tool(tool_name, tool_args, is_split_mode)
+                            if was_mod:
+                                file_was_modified = True
                             print(f"⚙️  Tool execution finished.")
 
                         elif approval == 'edit':
