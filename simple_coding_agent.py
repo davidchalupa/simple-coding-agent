@@ -11,7 +11,7 @@ from coding_agent.input_handler import get_user_prompt
 from coding_agent.tool_definitions import read_file, extract_code_blocks
 from coding_agent.execute_tool import execute_tool
 from coding_agent.system_prompt_builder import build_system_prompt
-from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context
+from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context, gather_deep_context_ast
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import file_splitter
 from coding_agent import native_linter
@@ -85,7 +85,7 @@ def main():
             automated_followup = None
             print(f"\n[Automated User]: {user_input}")
         else:
-            # --- NEW SMART INPUT HANDLER ---
+            # smart input handler
             user_input = get_user_prompt()
 
             if user_input == "/quit":
@@ -147,9 +147,10 @@ def main():
 
             conceptual_focus = "--conceptual" in tokens or "-c" in tokens
             deep_focus = "--deep" in tokens or "-d" in tokens
+            deep_ast_focus = "--deep-ast" in tokens
 
             # 2. Filter out the command and the flags
-            flags_to_remove = {"/readme", "--conceptual", "-c", "--deep", "-d"}
+            flags_to_remove = {"/readme", "--conceptual", "-c", "--deep", "-d", "--deep-ast"}
             path_tokens = [t for t in tokens if t not in flags_to_remove]
 
             # 3. Join the remaining tokens to form the path (handles unquoted paths with spaces)
@@ -180,12 +181,16 @@ def main():
             # Deep Mode Trigger Interceptor
             code_summary = None
             cli_help = None
-            if deep_focus:
+            if deep_ast_focus:
+                print("👀 [Mode Change] Deep AST Scan: Extracting AST signatures and querying CLI help hooks...")
+                code_summary, cli_help = gather_deep_context_ast(abs_target_dir)
+            elif deep_focus:
                 print("👀 [Mode Change] Deep Scan: Extracting script code segments and querying CLI help hooks...")
                 code_summary, cli_help = gather_deep_context(abs_target_dir)
 
             strategy_steps = hidden_readme_prompt_builder.build_strategy_steps(
-                readme_path, ALLOW_PATCH, conceptual_focus=conceptual_focus, deep_focus=deep_focus
+                readme_path, ALLOW_PATCH, conceptual_focus=conceptual_focus,
+                deep_focus=(deep_focus or deep_ast_focus)
             )
 
             hidden_readme_prompt = hidden_readme_prompt_builder.build_hidden_readme_prompt(
