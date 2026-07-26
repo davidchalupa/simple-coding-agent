@@ -161,13 +161,18 @@ def main():
 
         # --- MACRO: /readme ---
         elif user_input.startswith("/readme"):
-            conceptual_focus = "--conceptual" in user_input or "-c" in user_input
-            deep_focus = "--deep" in user_input or "-d" in user_input
+            # 1. Split input into whole-word tokens to avoid substring match bugs
+            tokens = user_input.split()
 
-            # Clean up all possible configuration flags from arguments
-            cleaned_args = user_input.replace("--conceptual", "").replace("-c", "").replace("--deep", "").replace(
-                "-d", "").split(" ", 1)
-            target_dir = cleaned_args[1].strip() if len(cleaned_args) > 1 and cleaned_args[1].strip() else "."
+            conceptual_focus = "--conceptual" in tokens or "-c" in tokens
+            deep_focus = "--deep" in tokens or "-d" in tokens
+
+            # 2. Filter out the command and the flags
+            flags_to_remove = {"/readme", "--conceptual", "-c", "--deep", "-d"}
+            path_tokens = [t for t in tokens if t not in flags_to_remove]
+
+            # 3. Join the remaining tokens to form the path (handles unquoted paths with spaces)
+            target_dir = " ".join(path_tokens) if path_tokens else "."
 
             abs_target_dir = os.path.abspath(os.path.expanduser(target_dir))
             session_cwd = abs_target_dir
