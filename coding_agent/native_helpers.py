@@ -167,13 +167,15 @@ def gather_deep_context(startpath):
 
 def gather_deep_context_ast(startpath):
     """
-    Gathers repository context by parsing the AST.
-    Includes a global character budget to prevent context window overflow.
+    Gathers repository context using AST.
+    Crucially, it uses an AST Visitor to discover string constants that represent
+    CLI flags or interactive commands, overcoming the 'blind spot' of pure signature extraction.
     """
+    # Added 'test_data' to prevent the LLM from documenting dummy files
     ignore_dirs = {
         '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
         '.idea', '.vscode', 'dist', 'build', 'tests', 'test', 'migrations',
-        'alembic', 'docs', 'site-packages'
+        'alembic', 'docs', 'site-packages', 'test_data'
     }
     py_files = []
 
@@ -187,9 +189,35 @@ def gather_deep_context_ast(startpath):
     candidates = []
     MAX_TOTAL_CHARS = 20000
 
+    # AST Walker to find hidden commands inside procedural code (like your main loop)
+    class CommandVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.commands = set()
+            self.flags = set()
+
+        def visit_Constant(self, node):
+            if isinstance(node.value, str):
+                val = node.value
+                # Precisely capture slash commands (e.g., "/readme") and flags (e.g., "--allow-patch")
+                if re.match(r"^/[a-zA-Z0-9_-]+$", val):
+                    self.commands.add(val)
+                elif re.match(r"^--[a-zA-Z0-9_-]+$", val):
+                    self.flags.add(val)
+            self.generic_visit(node)
+
+    global_commands = set()
+    global_flags = set()
+
+    def get_brief_doc(node):
+        doc = ast.get_docstring(node)
+        if doc:
+            lines = [line.strip() for line in doc.strip().split('\n') if line.strip()]
+            return f'"""{lines[0][:100]}"""' if lines else None
+        return None
+
     for filepath in py_files:
         if len(code_summary) >= MAX_TOTAL_CHARS:
-            code_summary += "\n[System: Repository too large. AST context truncated to safely fit 8k window.]\n"
+            code_summary += "\n[System: Repository context truncated to safely fit 8k window.]\n"
             break
 
         rel_path = os.path.relpath(filepath, startpath)
@@ -197,18 +225,37 @@ def gather_deep_context_ast(startpath):
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
                 file_text = file.read()
 
-            # --- AST EXTRACTION LOGIC ---
             try:
                 tree = ast.parse(file_text)
                 signatures = []
+
+                # Extract embedded commands and flags from this file's AST!
+                visitor = CommandVisitor()
+                visitor.visit(tree)
+                global_commands.update(visitor.commands)
+                global_flags.update(visitor.flags)
+
+                mod_doc = get_brief_doc(tree)
+                if mod_doc:
+                    signatures.append(f"# Module: {mod_doc}")
+
                 for node in tree.body:
                     if isinstance(node, ast.ClassDef):
                         signatures.append(f"class {node.name}:")
+                        cls_doc = get_brief_doc(node)
+                        if cls_doc:
+                            signatures.append(f"    {cls_doc}")
                         for item in node.body:
                             if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                                 signatures.append(f"    def {item.name}(...):")
+                                func_doc = get_brief_doc(item)
+                                if func_doc:
+                                    signatures.append(f"        {func_doc}")
                     elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         signatures.append(f"def {node.name}(...):")
+                        func_doc = get_brief_doc(node)
+                        if func_doc:
+                            signatures.append(f"    {func_doc}")
 
                 content_snippet = "\n".join(signatures) if signatures else "(Script / No functions defined)"
 
@@ -222,6 +269,18 @@ def gather_deep_context_ast(startpath):
 
         except Exception as e:
             code_summary += f"\n--- FILE: {rel_path} (Error reading: {e}) ---\n"
+
+    # Prepend the dynamically discovered commands to the context so the LLM knows what to document
+    command_header = ""
+    if global_commands or global_flags:
+        command_header = "=== AST DISCOVERED INTERFACES ===\n"
+        if global_commands:
+            command_header += f"Interactive Commands detected: {', '.join(sorted(global_commands))}\n"
+        if global_flags:
+            command_header += f"CLI Flags detected: {', '.join(sorted(global_flags))}\n"
+        command_header += "=================================\n\n"
+
+    full_context = command_header + code_summary
 
     # CLI Help Extraction
     best_help = ""
@@ -240,5 +299,5 @@ def gather_deep_context_ast(startpath):
         except Exception:
             pass
 
-    cli_help = best_help if best_entry else "No explicit entry point with an executable help menu confidently discovered."
-    return code_summary, cli_help
+    cli_help = best_help if best_entry else "No explicit CLI --help output captured."
+    return full_context, cli_help
