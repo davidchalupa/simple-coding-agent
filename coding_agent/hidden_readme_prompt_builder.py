@@ -8,10 +8,22 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
     Scaffolding function for building a hidden README prompt with optional deep context.
     """
     deep_section = ""
+    deep_guardrail = ""
     if code_summary and cli_help:
         deep_section = (
             f"--- REAL FILE CONTENTS (DEEP SCAN) ---\n{code_summary}\n--------------------------\n\n"
             f"--- RUNTIME CLI HELP OUTPUT ---\n{cli_help}\n--------------------------\n\n"
+        )
+
+        # --- CONDITIONAL GUARDRAIL FOR DEEP SCAN MODE ---
+        # Prevents 7B models from getting distracted by raw code and slipping into code-completion mode
+        deep_guardrail = (
+            "\n\nCRITICAL AGENT INSTRUCTION:\n"
+            "I have ALREADY extracted and summarized the repository code for you above. "
+            "DO NOT write Python scripts to analyze the repository. "
+            "DO NOT write Python code to simulate file reading. "
+            "Your ONLY task is to draft the README content based on the text above, "
+            "and output a valid `<tool_call>` using the `write_file` tool to save it to disk.\n\n"
         )
 
     return (
@@ -23,6 +35,7 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
         f"{deep_section}"
         f"--- ENTIRE EXISTING README CONTENT ---\n{existing_readme}\n--------------------------\n\n"
         f"STRATEGY:\n{strategy_steps}\n\n"
+        f"{deep_guardrail}"
         f"CRITICAL: Do not call tools with empty arguments or empty payloads."
     )
 
