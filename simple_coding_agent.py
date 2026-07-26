@@ -6,6 +6,7 @@ import shutil
 from llama_cpp import Llama
 from pathlib import Path
 
+from coding_agent.welcome_banner import display_welcome_banner
 from coding_agent.input_handler import get_user_prompt
 from coding_agent.tool_definitions import read_file, extract_code_blocks
 from coding_agent.execute_tool import execute_tool
@@ -70,29 +71,9 @@ def initialize_agent():
 def main():
     global messages, session_cwd, is_split_mode, is_execute_mode, original_split_file, sandbox_directory, automated_followup, has_prompted_for_tests
 
-    # Run the initialization sequence
     initialize_agent()
 
-    print("\n" + "═" * 60)
-    print(f"🤖 Local Agent Initialized: [{loaded_model_name}]")
-    if ALLOW_PATCH:
-        print("🔧 [STATUS] Patching Enabled")
-
-    print("\n🚀 Available Modes & Macros:")
-    print("  /requirements [--no-version] [path]")
-    print("      -> Natively generate requirements.txt")
-    print("\n  /readme [--conceptual] [--deep] [path]")
-    print("      -> AI-driven repo documentation (Use --deep / -d for file contents & CLI parsing)")
-    print("\n  /split [--execute] [filepath]")
-    print("      -> Refactor monoliths (Advisor mode or Logic Extraction mode)")
-    print("         [--execute] adds risk: agent will attempt full code refactoring")
-
-    print("\n⌨️  Commands:")
-    print("  /send  -> Submit your prompt")
-    print("  /clear -> Wipe conversation memory & reset environment")
-    print("  /quit  -> Terminate agent")
-    print("  CTRL+C -> Interrupt active text generation (best in native terminal)")
-    print("═" * 60)
+    display_welcome_banner(loaded_model_name, ALLOW_PATCH)
 
     # 6. Main Agent Loop
     while True:
