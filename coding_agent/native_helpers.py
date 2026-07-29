@@ -3,16 +3,67 @@ import subprocess
 import re
 import platform
 import ast
+import fnmatch
+
+
+# --- HELPER: .gitignore Parser ---
+def build_ignore_checker(startpath, extra_ignores=None):
+    """
+    Parses .gitignore and returns a fast lookup function to check if a file/dir should be ignored.
+    Combines hardcoded exclusions with dynamic gitignore rules.
+    """
+    patterns = set(extra_ignores or [])
+    gitignore_path = os.path.join(startpath, '.gitignore')
+
+    if os.path.exists(gitignore_path):
+        try:
+            with open(gitignore_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    # Ignore comments and empty lines
+                    if line and not line.startswith('#'):
+                        # Strip trailing slash for directory matching
+                        if line.endswith('/'):
+                            line = line[:-1]
+                        # Remove leading slash for relative matching against the project root
+                        if line.startswith('/'):
+                            line = line[1:]
+                        # Normalize slashes for cross-platform fnmatch compatibility
+                        line = line.replace('/', os.sep)
+                        patterns.add(line)
+        except Exception:
+            pass
+
+    def is_ignored(name, path=None):
+        for p in patterns:
+            # Match direct file/folder name or basic wildcards (*.pyc)
+            if name == p or fnmatch.fnmatch(name, p):
+                return True
+            # Match relative path structures (e.g., config/*.json or frontend/node_modules)
+            if path and (path == p or fnmatch.fnmatch(path, p) or path.startswith(p + os.sep) or fnmatch.fnmatch(path,
+                                                                                                                 p + os.sep + '*')):
+                return True
+        return False
+
+    return is_ignored
 
 
 # --- NATIVE MAPPER: /readme ---
 def get_repo_structure(startpath, max_depth=3):
-    ignore_dirs = {'.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__', '.idea', '.vscode', 'dist', 'build'}
+    base_ignores = {'.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__', '.idea', '.vscode', 'dist', 'build'}
+    is_ignored = build_ignore_checker(startpath, base_ignores)
+
     tree_str = ""
     start_sep = startpath.count(os.path.sep)
 
     for root, dirs, files in os.walk(startpath):
-        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+        rel_root = os.path.relpath(root, startpath)
+        if rel_root == ".":
+            rel_root = ""
+
+        # Filter directories in-place to stop os.walk from entering ignored folders
+        dirs[:] = [d for d in dirs if not is_ignored(d, os.path.join(rel_root, d) if rel_root else d)]
+
         depth = root.count(os.path.sep) - start_sep
 
         if depth > max_depth:
@@ -23,7 +74,8 @@ def get_repo_structure(startpath, max_depth=3):
         tree_str += f"{indent}{os.path.basename(root)}/\n"
         subindent = ' ' * 4 * (depth + 1)
         for f in files:
-            if not f.startswith('.'):
+            f_rel = os.path.join(rel_root, f) if rel_root else f
+            if not f.startswith('.') and not is_ignored(f, f_rel):
                 tree_str += f"{subindent}{f}\n"
 
     return tree_str[:1200]
@@ -93,18 +145,23 @@ def gather_deep_context(startpath):
     Gathers repository context using smart line filtering.
     Includes a global character budget to prevent context window overflow.
     """
-    # Added common bloated directories: tests, migrations, docs
-    ignore_dirs = {
+    base_ignores = {
         '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
         '.idea', '.vscode', 'dist', 'build', 'tests', 'test', 'migrations',
         'alembic', 'docs', 'site-packages'
     }
+    is_ignored = build_ignore_checker(startpath, base_ignores)
     py_files = []
 
     for root, dirs, files in os.walk(startpath):
-        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+        rel_root = os.path.relpath(root, startpath)
+        if rel_root == ".":
+            rel_root = ""
+
+        dirs[:] = [d for d in dirs if not is_ignored(d, os.path.join(rel_root, d) if rel_root else d)]
         for f in files:
-            if f.endswith('.py') and not f.startswith('.'):
+            f_rel = os.path.join(rel_root, f) if rel_root else f
+            if f.endswith('.py') and not f.startswith('.') and not is_ignored(f, f_rel):
                 py_files.append(os.path.join(root, f))
 
     code_summary = ""
@@ -171,18 +228,23 @@ def gather_deep_context_ast(startpath):
     Crucially, it uses an AST Visitor to discover string constants that represent
     CLI flags or interactive commands, overcoming the 'blind spot' of pure signature extraction.
     """
-    # Added 'test_data' to prevent the LLM from documenting dummy files
-    ignore_dirs = {
+    base_ignores = {
         '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
         '.idea', '.vscode', 'dist', 'build', 'tests', 'test', 'migrations',
         'alembic', 'docs', 'site-packages', 'test_data'
     }
+    is_ignored = build_ignore_checker(startpath, base_ignores)
     py_files = []
 
     for root, dirs, files in os.walk(startpath):
-        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+        rel_root = os.path.relpath(root, startpath)
+        if rel_root == ".":
+            rel_root = ""
+
+        dirs[:] = [d for d in dirs if not is_ignored(d, os.path.join(rel_root, d) if rel_root else d)]
         for f in files:
-            if f.endswith('.py') and not f.startswith('.'):
+            f_rel = os.path.join(rel_root, f) if rel_root else f
+            if f.endswith('.py') and not f.startswith('.') and not is_ignored(f, f_rel):
                 py_files.append(os.path.join(root, f))
 
     code_summary = ""
