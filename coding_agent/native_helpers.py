@@ -290,8 +290,9 @@ def gather_deep_context_ast(startpath):
             try:
                 tree = ast.parse(file_text)
                 signatures = []
+                has_functions_or_classes = False
 
-                # Extract embedded commands and flags from this file's AST!
+                # 1. Extract embedded commands and flags
                 visitor = CommandVisitor()
                 visitor.visit(tree)
                 global_commands.update(visitor.commands)
@@ -299,27 +300,71 @@ def gather_deep_context_ast(startpath):
 
                 mod_doc = get_brief_doc(tree)
                 if mod_doc:
-                    signatures.append(f"# Module: {mod_doc}")
+                    signatures.append(f'"""Module Doc: {mod_doc}"""')
 
+                # 2. Iterate through top-level nodes
                 for node in tree.body:
-                    if isinstance(node, ast.ClassDef):
+                    # Capture Imports (Tech Stack)
+                    if isinstance(node, (ast.Import, ast.ImportFrom)):
+                        try:
+                            signatures.append(ast.unparse(node))
+                        except Exception:
+                            pass  # Fallback for older python versions
+
+                    # Capture Top-Level Constants/Configs
+                    elif isinstance(node, ast.Assign):
+                        try:
+                            # Only grab simple assignments (e.g., CONST = 5)
+                            code_str = ast.unparse(node)
+                            if len(code_str) < 100:  # Prevent huge dicts from eating budget
+                                signatures.append(code_str)
+                        except Exception:
+                            pass
+
+                    # Capture Classes
+                    elif isinstance(node, ast.ClassDef):
+                        has_functions_or_classes = True
                         signatures.append(f"class {node.name}:")
                         cls_doc = get_brief_doc(node)
                         if cls_doc:
                             signatures.append(f"    {cls_doc}")
+
+                        # Grab methods inside the class
                         for item in node.body:
                             if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                                signatures.append(f"    def {item.name}(...):")
+                                try:
+                                    # Use ast.unparse to get full signature WITH arguments
+                                    sig_str = ast.unparse(item).split(':\n')[0] + ":"
+                                    signatures.append(f"    {sig_str}")
+                                except Exception:
+                                    signatures.append(f"    def {item.name}(...):")
+
                                 func_doc = get_brief_doc(item)
                                 if func_doc:
                                     signatures.append(f"        {func_doc}")
+
+                    # Capture Functions
                     elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        signatures.append(f"def {node.name}(...):")
+                        has_functions_or_classes = True
+                        try:
+                            sig_str = ast.unparse(node).split(':\n')[0] + ":"
+                            signatures.append(sig_str)
+                        except Exception:
+                            signatures.append(f"def {node.name}(...):")
+
                         func_doc = get_brief_doc(node)
                         if func_doc:
                             signatures.append(f"    {func_doc}")
 
-                content_snippet = "\n".join(signatures) if signatures else "(Script / No functions defined)"
+                # 3. HYBRID FALLBACK: If the file is just a script, grab the top 25 lines
+                if not has_functions_or_classes:
+                    clean_script_lines = [
+                                             line for line in file_text.split('\n')
+                                             if line.strip() and not line.strip().startswith('#')
+                                         ][:25]
+                    content_snippet = "\n".join(clean_script_lines)
+                else:
+                    content_snippet = "\n".join(signatures)
 
             except SyntaxError:
                 content_snippet = "(Syntax Error parsing file)"
