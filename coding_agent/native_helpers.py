@@ -140,10 +140,14 @@ def generate_requirements_native(target_dir, no_version=False):
         return f"Error executing native requirements handler: {e}"
 
 
+import os
+import subprocess
+
+
 def gather_deep_context(startpath):
     """
-    Gathers repository context using smart line filtering.
-    Includes a global character budget to prevent context window overflow.
+    Gathers repository context using a dynamic fair-share character budget.
+    Small repos get deep file extraction; large repos get truncated smartly.
     """
     base_ignores = {
         '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
@@ -169,9 +173,18 @@ def gather_deep_context(startpath):
 
     # ~5000 tokens budget. Leaves ~3000 tokens for system prompt & generation headroom
     MAX_TOTAL_CHARS = 20000
+    num_files = len(py_files)
+
+    # 1. Calculate Fair-Share Budget per file
+    if num_files > 0:
+        # Divide budget equally among files, but set a floor (e.g., ~1000 chars / ~30 lines)
+        # so large repos still get meaningful signatures before hitting the global circuit breaker.
+        char_limit_per_file = max(1000, MAX_TOTAL_CHARS // num_files)
+    else:
+        char_limit_per_file = 0
 
     for filepath in py_files:
-        # CIRCUIT BREAKER: Stop adding files if we hit the limit
+        # 2. GLOBAL CIRCUIT BREAKER
         if len(code_summary) >= MAX_TOTAL_CHARS:
             code_summary += "\n[System: Repository too large. Code context truncated to safely fit 8k window.]\n"
             break
@@ -181,27 +194,36 @@ def gather_deep_context(startpath):
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
                 lines = file.readlines()
 
-            # --- SMART LINE FILTERING ---
+            # 3. SMART LINE FILTERING (Character-based)
             clean_lines = []
+            current_file_chars = 0
+
             for line in lines:
                 stripped = line.strip()
                 if not stripped: continue
-                if stripped.startswith(("#", "import ", "from ")): continue
+                # REMOVED: Stripping `#` because comments/docstrings are vital for README generation!
+                if stripped.startswith(("import ", "from ")): continue
 
                 clean_lines.append(line.rstrip())
-                if len(clean_lines) >= 35:
+                current_file_chars += len(line)
+
+                # 4. LOCAL FILE LIMIT
+                if current_file_chars >= char_limit_per_file:
+                    clean_lines.append("... [Code truncated for length] ...")
                     break
 
             content_snippet = "\n".join(clean_lines)
             code_summary += f"\n--- FILE: {rel_path} ---\n{content_snippet}\n"
 
+            # Check for CLI candidates
             file_text = "".join(lines)
             if "__main__" in file_text or "argparse" in file_text or "click" in file_text or "typer" in file_text:
                 candidates.append(filepath)
+
         except Exception as e:
             code_summary += f"\n--- FILE: {rel_path} (Error reading: {e}) ---\n"
 
-    # CLI Help Extraction
+    # CLI Help Extraction (unchanged)
     best_help = ""
     best_entry = None
     for candidate in candidates:
