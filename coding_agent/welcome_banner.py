@@ -7,7 +7,7 @@ def display_welcome_banner(loaded_model_name, allow_patch):
     print("\n🚀 Available Modes & Macros:")
     print("  /requirements [--no-version] [path]")
     print("      -> Natively generate requirements.txt")
-    print("\n  /readme [--conceptual] [--deep] [--deep-ast] [path]")
+    print("\n  /readme [--deep] [--deep-ast] [path]")
     print("      -> AI-driven repo documentation (Use --deep / -d for file contents & CLI parsing or --deep-ast for traversing function names)")
     print("\n  /split [--execute] [filepath]")
     print("      -> Refactor monoliths (Advisor mode or Logic Extraction mode)")

@@ -145,12 +145,11 @@ def main():
             # 1. Split input into whole-word tokens to avoid substring match bugs
             tokens = user_input.split()
 
-            conceptual_focus = "--conceptual" in tokens or "-c" in tokens
             deep_focus = "--deep" in tokens or "-d" in tokens
             deep_ast_focus = "--deep-ast" in tokens
 
             # 2. Filter out the command and the flags
-            flags_to_remove = {"/readme", "--conceptual", "-c", "--deep", "-d", "--deep-ast"}
+            flags_to_remove = {"/readme", "--deep", "-d", "--deep-ast"}
             path_tokens = [t for t in tokens if t not in flags_to_remove]
 
             # 3. Join the remaining tokens to form the path (handles unquoted paths with spaces)
@@ -175,9 +174,6 @@ def main():
                 existing_readme = "No existing README.md found. Create from scratch."
                 print("   [Notice] No README.md found. Agent will draft a new one.")
 
-            if conceptual_focus:
-                print("🧠 [Mode Change] Conceptual Focus: Focusing on project concept.")
-
             # Deep Mode Trigger Interceptor
             code_summary = None
             cli_help = None
@@ -189,7 +185,7 @@ def main():
                 code_summary, cli_help = gather_deep_context(abs_target_dir)
 
             strategy_steps = hidden_readme_prompt_builder.build_strategy_steps(
-                readme_path, ALLOW_PATCH, conceptual_focus=conceptual_focus,
+                readme_path, ALLOW_PATCH,
                 deep_focus=(deep_focus or deep_ast_focus)
             )
 

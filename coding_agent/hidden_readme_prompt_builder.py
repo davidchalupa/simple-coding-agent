@@ -40,10 +40,8 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
     )
 
 
-def build_strategy_steps(readme_path, allow_patch, conceptual_focus=False, deep_focus=False):
+def build_strategy_steps(readme_path, allow_patch, deep_focus=False):
     focus_rule = ""
-    if conceptual_focus:
-        focus_rule = "\nCRITICAL: Force focus ONLY on high-level architecture/concepts. Omit all License and Contributions sections."
 
     # Direct the model to pay attention to structural layout vs hard evidence
     grounding_source = "the repo structure, file contents, and runtime CLI usage parameters provided" if deep_focus else "the raw repository structure"
