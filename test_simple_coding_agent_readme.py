@@ -175,7 +175,7 @@ def prepare_self_repo_sandbox(target_dir):
         ".idea", ".vscode", "dist", "build", ".pytest_cache", "models", "README.md",
     )
     # Copy current workspace into a subfolder inside the temporary sandbox
-    repo_dest = os.path.join(target_dir, "coding-agent")
+    repo_dest = os.path.join(target_dir, "simple-coding-agent")
     shutil.copytree(os.getcwd(), repo_dest, ignore=ignore_patterns)
     return repo_dest
 
@@ -247,13 +247,13 @@ def test_self_readme_generation_deep():
     Tests /readme --deep against the current live state of the agent codebase.
     """
     input_queue = [
-        "/readme --deep ./coding-agent", "/send",
+        "/readme --deep ./simple-coding-agent", "/send",
         "Looks good, task complete.", "/send", "/quit"
     ]
     # Pass direct_repo_copy=True instead of a zip path
     run_automated_self_readme_test(
         input_queue=input_queue,
-        repo_name="coding-agent",
+        repo_name="simple-coding-agent",
         mode_flag="--deep",
         expected_keywords=["agent", "llm"]
     )
