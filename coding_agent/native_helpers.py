@@ -412,7 +412,9 @@ def _extract_ast_signatures_internal(py_files, startpath, max_chars):
                         for item in node.body:
                             if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                                 try:
-                                    signatures.append(f"    {ast.unparse(item).split(':\\n')[0]}:")
+                                    # FIX: Compute signature header outside the f-string interpolation
+                                    sig_header = ast.unparse(item).split(':\n')[0]
+                                    signatures.append(f"    {sig_header}:")
                                 except Exception:
                                     signatures.append(f"    def {item.name}(...):")
                     elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
