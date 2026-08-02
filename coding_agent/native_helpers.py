@@ -241,19 +241,31 @@ def gather_deep_context(startpath):
 
 
 class CommandVisitor(ast.NodeVisitor):
-    """Universal visitor to extract string constants that look like commands/flags."""
+    """Universal visitor to extract string constants and their surrounding code context."""
 
-    def __init__(self):
-        self.commands = set()
-        self.flags = set()
+    def __init__(self, source_lines):
+        self.commands = {}  # Map: command -> code snippet
+        self.flags = {}  # Map: flag -> code snippet
+        self.source_lines = source_lines
 
     def visit_Constant(self, node):
         if isinstance(node.value, str):
             val = node.value
-            if re.match(r"^/[a-zA-Z0-9_-]+$", val):
-                self.commands.add(val)
-            elif re.match(r"^--[a-zA-Z0-9_-]+$", val):
-                self.flags.add(val)
+            is_cmd = re.match(r"^/[a-zA-Z0-9_-]+$", val)
+            is_flag = re.match(r"^--[a-zA-Z0-9_-]+$", val)
+
+            # If it's a command/flag and we know its line number
+            if (is_cmd or is_flag) and hasattr(node, 'lineno'):
+                # Grab the exact line and one line of lookahead for context
+                start_idx = max(0, node.lineno - 1)
+                end_idx = min(len(self.source_lines), node.lineno + 1)
+                snippet = " ".join([line.strip() for line in self.source_lines[start_idx:end_idx] if line.strip()])
+
+                if is_cmd and val not in self.commands:
+                    self.commands[val] = snippet
+                elif is_flag and val not in self.flags:
+                    self.flags[val] = snippet
+
         self.generic_visit(node)
 
 
@@ -291,27 +303,43 @@ def gather_deep_context_ast(startpath):
                     pass
 
     # 2. Universal AST Interface Extraction
-    global_commands = set()
-    global_flags = set()
+    global_commands = {}
+    global_flags = {}
 
     for filepath in py_files:
         try:
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
-                tree = ast.parse(file.read())
-                visitor = CommandVisitor()
+                text = file.read()
+                source_lines = text.splitlines()
+                tree = ast.parse(text)
+
+                visitor = CommandVisitor(source_lines)
                 visitor.visit(tree)
-                global_commands.update(visitor.commands)
-                global_flags.update(visitor.flags)
+
+                # Merge findings
+                for k, v in visitor.commands.items():
+                    if k not in global_commands: global_commands[k] = v
+                for k, v in visitor.flags.items():
+                    if k not in global_flags: global_flags[k] = v
         except Exception:
             pass  # Skip syntax errors during broad scan
 
     command_header = ""
     if global_commands or global_flags:
         command_header = "=== AST DISCOVERED INTERFACES ===\n"
+        command_header += "CRITICAL ARCHITECTURE NOTE: This application operates via an interactive chat loop. Users must start the application first, and THEN type these commands into the prompt.\n\n"
+
         if global_commands:
-            command_header += f"Interactive Commands detected: {', '.join(sorted(global_commands))}\n"
+            command_header += "Interactive Chat Macros detected:\n"
+            for cmd, snippet in sorted(global_commands.items()):
+                command_header += f"  - {cmd}  (Found in code context: `{snippet}`)\n"
+            command_header += "\nUsage rule: Do NOT document these as command-line arguments (e.g., 'python app.py /command' is WRONG). Document that the user types them into the running app.\n\n"
+
         if global_flags:
-            command_header += f"CLI Flags detected: {', '.join(sorted(global_flags))}\n"
+            command_header += "Standard CLI Flags detected:\n"
+            for flag, snippet in sorted(global_flags.items()):
+                command_header += f"  - {flag}  (Found in code context: `{snippet}`)\n"
+
         command_header += "=================================\n\n"
 
     # 3. Smart Dispatcher (Threshold: ~20,000 chars / ~5,000 tokens)

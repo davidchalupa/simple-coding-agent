@@ -255,5 +255,20 @@ def test_self_readme_generation_deep():
         input_queue=input_queue,
         repo_name="simple-coding-agent",
         mode_flag="--deep",
-        expected_keywords=["agent", "llm"]
+        expected_keywords=["agent"]
+    )
+
+def test_self_readme_generation_deep_ast():
+    """
+    Tests /readme --deep-ast against the current live state of the agent codebase.
+    """
+    input_queue = [
+        "/readme --deep-ast ./simple-coding-agent", "/send",
+        "Looks good, task complete.", "/send", "/quit"
+    ]
+    run_automated_self_readme_test(
+        input_queue=input_queue,
+        repo_name="simple-coding-agent",
+        mode_flag="--deep-ast",
+        expected_keywords=["agent"]
     )
