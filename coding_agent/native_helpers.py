@@ -140,10 +140,6 @@ def generate_requirements_native(target_dir, no_version=False):
         return f"Error executing native requirements handler: {e}"
 
 
-import os
-import subprocess
-
-
 def gather_deep_context(startpath):
     """
     Gathers repository context using a dynamic fair-share character budget.
@@ -244,20 +240,40 @@ def gather_deep_context(startpath):
     return code_summary, cli_help
 
 
+class CommandVisitor(ast.NodeVisitor):
+    """Universal visitor to extract string constants that look like commands/flags."""
+
+    def __init__(self):
+        self.commands = set()
+        self.flags = set()
+
+    def visit_Constant(self, node):
+        if isinstance(node.value, str):
+            val = node.value
+            if re.match(r"^/[a-zA-Z0-9_-]+$", val):
+                self.commands.add(val)
+            elif re.match(r"^--[a-zA-Z0-9_-]+$", val):
+                self.flags.add(val)
+        self.generic_visit(node)
+
+
 def gather_deep_context_ast(startpath):
     """
-    Gathers repository context using AST.
-    Crucially, it uses an AST Visitor to discover string constants that represent
-    CLI flags or interactive commands, overcoming the 'blind spot' of pure signature extraction.
+    Experimental Smart Dispatcher (Currently bound to --deep-ast for A/B testing).
+    Always uses AST to extract CLI flags/commands.
+    Routes to Raw Text extraction for small repos, and AST extraction for large repos.
     """
     base_ignores = {
         '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
         '.idea', '.vscode', 'dist', 'build', 'tests', 'test', 'migrations',
         'alembic', 'docs', 'site-packages', 'test_data'
     }
+    # Assuming build_ignore_checker is already defined in your file
     is_ignored = build_ignore_checker(startpath, base_ignores)
     py_files = []
+    total_repo_chars = 0
 
+    # 1. File Discovery & Sizing
     for root, dirs, files in os.walk(startpath):
         rel_root = os.path.relpath(root, startpath)
         if rel_root == ".":
@@ -267,139 +283,28 @@ def gather_deep_context_ast(startpath):
         for f in files:
             f_rel = os.path.join(rel_root, f) if rel_root else f
             if f.endswith('.py') and not f.startswith('.') and not is_ignored(f, f_rel):
-                py_files.append(os.path.join(root, f))
+                filepath = os.path.join(root, f)
+                py_files.append(filepath)
+                try:
+                    total_repo_chars += os.path.getsize(filepath)
+                except OSError:
+                    pass
 
-    code_summary = ""
-    candidates = []
-    MAX_TOTAL_CHARS = 20000
-
-    # AST Walker to find hidden commands inside procedural code (like your main loop)
-    class CommandVisitor(ast.NodeVisitor):
-        def __init__(self):
-            self.commands = set()
-            self.flags = set()
-
-        def visit_Constant(self, node):
-            if isinstance(node.value, str):
-                val = node.value
-                # Precisely capture slash commands (e.g., "/readme") and flags (e.g., "--allow-patch")
-                if re.match(r"^/[a-zA-Z0-9_-]+$", val):
-                    self.commands.add(val)
-                elif re.match(r"^--[a-zA-Z0-9_-]+$", val):
-                    self.flags.add(val)
-            self.generic_visit(node)
-
+    # 2. Universal AST Interface Extraction
     global_commands = set()
     global_flags = set()
 
-    def get_brief_doc(node):
-        doc = ast.get_docstring(node)
-        if doc:
-            lines = [line.strip() for line in doc.strip().split('\n') if line.strip()]
-            return f'"""{lines[0][:100]}"""' if lines else None
-        return None
-
     for filepath in py_files:
-        if len(code_summary) >= MAX_TOTAL_CHARS:
-            code_summary += "\n[System: Repository context truncated to safely fit 8k window.]\n"
-            break
-
-        rel_path = os.path.relpath(filepath, startpath)
         try:
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
-                file_text = file.read()
-
-            try:
-                tree = ast.parse(file_text)
-                signatures = []
-                has_functions_or_classes = False
-
-                # 1. Extract embedded commands and flags
+                tree = ast.parse(file.read())
                 visitor = CommandVisitor()
                 visitor.visit(tree)
                 global_commands.update(visitor.commands)
                 global_flags.update(visitor.flags)
+        except Exception:
+            pass  # Skip syntax errors during broad scan
 
-                mod_doc = get_brief_doc(tree)
-                if mod_doc:
-                    signatures.append(f'"""Module Doc: {mod_doc}"""')
-
-                # 2. Iterate through top-level nodes
-                for node in tree.body:
-                    # Capture Imports (Tech Stack)
-                    if isinstance(node, (ast.Import, ast.ImportFrom)):
-                        try:
-                            signatures.append(ast.unparse(node))
-                        except Exception:
-                            pass  # Fallback for older python versions
-
-                    # Capture Top-Level Constants/Configs
-                    elif isinstance(node, ast.Assign):
-                        try:
-                            # Only grab simple assignments (e.g., CONST = 5)
-                            code_str = ast.unparse(node)
-                            if len(code_str) < 100:  # Prevent huge dicts from eating budget
-                                signatures.append(code_str)
-                        except Exception:
-                            pass
-
-                    # Capture Classes
-                    elif isinstance(node, ast.ClassDef):
-                        has_functions_or_classes = True
-                        signatures.append(f"class {node.name}:")
-                        cls_doc = get_brief_doc(node)
-                        if cls_doc:
-                            signatures.append(f"    {cls_doc}")
-
-                        # Grab methods inside the class
-                        for item in node.body:
-                            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                                try:
-                                    # Use ast.unparse to get full signature WITH arguments
-                                    sig_str = ast.unparse(item).split(':\n')[0] + ":"
-                                    signatures.append(f"    {sig_str}")
-                                except Exception:
-                                    signatures.append(f"    def {item.name}(...):")
-
-                                func_doc = get_brief_doc(item)
-                                if func_doc:
-                                    signatures.append(f"        {func_doc}")
-
-                    # Capture Functions
-                    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        has_functions_or_classes = True
-                        try:
-                            sig_str = ast.unparse(node).split(':\n')[0] + ":"
-                            signatures.append(sig_str)
-                        except Exception:
-                            signatures.append(f"def {node.name}(...):")
-
-                        func_doc = get_brief_doc(node)
-                        if func_doc:
-                            signatures.append(f"    {func_doc}")
-
-                # 3. HYBRID FALLBACK: If the file is just a script, grab the top 25 lines
-                if not has_functions_or_classes:
-                    clean_script_lines = [
-                                             line for line in file_text.split('\n')
-                                             if line.strip() and not line.strip().startswith('#')
-                                         ][:25]
-                    content_snippet = "\n".join(clean_script_lines)
-                else:
-                    content_snippet = "\n".join(signatures)
-
-            except SyntaxError:
-                content_snippet = "(Syntax Error parsing file)"
-
-            code_summary += f"\n--- FILE: {rel_path} ---\n{content_snippet}\n"
-
-            if "__main__" in file_text or "argparse" in file_text or "click" in file_text or "typer" in file_text:
-                candidates.append(filepath)
-
-        except Exception as e:
-            code_summary += f"\n--- FILE: {rel_path} (Error reading: {e}) ---\n"
-
-    # Prepend the dynamically discovered commands to the context so the LLM knows what to document
     command_header = ""
     if global_commands or global_flags:
         command_header = "=== AST DISCOVERED INTERFACES ===\n"
@@ -409,9 +314,142 @@ def gather_deep_context_ast(startpath):
             command_header += f"CLI Flags detected: {', '.join(sorted(global_flags))}\n"
         command_header += "=================================\n\n"
 
+    # 3. Smart Dispatcher (Threshold: ~20,000 chars / ~5,000 tokens)
+    MAX_TOTAL_CHARS = 20000
+    if total_repo_chars <= MAX_TOTAL_CHARS:
+        # Re-use the raw text extraction behavior of --deep to ensure a clean A/B test
+        code_summary = _extract_raw_text_internal(py_files, startpath, MAX_TOTAL_CHARS)
+    else:
+        # Use AST signature compression to save the context window
+        code_summary = _extract_ast_signatures_internal(py_files, startpath, MAX_TOTAL_CHARS)
+
     full_context = command_header + code_summary
 
-    # CLI Help Extraction
+    # 4. CLI Help Extraction
+    cli_help = _extract_cli_help_internal(py_files, startpath)
+
+    return full_context, cli_help
+
+
+# --- Internal Helpers for the Dispatcher ---
+
+def _extract_raw_text_internal(py_files, startpath, max_chars):
+    code_summary = ""
+    char_limit_per_file = max(1000, max_chars // len(py_files)) if py_files else 0
+
+    for filepath in py_files:
+        if len(code_summary) >= max_chars:
+            code_summary += "\n[System: Repository too large. Code context truncated.]\n"
+            break
+        rel_path = os.path.relpath(filepath, startpath)
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+
+            clean_lines = []
+            current_chars = 0
+            for line in lines:
+                stripped = line.strip()
+                if not stripped or stripped.startswith(("import ", "from ")):
+                    continue
+                clean_lines.append(line.rstrip())
+                current_chars += len(line)
+                if current_chars >= char_limit_per_file:
+                    clean_lines.append("... [Code truncated for length] ...")
+                    break
+
+            code_summary += f"\n--- FILE: {rel_path} ---\n{chr(10).join(clean_lines)}\n"
+        except Exception as e:
+            code_summary += f"\n--- FILE: {rel_path} (Error: {e}) ---\n"
+
+    return code_summary
+
+
+def _extract_ast_signatures_internal(py_files, startpath, max_chars):
+    code_summary = ""
+
+    def get_brief_doc(node):
+        doc = ast.get_docstring(node)
+        if doc:
+            lines = [line.strip() for line in doc.strip().split('\n') if line.strip()]
+            return f'"""{lines[0][:100]}"""' if lines else None
+        return None
+
+    for filepath in py_files:
+        if len(code_summary) >= max_chars:
+            code_summary += "\n[System: Repository context truncated.]\n"
+            break
+
+        rel_path = os.path.relpath(filepath, startpath)
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                file_text = f.read()
+
+            try:
+                tree = ast.parse(file_text)
+                signatures = []
+                has_funcs = False
+
+                mod_doc = get_brief_doc(tree)
+                if mod_doc: signatures.append(f'"""Module: {mod_doc}"""')
+
+                for node in tree.body:
+                    if isinstance(node, (ast.Import, ast.ImportFrom)):
+                        try:
+                            signatures.append(ast.unparse(node))
+                        except Exception:
+                            pass
+                    elif isinstance(node, ast.Assign):
+                        try:
+                            code_str = ast.unparse(node)
+                            if len(code_str) < 100: signatures.append(code_str)
+                        except Exception:
+                            pass
+                    elif isinstance(node, ast.ClassDef):
+                        has_funcs = True
+                        signatures.append(f"class {node.name}:")
+                        if cls_doc := get_brief_doc(node): signatures.append(f"    {cls_doc}")
+                        for item in node.body:
+                            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                                try:
+                                    signatures.append(f"    {ast.unparse(item).split(':\\n')[0]}:")
+                                except Exception:
+                                    signatures.append(f"    def {item.name}(...):")
+                    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        has_funcs = True
+                        try:
+                            signatures.append(ast.unparse(node).split(':\n')[0] + ":")
+                        except Exception:
+                            signatures.append(f"def {node.name}(...):")
+                        if func_doc := get_brief_doc(node): signatures.append(f"    {func_doc}")
+
+                if not has_funcs:
+                    lines = [l for l in file_text.split('\n') if l.strip() and not l.strip().startswith('#')][:25]
+                    content = "\n".join(lines)
+                else:
+                    content = "\n".join(signatures)
+
+            except SyntaxError:
+                content = "(Syntax Error parsing file)"
+
+            code_summary += f"\n--- FILE: {rel_path} ---\n{content}\n"
+        except Exception as e:
+            code_summary += f"\n--- FILE: {rel_path} (Error: {e}) ---\n"
+
+    return code_summary
+
+
+def _extract_cli_help_internal(py_files, startpath):
+    candidates = []
+    for filepath in py_files:
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                text = f.read()
+                if any(x in text for x in ["__main__", "argparse", "click", "typer"]):
+                    candidates.append(filepath)
+        except Exception:
+            pass
+
     best_help = ""
     best_entry = None
     for candidate in candidates:
@@ -423,10 +461,9 @@ def gather_deep_context_ast(startpath):
             )
             if result.returncode == 0 and ("usage:" in result.stdout.lower() or "options:" in result.stdout.lower()):
                 if len(result.stdout) > len(best_help):
-                    best_help = f"Discovered Entry Point: {rel_entry}\nOutput of 'python {rel_entry} --help':\n{result.stdout}"
+                    best_help = f"Discovered Entry Point: {rel_entry}\nOutput:\n{result.stdout}"
                     best_entry = rel_entry
         except Exception:
             pass
 
-    cli_help = best_help if best_entry else "No explicit CLI --help output captured."
-    return full_context, cli_help
+    return best_help if best_entry else "No explicit CLI --help output captured."

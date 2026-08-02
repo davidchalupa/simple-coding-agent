@@ -178,7 +178,7 @@ def main():
             code_summary = None
             cli_help = None
             if deep_ast_focus:
-                print("👀 [Mode Change] Deep AST Scan: Extracting AST signatures and querying CLI help hooks...")
+                print("👀 [Mode Change] Experimental Dispatcher: Extracting AST interfaces and auto-routing based on size...")
                 code_summary, cli_help = gather_deep_context_ast(abs_target_dir)
             elif deep_focus:
                 print("👀 [Mode Change] Deep Scan: Extracting script code segments and querying CLI help hooks...")
