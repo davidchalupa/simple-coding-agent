@@ -165,3 +165,95 @@ def test_agent_readme_generation_deep():
         repo_name=repo_name,
         max_calls_limit=40
     )
+
+def prepare_self_repo_sandbox(target_dir):
+    """
+    Copies the current repository into a sandbox, ignoring cache and git history.
+    """
+    ignore_patterns = shutil.ignore_patterns(
+        ".git", ".venv", "venv", "env", "__pycache__",
+        ".idea", ".vscode", "dist", "build", ".pytest_cache", "models", "README.md",
+    )
+    # Copy current workspace into a subfolder inside the temporary sandbox
+    repo_dest = os.path.join(target_dir, "coding-agent")
+    shutil.copytree(os.getcwd(), repo_dest, ignore=ignore_patterns)
+    return repo_dest
+
+def run_automated_self_readme_test(input_queue, repo_name, mode_flag, expected_keywords=None):
+    """
+    Custom runner that dynamically snapshots the live repository into a sandbox for self-testing.
+    """
+    print(f"🧪 Starting Live Self-Test for /readme {mode_flag}...", flush=True)
+
+    original_cwd = os.getcwd()
+    test_sandbox = tempfile.mkdtemp(prefix="agent_self_readme_sandbox_")
+
+    try:
+        # Dynamically copy current repo into sandbox
+        prepare_self_repo_sandbox(test_sandbox)
+
+        simple_coding_agent.session_cwd = test_sandbox
+        simple_coding_agent.FORCE_TESTING = True
+
+        safety_counter = {"calls": 0, "max_calls": 40}
+
+        def smart_input_mocker(prompt=""):
+            safety_counter["calls"] += 1
+            if safety_counter["calls"] > safety_counter["max_calls"]:
+                return "/quit"
+
+            prompt_str = str(prompt).lower()
+            if "allow" in prompt_str or "y/n" in prompt_str:
+                return "y"
+
+            if input_queue:
+                return input_queue.pop(0)
+
+            return "/quit"
+
+        os.chdir(test_sandbox)
+
+        with patch("builtins.input", side_effect=smart_input_mocker):
+            try:
+                simple_coding_agent.main()
+            except SystemExit:
+                pass
+
+        # Verification metrics
+        readme_path = os.path.join(test_sandbox, repo_name, "README.md")
+        if not os.path.exists(readme_path):
+            pytest.fail("README.md was not generated for the live agent codebase!")
+
+        with open(readme_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        word_count = len(content.split())
+        print(f"📊 Self-README Word Count ({mode_flag}): {word_count} words", flush=True)
+
+        if word_count < 150:
+            pytest.fail(f"README is too shallow ({word_count} words).")
+
+        if expected_keywords:
+            missing = [kw for kw in expected_keywords if kw.lower() not in content.lower()]
+            if missing:
+                pytest.fail(f"README missing expected keywords: {missing}")
+
+    finally:
+        os.chdir(original_cwd)
+        shutil.rmtree(test_sandbox)
+
+def test_self_readme_generation_deep():
+    """
+    Tests /readme --deep against the current live state of the agent codebase.
+    """
+    input_queue = [
+        "/readme --deep ./coding-agent", "/send",
+        "Looks good, task complete.", "/send", "/quit"
+    ]
+    # Pass direct_repo_copy=True instead of a zip path
+    run_automated_self_readme_test(
+        input_queue=input_queue,
+        repo_name="coding-agent",
+        mode_flag="--deep",
+        expected_keywords=["agent", "llm"]
+    )
