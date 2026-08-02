@@ -1,10 +1,11 @@
-import sys
 import os
 import tempfile
 import shutil
 import zipfile
 from unittest.mock import patch
 import pytest
+import re
+import ast
 
 import simple_coding_agent
 
@@ -272,3 +273,210 @@ def test_self_readme_generation_deep_ast():
         mode_flag="--deep-ast",
         expected_keywords=["agent"]
     )
+
+
+class GroundingVerifier:
+    """Extracts valid symbols from target repo and verifies README claims against them."""
+
+    def __init__(self, repo_dir: str):
+        self.repo_dir = os.path.abspath(repo_dir)
+        self.valid_symbols = set()
+        self.valid_flags = set()
+        self._build_symbol_manifest()
+
+    def _build_symbol_manifest(self):
+        for root, _, files in os.walk(self.repo_dir):
+            for f in files:
+                rel_path = os.path.relpath(os.path.join(root, f), self.repo_dir)
+                self.valid_symbols.add(f)
+                self.valid_symbols.add(rel_path.replace("\\", "/"))
+
+                if f.endswith(".py"):
+                    full_p = os.path.join(root, f)
+                    try:
+                        with open(full_p, "r", encoding="utf-8") as py_f:
+                            code = py_f.read()
+
+                            # 1. AST Parsing for guaranteed extraction
+                            tree = ast.parse(code, filename=f)
+                            for node in ast.walk(tree):
+                                # Extract Classes and Functions (including async)
+                                if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)):
+                                    self.valid_symbols.add(node.name)
+
+                                # Extract String Literals (Python 3.8+)
+                                elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                                    if node.value.startswith('-') or node.value.startswith('/'):
+                                        self.valid_flags.add(node.value.strip())
+
+                                # Extract String Literals (Python < 3.8 fallback)
+                                elif isinstance(node, ast.Str):
+                                    if node.s.startswith('-') or node.s.startswith('/'):
+                                        self.valid_flags.add(node.s.strip())
+
+                            # 2. Aggressive Regex Fallback (for non-standard formatting)
+                            # Matches -f, --flag, /macro inside any quotes with optional padding
+                            flags = re.findall(r'["\']\s*(-[a-zA-Z0-9\-_]+|--[a-zA-Z0-9\-_]+|/[a-zA-Z0-9\-_]+)\s*["\']',
+                                               code)
+                            self.valid_flags.update(flags)
+                    except Exception:
+                        pass
+
+    def evaluate_readme(self, readme_content: str):
+        # 1. Extract triple-backtick code blocks first
+        blocks = re.findall(r'```[a-zA-Z]*\n(.*?)```', readme_content, re.DOTALL)
+
+        # 2. Remove those blocks from the text to prevent regex crossover
+        clean_text = re.sub(r'```.*?```', '', readme_content, flags=re.DOTALL)
+
+        # 3. Now safely extract single inline backticks
+        inlines = re.findall(r'`([^`\n]+)`', clean_text)
+
+        # Combine all extracted code and split it into individual words/tokens
+        all_code_string = " ".join(blocks + inlines)
+        raw_tokens = all_code_string.split()
+
+        valid_count = 0
+        hallucinations = []
+        total_tokens = 0
+
+        # Expanded ignore list for common CLI words and bash comments
+        ignore_words = {
+            "python", "python3", "pip", "install", "run", "usage", "bash", "sh",
+            "cd", "git", "clone", "the", "a", "to", "and", "is", "for", "with",
+            "in", "of", "this", "file", "script", "use"
+        }
+
+        for token in raw_tokens:
+            # Strip surrounding punctuation (e.g. from "main.py",)
+            token_clean = token.strip('.,;:\'"()[]{}')
+
+            # Skip empty strings, short particles, or ignored words
+            if not token_clean or len(token_clean) <= 2 or token_clean.lower() in ignore_words:
+                continue
+
+            total_tokens += 1
+
+            # Check if this token matches a real file, class, function, or flag
+            if (token_clean in self.valid_symbols or
+                    token_clean in self.valid_flags or
+                    any(token_clean in sym for sym in self.valid_symbols)):
+                valid_count += 1
+            else:
+                hallucinations.append(token_clean)
+
+        total = total_tokens
+        groundedness = (valid_count / total) * 100 if total > 0 else 0
+        word_count = len(readme_content.split())
+        density = (valid_count / word_count * 1000) if word_count > 0 else 0
+
+        return {
+            "groundedness_score": round(groundedness, 2),
+            "density_score": round(density, 2),
+            "total_code_references": total,
+            # Use set() to remove duplicates from the printout
+            "hallucination_candidates": list(set(hallucinations))
+        }
+
+
+def run_readme_and_capture(zip_file_path, repo_name, mode_flag):
+    """Modified runner that returns the README content instead of asserting."""
+    original_cwd = os.getcwd()
+    test_sandbox = tempfile.mkdtemp(prefix=f"benchmark_{mode_flag.strip('-')}_")
+
+    source_zip_path = os.path.abspath(os.path.join(original_cwd, zip_file_path))
+    with zipfile.ZipFile(source_zip_path, 'r') as zip_ref:
+        zip_ref.extractall(test_sandbox)
+
+    simple_coding_agent.session_cwd = test_sandbox
+    simple_coding_agent.FORCE_TESTING = True
+
+    input_queue = [
+        f"/readme {mode_flag} ./{repo_name}", "/send",
+        "Looks good, task complete.", "/send", "/quit"
+    ]
+
+    safety_counter = {"calls": 0, "max": 40}
+
+    def mocker(prompt=""):
+        safety_counter["calls"] += 1
+        if safety_counter["calls"] > safety_counter["max"]: return "/quit"
+        p = str(prompt).lower()
+        if "allow" in p or "y/n" in p: return "y"
+        return input_queue.pop(0) if input_queue else "/quit"
+
+    try:
+        os.chdir(test_sandbox)
+        with patch("builtins.input", side_effect=mocker):
+            try:
+                simple_coding_agent.main()
+            except SystemExit:
+                pass
+
+        readme_path = os.path.join(test_sandbox, repo_name, "README.md")
+        if os.path.exists(readme_path):
+            with open(readme_path, "r", encoding="utf-8") as f:
+                return f.read()
+        return ""
+    finally:
+        os.chdir(original_cwd)
+        shutil.rmtree(test_sandbox)
+
+
+def test_minesweeper_macro_benchmark():
+    """
+    Pilots the benchmark comparison between --deep and --deep-ast
+    on the Minesweeper repository (generating both READMEs in a sandbox and comparing
+    their quality with GroundingVerifier).
+    """
+    zip_target = "test_data/minesweeper-solve.zip"
+    repo_name = "minesweeper-solve"
+
+    print("\n" + "=" * 60)
+    print("🚀 STARTING BENCHMARK: --deep vs --deep-ast")
+    print("=" * 60)
+
+    # 1. Setup Ground Truth Verifier
+    original_cwd = os.getcwd()
+    ground_truth_sandbox = tempfile.mkdtemp(prefix="ground_truth_")
+    source_zip_path = os.path.abspath(os.path.join(original_cwd, zip_target))
+
+    with zipfile.ZipFile(source_zip_path, 'r') as zip_ref:
+        zip_ref.extractall(ground_truth_sandbox)
+
+    verifier = GroundingVerifier(os.path.join(ground_truth_sandbox, repo_name))
+
+    try:
+        # 2. Run both modes and capture output
+        print("\n⏳ Running agent with --deep...")
+        readme_deep = run_readme_and_capture(zip_target, repo_name, "--deep")
+
+        print("⏳ Running agent with --deep-ast...")
+        readme_ast = run_readme_and_capture(zip_target, repo_name, "--deep-ast")
+
+        # 3. Evaluate
+        score_deep = verifier.evaluate_readme(readme_deep)
+        score_ast = verifier.evaluate_readme(readme_ast)
+
+        # 4. Print Report (Run pytest with '-s' flag to see this!)
+        print("\n" + "=" * 60)
+        print("📊 MINESWEEPER BENCHMARK REPORT")
+        print("=" * 60)
+
+        print("Mode [--deep]:")
+        print(f"  • Groundedness Precision: {score_deep['groundedness_score']}%")
+        print(f"  • Info Density:           {score_deep['density_score']}")
+        print(f"  • Suspected Hallucinations:\n    {score_deep['hallucination_candidates']}")
+
+        print("\nMode [--deep-ast]:")
+        print(f"  • Groundedness Precision: {score_ast['groundedness_score']}%")
+        print(f"  • Info Density:           {score_ast['density_score']}")
+        print(f"  • Suspected Hallucinations:\n    {score_ast['hallucination_candidates']}")
+        print("=" * 60)
+
+        # Soft asserts just to ensure the test passes if generation worked
+        assert len(readme_deep) > 50, "--deep failed to generate meaningful text"
+        assert len(readme_ast) > 50, "--deep-ast failed to generate meaningful text"
+
+    finally:
+        shutil.rmtree(ground_truth_sandbox)
