@@ -282,6 +282,12 @@ class GroundingVerifier:
         self.repo_dir = os.path.abspath(repo_dir)
         self.valid_symbols = set()
         self.valid_flags = set()
+
+        # Trust the root repository name
+        repo_basename = os.path.basename(self.repo_dir)
+        self.valid_symbols.add(repo_basename)
+        self.valid_symbols.add(f"{repo_basename}.git")
+
         self._build_symbol_manifest()
 
     def _build_symbol_manifest(self):
@@ -347,12 +353,27 @@ class GroundingVerifier:
             "in", "of", "this", "file", "script", "use"
         }
 
+        # In GroundingVerifier.evaluate_readme() or __init__()
+        standard_cli_flags = {
+            "-r", "-m", "-v", "-h", "--help", "--user",
+            "--upgrade", "--no-cache-dir", "-b", "-m"
+        }
+
         for token in raw_tokens:
             # Strip surrounding punctuation (e.g. from "main.py",)
             token_clean = token.strip('.,;:\'"()[]{}')
 
-            # Skip empty strings, short particles, or ignored words
-            if not token_clean or len(token_clean) <= 2 or token_clean.lower() in ignore_words:
+            # Ignoring typical cli flags
+            if token_clean in standard_cli_flags:
+                continue
+
+            # Allow short tokens if they look like CLI flags (-a, -d)
+            is_cli_flag = token_clean.startswith('-') and len(token_clean) >= 2
+
+            if not token_clean or token_clean.lower() in ignore_words:
+                continue
+
+            if len(token_clean) <= 2 and not is_cli_flag:
                 continue
 
             total_tokens += 1
