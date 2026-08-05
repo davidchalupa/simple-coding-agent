@@ -11,7 +11,8 @@ from coding_agent.input_handler import get_user_prompt
 from coding_agent.tool_definitions import read_file, extract_code_blocks
 from coding_agent.execute_tool import execute_tool
 from coding_agent.system_prompt_builder import build_system_prompt
-from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context, gather_deep_context_ast
+from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context, \
+    gather_deep_context_ast
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import file_splitter
 from coding_agent import native_linter
@@ -178,7 +179,8 @@ def main():
             code_summary = None
             cli_help = None
             if deep_ast_focus:
-                print("👀 [Mode Change] Experimental Dispatcher: Extracting AST interfaces and auto-routing based on size...")
+                print(
+                    "👀 [Mode Change] Experimental Dispatcher: Extracting AST interfaces and auto-routing based on size...")
                 code_summary, cli_help = gather_deep_context_ast(abs_target_dir)
             elif deep_focus:
                 print("👀 [Mode Change] Deep Scan: Extracting script code segments and querying CLI help hooks...")
@@ -251,6 +253,24 @@ def main():
         file_was_modified = False  # Track if any files change during this cycle
 
         while True:
+            # --- CONTEXT TOKEN GUARDRAIL ---
+            try:
+                # Calculate exact token usage of history + ChatML format buffer
+                current_tokens = sum(len(llm.tokenize(m["content"].encode('utf-8'))) + 10 for m in messages)
+
+                if current_tokens > CONTEXT_WINDOW:
+                    print(f"\n🚨 [MEMORY OVERLOAD]: Prompt size is {current_tokens} tokens (Limit: {CONTEXT_WINDOW}).")
+                    print("   The agent will likely hallucinate or output truncated JSON.")
+                    print("   Consider using '/clear' or falling back to '--deep-ast' instead of '--deep'.")
+                elif current_tokens > int(CONTEXT_WINDOW * 0.85):
+                    usage_percent = (current_tokens / CONTEXT_WINDOW) * 100
+                    print(
+                        f"\n⚠️  [MEMORY WARNING]: Approaching context limit ({current_tokens}/{CONTEXT_WINDOW} tokens, {usage_percent:.1f}%).")
+            except Exception:
+                # Failsafe if the tokenizer crashes so the main loop survives
+                pass
+            # -------------------------------
+
             print(f"\n[Agent]: ", end="", flush=True)
             response_content = ""
 
@@ -262,7 +282,6 @@ def main():
                 finish_reason = None
 
                 # --- INNER STREAM WRAPPED FOR INTERRUPT HANDLING ---
-                # CTRL+C should terminate the generation
                 try:
                     for chunk in stream:
                         choice = chunk['choices'][0]
@@ -275,11 +294,6 @@ def main():
                             print(piece, end="", flush=True)
                             response_content += piece
 
-
-                # NOTE ON IDE LIMITATIONS:
-                # - This should work fine when running the script in standard console (PowerShell or Bash).
-                # - PyCharm: By default, PyCharm's Run console swallows SIGINT, meaning CTRL+C won't interrupt generation.
-                #   - WORKAROUND: Enable "Emulate terminal in output console" in PyCharm's "Run Configurations > Modify Options".
                 except KeyboardInterrupt:
                     print("\n\n🛑 [Generation Interrupted by User]")
 
