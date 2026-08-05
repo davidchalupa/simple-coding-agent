@@ -41,7 +41,21 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
 
 
 def build_strategy_steps(readme_path, allow_patch, deep_focus=False):
-    focus_rule = ""
+    # Dynamically adjust the strict constraints based on what the model can actually see
+    if deep_focus:
+        focus_rule = (
+            "\n\nSTRICT FORMATTING CONSTRAINTS:\n"
+            "- AVOID GENERIC BOILERPLATE: Do NOT generate generic 'Contributing' or standard Git workflows unless explicitly found in the codebase.\n"
+            "- GROUNDED CONTENT ONLY: Only document features, classes, functions, or CLI flags that are proven to exist in the provided file contents and CLI output.\n"
+            "- REQUIRED STRUCTURE: Organize the README with clear headers: Project Overview, Core Architecture (based on actual files), and Usage."
+        )
+    else:
+        focus_rule = (
+            "\n\nSTRICT FORMATTING CONSTRAINTS:\n"
+            "- AVOID GENERIC BOILERPLATE: Do NOT generate generic 'Contributing' or standard Git workflows.\n"
+            "- NO CODE HALLUCINATION: You only have access to the file tree. DO NOT invent CLI commands, Python code blocks, or function names. Describe the project's high-level purpose based ONLY on the directory structure.\n"
+            "- REQUIRED STRUCTURE: Organize the README with clear headers: Project Overview and Directory Architecture."
+        )
 
     # Direct the model to pay attention to structural layout vs hard evidence
     grounding_source = "the repo structure, file contents, and runtime CLI usage parameters provided" if deep_focus else "the raw repository structure"
