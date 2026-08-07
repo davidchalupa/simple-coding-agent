@@ -509,11 +509,15 @@ def main():
                     if is_test_file and not has_prompted_for_tests:
                         print(
                             "\n[System]: Catching unverified test changes. Automatically queuing follow-up test prompt.")
+                        # Use the absolute path to the current interpreter (e.g., inside the .venv)
+                        # Replace backslashes with forward slashes to prevent JSON escaping crashes on Windows
+                        safe_py_exec = sys.executable.replace("\\", "/")
+
                         automated_followup = (
-                            "Great. Now use `run_cmd` to run this test file (e.g., using `python -m unittest`) to verify your logic. "
+                            f"Great. Now use `run_cmd` to run this test file (e.g., using `\"{safe_py_exec}\" -m unittest`) to verify your logic. "
                             "CRITICAL: If a test fails, you must follow these steps strictly:\n"
                             "1. Do NOT output a tool call immediately.\n"
-                            "2. Audit the failing test case: Does the test input actually violate the original problem constraints? (e.g., 'Two Sum' requires exactly one valid pair, so a single-element array is an invalid test).\n"
+                            "2. Audit the failing test case: Does the test input actually violate the original problem constraints?\n"
                             "3. If the test itself is invalid, use `patch_file` or `write_file` to DELETE or FIX the bad test in the test file.\n"
                             "4. If the test is valid, analyze why your source code failed, and fix the source code.\n"
                             "5. Rerun the tests until they pass."
