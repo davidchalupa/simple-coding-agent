@@ -1,6 +1,0 @@
-/readme ..\minesweeper-solve
-/send
-/split test_data/test_split/graph_drawing_explorer.py
-/send
-/split --execute test_data/test_split_execute/ecommerce_order_processor.py
-/send
