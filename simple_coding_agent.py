@@ -3,6 +3,8 @@ import os
 import json
 import re
 import shutil
+
+import llama_cpp
 from llama_cpp import Llama
 from pathlib import Path
 
@@ -50,19 +52,45 @@ def initialize_agent():
     if llm is not None:
         return
 
-    # 4. Initialization Logic
     if os.path.exists(target_path):
-        print(f"Loading {loaded_model_name} into RAM...")
-        try:
-            llm = Llama(
-                model_path=target_path, n_ctx=CONTEXT_WINDOW, n_threads=6, n_batch=512, verbose=False
-            )
-        except Exception as e:
-            print(f"❌ Failed to load: {e}")
-            sys.exit(1)
-    else:
-        print(f"❌ Error: Model file not found at {target_path}.")
-        sys.exit(1)
+        print(f"Loading {loaded_model_name}...")
+
+        # 1. Safely check if the installed wheel was compiled with GPU support
+        has_gpu = getattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)()
+
+        if has_gpu:
+            try:
+                # 2. Attempt full GPU offload (-1)
+                llm = Llama(
+                    model_path=target_path,
+                    n_ctx=CONTEXT_WINDOW,
+                    n_threads=6,
+                    n_batch=512,
+                    n_gpu_layers=-1,
+                    verbose=False
+                )
+                print("🚀 Successfully loaded model with GPU acceleration.")
+            except Exception as e:
+                print(f"⚠️ GPU error (e.g., Out of VRAM): {e}")
+                print("🐢 Falling back to CPU...")
+                llm = Llama(
+                    model_path=target_path, n_ctx=CONTEXT_WINDOW,
+                    n_threads=6, n_batch=512, n_gpu_layers=0, verbose=False
+                )
+        else:
+            print("🐢 GPU support not found in library. Executing on CPU...")
+            try:
+                llm = Llama(
+                    model_path=target_path,
+                    n_ctx=CONTEXT_WINDOW,
+                    n_threads=6,
+                    n_batch=512,
+                    n_gpu_layers=0,
+                    verbose=False
+                )
+            except Exception as e_cpu:
+                print(f"❌ Failed to load on CPU: {e_cpu}")
+                sys.exit(1)
 
     # 5. System Prompt & State Tracking
     SYSTEM_PROMPT = build_system_prompt(ALLOW_PATCH)
