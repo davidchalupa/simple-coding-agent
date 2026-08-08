@@ -46,8 +46,8 @@ has_prompted_for_tests = False
 
 
 def initialize_agent():
-    """Initializes the LLM and sets up the system prompt. Safe to call multiple times."""
-    global llm, SYSTEM_PROMPT, messages
+    """Initializes the LLM with dynamic context scaling."""
+    global llm, SYSTEM_PROMPT, messages, CONTEXT_WINDOW
 
     if llm is not None:
         return
@@ -55,31 +55,39 @@ def initialize_agent():
     if os.path.exists(target_path):
         print(f"Loading {loaded_model_name}...")
 
-        # 1. Safely check if the installed wheel was compiled with GPU support
         has_gpu = getattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)()
 
+        # Define context sizes from ideal to minimum acceptable
+        target_contexts = [32768, 16384, 8192]
+
         if has_gpu:
+            for ctx_size in target_contexts:
+                try:
+                    print(f"🔄 Attempting GPU load with {ctx_size} context window...")
+                    llm = Llama(
+                        model_path=target_path,
+                        n_ctx=ctx_size,
+                        n_threads=6,
+                        n_batch=512,
+                        n_gpu_layers=-1,  # Full offload
+                        flash_attn=True,  # Highly recommended for large contexts on GPU
+                        verbose=False
+                    )
+                    CONTEXT_WINDOW = ctx_size
+                    print(f"🚀 Successfully loaded model with GPU acceleration (Context: {CONTEXT_WINDOW}).")
+                    break  # Success! Break out of the loop
+                except ValueError as e:
+                    print(f"⚠️ VRAM limit exceeded at {ctx_size} context. Stepping down...")
+
+            # If the loop finished and llm is still None, the GPU couldn't even handle 8k
+            if llm is None:
+                print("🐢 GPU failed all context sizes. Falling back to CPU...")
+                has_gpu = False
+
+        if not has_gpu:
+            # Fallback to CPU where system RAM (32GB) is plentiful
             try:
-                # 2. Attempt full GPU offload (-1)
-                llm = Llama(
-                    model_path=target_path,
-                    n_ctx=CONTEXT_WINDOW,
-                    n_threads=6,
-                    n_batch=512,
-                    n_gpu_layers=-1,
-                    verbose=False
-                )
-                print("🚀 Successfully loaded model with GPU acceleration.")
-            except Exception as e:
-                print(f"⚠️ GPU error (e.g., Out of VRAM): {e}")
-                print("🐢 Falling back to CPU...")
-                llm = Llama(
-                    model_path=target_path, n_ctx=CONTEXT_WINDOW,
-                    n_threads=6, n_batch=512, n_gpu_layers=0, verbose=False
-                )
-        else:
-            print("🐢 GPU support not found in library. Executing on CPU...")
-            try:
+                CONTEXT_WINDOW = 32768  # You have 32GB RAM, so max this out on CPU!
                 llm = Llama(
                     model_path=target_path,
                     n_ctx=CONTEXT_WINDOW,
@@ -88,6 +96,7 @@ def initialize_agent():
                     n_gpu_layers=0,
                     verbose=False
                 )
+                print(f"🐢 Loaded on CPU with {CONTEXT_WINDOW} context.")
             except Exception as e_cpu:
                 print(f"❌ Failed to load on CPU: {e_cpu}")
                 sys.exit(1)
