@@ -3,6 +3,7 @@ import os
 import json
 import re
 import shutil
+import psutil
 
 import llama_cpp
 from llama_cpp import Llama
@@ -45,63 +46,80 @@ automated_followup = None  # Buffer for system-generated prompt injections
 has_prompted_for_tests = False
 
 
+def get_system_ram_gb():
+    """Returns total system RAM in gigabytes."""
+    return psutil.virtual_memory().total / (1024 ** 3)
+
 def initialize_agent():
-    """Initializes the LLM with dynamic context scaling."""
+    """Initializes LLM dynamically according to available GPU and CPU memory."""
     global llm, SYSTEM_PROMPT, messages, CONTEXT_WINDOW
 
     if llm is not None:
         return
 
-    if os.path.exists(target_path):
-        print(f"Loading {loaded_model_name}...")
+    if not os.path.exists(target_path):
+        print(f"❌ Error: Model file not found at {target_path}")
+        sys.exit(1)
 
-        has_gpu = getattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)()
+    print(f"Loading {loaded_model_name}...")
 
-        # Define context sizes from ideal to minimum acceptable
-        target_contexts = [32768, 16384, 8192]
+    # Determine CPU target contexts based on system RAM
+    total_ram = get_system_ram_gb()
+    if total_ram >= 24:
+        cpu_contexts = [32768, 16384, 8192]  # High RAM (32GB+)
+    elif total_ram >= 12:
+        cpu_contexts = [16384, 8192]         # Medium RAM (16GB)
+    else:
+        cpu_contexts = [8192]                # Low RAM (8GB)
 
-        if has_gpu:
-            for ctx_size in target_contexts:
-                try:
-                    print(f"🔄 Attempting GPU load with {ctx_size} context window...")
-                    llm = Llama(
-                        model_path=target_path,
-                        n_ctx=ctx_size,
-                        n_threads=6,
-                        n_batch=512,
-                        n_gpu_layers=-1,  # Full offload
-                        flash_attn=True,  # Highly recommended for large contexts on GPU
-                        verbose=False
-                    )
-                    CONTEXT_WINDOW = ctx_size
-                    print(f"🚀 Successfully loaded model with GPU acceleration (Context: {CONTEXT_WINDOW}).")
-                    break  # Success! Break out of the loop
-                except ValueError as e:
-                    print(f"⚠️ VRAM limit exceeded at {ctx_size} context. Stepping down...")
+    gpu_contexts = [32768, 16384, 8192]
+    has_gpu = getattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)()
 
-            # If the loop finished and llm is still None, the GPU couldn't even handle 8k
-            if llm is None:
-                print("🐢 GPU failed all context sizes. Falling back to CPU...")
-                has_gpu = False
-
-        if not has_gpu:
-            # Fallback to CPU where system RAM (32GB) is plentiful
+    # --- 1. ATTEMPT GPU LOAD ---
+    if has_gpu:
+        for ctx_size in gpu_contexts:
             try:
-                CONTEXT_WINDOW = 32768  # You have 32GB RAM, so max this out on CPU!
+                print(f"🔄 Attempting GPU load with {ctx_size} context...")
                 llm = Llama(
                     model_path=target_path,
-                    n_ctx=CONTEXT_WINDOW,
+                    n_ctx=ctx_size,
+                    n_threads=6,
+                    n_batch=512,
+                    n_gpu_layers=-1,
+                    flash_attn=True,
+                    verbose=False
+                )
+                CONTEXT_WINDOW = ctx_size
+                print(f"🚀 Loaded on GPU (Context: {CONTEXT_WINDOW}).")
+                break
+            except Exception as e:
+                print(f"⚠️ GPU load failed at {ctx_size} context: {e}")
+
+    # --- 2. CPU FALLBACK ---
+    if llm is None:
+        print(f"🐢 Running on CPU (Detected System RAM: {total_ram:.1f} GB)...")
+        for ctx_size in cpu_contexts:
+            try:
+                print(f"🔄 Attempting CPU load with {ctx_size} context...")
+                llm = Llama(
+                    model_path=target_path,
+                    n_ctx=ctx_size,
                     n_threads=6,
                     n_batch=512,
                     n_gpu_layers=0,
                     verbose=False
                 )
-                print(f"🐢 Loaded on CPU with {CONTEXT_WINDOW} context.")
+                CONTEXT_WINDOW = ctx_size
+                print(f"🐢 Loaded on CPU (Context: {CONTEXT_WINDOW}).")
+                break
             except Exception as e_cpu:
-                print(f"❌ Failed to load on CPU: {e_cpu}")
-                sys.exit(1)
+                print(f"⚠️ CPU allocation failed at {ctx_size} context: {e_cpu}")
 
-    # 5. System Prompt & State Tracking
+    if llm is None:
+        print("❌ Critical Error: Unable to initialize model on GPU or CPU.")
+        sys.exit(1)
+
+    # State Setup
     SYSTEM_PROMPT = build_system_prompt(ALLOW_PATCH)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 

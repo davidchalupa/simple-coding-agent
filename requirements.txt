@@ -8,3 +8,4 @@ pypdf2
 pytest
 prompt_toolkit
 requests
+psutil
