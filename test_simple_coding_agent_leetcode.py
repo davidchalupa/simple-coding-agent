@@ -169,6 +169,7 @@ def test_agent_workflow_knapsack_01():
     input_queue = [
         # --- PHASE 1: Implementation ---
         "Can you give me a code that solves the 0/1 knapsack problem with integer weights and capacity and save the code to knapsack_01.py? "
+        " The function signature MUST be `knapsack_01(capacity, weights, values)`. "
         "Crucial: The function should ONLY return the maximum value (an integer). Do not return the list of selected items.",
         "/send",
 
