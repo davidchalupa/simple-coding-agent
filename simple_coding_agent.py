@@ -33,12 +33,14 @@ MODEL_REGISTRY = {
         "max_context": 32768,
         "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
-    "starcoder2": {
-        "filename": "starcoder2-7b-instruct.Q4_K_M.gguf",
-        "display_name": "StarCoder2 7B",
-        "chat_format": "alpaca",
-        "max_context": 16384,
-        "gpu_layers": -1
+    "hermes3": {
+        "filename": "Hermes-3-Llama-3.1-8B.Q4_K_M.gguf",
+        "display_name": "Hermes 3 (Llama 3.1 8B)",
+        "stop": ["<|im_end|>", "<|eot_id|>", "<|endoftext|>"],
+        "temperature": 0.2,
+        "max_context": 32768,
+        "gpu_layers": -1,  # -1 or 99 offloads all layers to your RTX 5050 GPU
+        "chat_format": "chatml"  # Hermes 3 uses standard ChatML formatting
     }
 }
 
