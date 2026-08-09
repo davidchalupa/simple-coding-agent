@@ -2,8 +2,41 @@ import json
 import re
 
 
-# --- HYPER-ROBUST PAYLOAD PARSER ---
-def parse_robust_tool_call(response_content, tool_json_str):
+def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict | None:
+    """
+    Model-agnostic wrapper that isolates candidate tool JSON strings
+    and passes them to the hyper-robust parser without altering internal mechanics.
+    """
+    tool_json_str = None
+
+    # Strategy 1: Explicit <tool_call> tags (Qwen / Custom system prompt)
+    tool_match = re.search(r"<tool_call>(.*?)</tool_call>", response_content, re.DOTALL)
+    if tool_match:
+        tool_json_str = tool_match.group(1).strip()
+
+    # Strategy 2: Markdown ```json code blocks containing a "name" key (StarCoder / Llama / DeepSeek)
+    else:
+        for md_match in re.finditer(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL):
+            candidate = md_match.group(1).strip()
+            if '"name"' in candidate:
+                tool_json_str = candidate
+                break
+
+    # Strategy 3: Naked JSON object containing a "name" key (Fallback)
+    if not tool_json_str:
+        naked_match = re.search(r'\{\s*"name"\s*:\s*"[^"]+".*?\}', response_content, re.DOTALL)
+        if naked_match:
+            tool_json_str = naked_match.group(0).strip()
+
+    if not tool_json_str:
+        return None
+
+    # Forward to the untouched robust parser
+    return parse_robust_tool_call(response_content, tool_json_str, allow_patch=allow_patch)
+
+
+# --- HYPER-ROBUST PAYLOAD PARSER (UNTOUCHED LOGIC) ---
+def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True):
     payload_match = re.search(r"<payload>(.*?)(?:</payload>|$)", response_content, re.DOTALL)
     raw_payload = payload_match.group(1).strip() if payload_match else None
 
@@ -36,7 +69,7 @@ def parse_robust_tool_call(response_content, tool_json_str):
         pass
 
     cleaned = json_clean.strip()
-    allowed_tools = "write_file|append_file|read_file|run_cmd|patch_file|extract_code_blocks" if ALLOW_PATCH else "write_file|append_file|read_file|run_cmd|extract_code_blocks"
+    allowed_tools = "write_file|append_file|read_file|run_cmd|patch_file|extract_code_blocks" if allow_patch else "write_file|append_file|read_file|run_cmd|extract_code_blocks"
     name_match = re.search(fr'"name"\s*:\s*"({allowed_tools})"', cleaned)
 
     if not name_match:

@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import psutil
+import argparse
 
 import llama_cpp
 from llama_cpp import Llama
@@ -21,17 +22,44 @@ from coding_agent import file_splitter
 from coding_agent import native_linter
 from coding_agent import payload_parser
 
-# 1. Configuration
+# 1. Configuration & Model Registry
 script_dir = Path(__file__).resolve().parent
-QWEN_PATH = script_dir / "models" / "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
-CONTEXT_WINDOW = 8192  # Ensure maximum headroom for analysis
-target_path = str(QWEN_PATH)
-loaded_model_name = "Qwen 2.5 Coder 7B (Agent Mode V11 Payload-Safe)"
 
-ALLOW_PATCH = "--allow-patch" in sys.argv
-FORCE_TESTING = "--force-testing" in sys.argv
+MODEL_REGISTRY = {
+    "qwen2.5": {
+        "filename": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+        "display_name": "Qwen 2.5 Coder 7B",
+        "chat_format": "chatml",
+        "max_context": 32768,
+        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
+    },
+    "starcoder2": {
+        "filename": "starcoder2-7b-instruct.Q4_K_M.gguf",
+        "display_name": "StarCoder2 7B",
+        "chat_format": "alpaca",
+        "max_context": 16384,
+        "gpu_layers": -1
+    }
+}
 
-# Global State Placeholders (Allows external testing script to import and access)
+# 2. CLI Argument Parsing
+parser = argparse.ArgumentParser(description="Coding Agent CLI")
+parser.add_argument("--model", type=str, default="qwen2.5", choices=MODEL_REGISTRY.keys(),
+                    help="Select the model to run from the registry.")
+parser.add_argument("--allow-patch", action="store_true", help="Allow patching files directly.")
+parser.add_argument("--force-testing", action="store_true", help="Force automated test prompting.")
+args, unknown = parser.parse_known_args()
+
+# Extract selected configuration
+active_config = MODEL_REGISTRY[args.model]
+target_path = script_dir / "models" / active_config["filename"]
+loaded_model_name = active_config["display_name"]
+CONTEXT_WINDOW = active_config["max_context"]
+
+ALLOW_PATCH = args.allow_patch
+FORCE_TESTING = args.force_testing
+
+# Global State Placeholders
 llm = None
 SYSTEM_PROMPT = ""
 messages = []
@@ -50,8 +78,9 @@ def get_system_ram_gb():
     """Returns total system RAM in gigabytes."""
     return psutil.virtual_memory().total / (1024 ** 3)
 
+
 def initialize_agent():
-    """Initializes LLM dynamically according to available GPU and CPU memory."""
+    """Initializes LLM dynamically according to registry config, GPU, and RAM."""
     global llm, SYSTEM_PROMPT, messages, CONTEXT_WINDOW
 
     if llm is not None:
@@ -63,16 +92,21 @@ def initialize_agent():
 
     print(f"Loading {loaded_model_name}...")
 
-    # Determine CPU target contexts based on system RAM
     total_ram = get_system_ram_gb()
-    if total_ram >= 24:
-        cpu_contexts = [32768, 16384, 8192]  # High RAM (32GB+)
-    elif total_ram >= 12:
-        cpu_contexts = [16384, 8192]         # Medium RAM (16GB)
-    else:
-        cpu_contexts = [8192]                # Low RAM (8GB)
 
-    gpu_contexts = [32768, 16384, 8192]
+    # Cap the context sizes so we don't request more than the model supports
+    max_ctx = active_config["max_context"]
+    base_gpu_contexts = [32768, 16384, 8192]
+    gpu_contexts = sorted(list(set([min(ctx, max_ctx) for ctx in base_gpu_contexts])), reverse=True)
+
+    # Simple CPU fallback contexts based on RAM
+    if total_ram >= 24:
+        cpu_contexts = gpu_contexts
+    elif total_ram >= 12:
+        cpu_contexts = [ctx for ctx in gpu_contexts if ctx <= 16384]
+    else:
+        cpu_contexts = [ctx for ctx in gpu_contexts if ctx <= 8192]
+
     has_gpu = getattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)()
 
     # --- 1. ATTEMPT GPU LOAD ---
@@ -81,11 +115,12 @@ def initialize_agent():
             try:
                 print(f"🔄 Attempting GPU load with {ctx_size} context...")
                 llm = Llama(
-                    model_path=target_path,
+                    model_path=str(target_path),
                     n_ctx=ctx_size,
                     n_threads=6,
                     n_batch=512,
-                    n_gpu_layers=-1,
+                    n_gpu_layers=active_config["gpu_layers"],
+                    chat_format=active_config["chat_format"],  # <-- CRITICAL FOR MULTI-MODEL
                     flash_attn=True,
                     verbose=False
                 )
@@ -102,11 +137,12 @@ def initialize_agent():
             try:
                 print(f"🔄 Attempting CPU load with {ctx_size} context...")
                 llm = Llama(
-                    model_path=target_path,
+                    model_path=str(target_path),
                     n_ctx=ctx_size,
                     n_threads=6,
                     n_batch=512,
                     n_gpu_layers=0,
+                    chat_format=active_config["chat_format"],  # <-- CRITICAL FOR MULTI-MODEL
                     verbose=False
                 )
                 CONTEXT_WINDOW = ctx_size
@@ -465,32 +501,23 @@ def main():
                         continue
                 # -----------------------------------------------------
 
-                # Extract tool arguments
-                tool_json_str = None
-                tool_match = re.search(r"<tool_call>(.*?)</tool_call>", response_content, re.DOTALL)
-                if tool_match:
-                    tool_json_str = tool_match.group(1).strip()
-                else:
-                    for md_match in re.finditer(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL):
-                        candidate = md_match.group(1).strip()
-                        if '"name"' in candidate:
-                            tool_json_str = candidate
-                            break
+                # 1. Extract and parse tool request using the new wrapper
+                tool_request = payload_parser.extract_tool_call(response_content, allow_patch=ALLOW_PATCH)
 
-                if tool_json_str:
+                if tool_request:
                     try:
-                        if is_truncated and "write_file" in response_content:
-                            raise json.JSONDecodeError("Incomplete payload due to context limit truncation.",
-                                                       tool_json_str,
-                                                       0)
-
-                        tool_request = payload_parser.parse_robust_tool_call(response_content, tool_json_str)
                         tool_name = tool_request.get("name")
                         tool_args = tool_request.get("args", {})
 
+                        # 2. Keep the truncation check
+                        if is_truncated and tool_name == "write_file":
+                            raise json.JSONDecodeError("Incomplete payload due to context limit truncation.", "", 0)
+
+                        # 3. Keep path resolution
                         if "filepath" in tool_args and not os.path.isabs(tool_args["filepath"]):
                             tool_args["filepath"] = os.path.abspath(os.path.join(session_cwd, tool_args["filepath"]))
 
+                        # 4. Keep empty file check
                         if tool_name in ["write_file", "append_file"]:
                             content = tool_args.get('content', '')
                             clean_content = re.sub(r'```[a-zA-Z]*\s*```', '', content).strip()

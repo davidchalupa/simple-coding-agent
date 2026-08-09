@@ -3,10 +3,9 @@ import requests
 from tqdm import tqdm
 from pathlib import Path
 
-# StarCoder2-7B - Ungated Public Mirror
-# Using QuantFactory to bypass the 401 Authorization issues
-repo_id = "QuantFactory/starcoder2-7b-GGUF"
-filename = "starcoder2-7b.Q4_K_M.gguf"
+# StarCoder2-7B-Instruct - Ungated Public Mirror (Fine-tuned by TechxGenus, quantized by QuantFactory)
+repo_id = "QuantFactory/starcoder2-7b-instruct-GGUF"
+filename = "starcoder2-7b-instruct.Q4_K_M.gguf"
 dest_dir = Path(__file__).resolve().parent.parent / "models"
 
 os.makedirs(dest_dir, exist_ok=True)
@@ -15,7 +14,7 @@ os.makedirs(dest_dir, exist_ok=True)
 url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
 out_path = os.path.join(dest_dir, filename)
 
-print(f"🚀 Downloading StarCoder2-7B (Ungated Mirror)...")
+print(f"🚀 Downloading StarCoder2-7B-Instruct (Ungated Mirror)...")
 print(f"Size: ~4.5GB | Provider: QuantFactory")
 
 try:
@@ -36,7 +35,7 @@ try:
                     f.write(chunk)
                     pbar.update(len(chunk))
 
-    print(f"\n✅ Success! StarCoder2 is saved at: {out_path}")
+    print(f"\n✅ Success! StarCoder2 Instruct is saved at: {out_path}")
 
 except Exception as e:
     print(f"\n❌ Download failed: {e}")
