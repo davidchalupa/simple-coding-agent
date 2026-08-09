@@ -148,6 +148,9 @@ def test_agent_workflow_lcs():
         "2. Empty string (e.g., s1='abc', s2='', expected_length=0) "
         "3. Strict subset (e.g., s1='abc', s2='xaxbxcx', expected_length=3). "
         "For each, assert: 1. `is_subsequence(result, s1)`, 2. `is_subsequence(result, s2)`, and 3. `len(result) == expected_length`.",
+        # extra guardrail - sometimes in tries to write tests with array size 1, leading to flakiness
+        "CRITICAL CONSTRAINT FOR TESTS: Do not write test cases that violate the problem's base preconditions. "
+        "For example, do not test arrays with fewer than 2 elements for Two Sum, since a pair cannot be formed."
         "/send",
 
         # --- PHASE 2.5: Hardened Verification & Loop-Breaking ---
