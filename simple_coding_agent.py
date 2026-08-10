@@ -48,7 +48,8 @@ MODEL_REGISTRY = {
 parser = argparse.ArgumentParser(description="Coding Agent CLI")
 parser.add_argument("--model", type=str, default="qwen2.5", choices=MODEL_REGISTRY.keys(),
                     help="Select the model to run from the registry.")
-parser.add_argument("--allow-patch", action="store_true", help="Allow patching files directly.")
+parser.add_argument("--disable-replace", action="store_true",
+                    help="Disable the replace_lines tool (forces full file rewrites).")
 parser.add_argument("--force-testing", action="store_true", help="Force automated test prompting.")
 args, unknown = parser.parse_known_args()
 
@@ -58,7 +59,8 @@ target_path = script_dir / "models" / active_config["filename"]
 loaded_model_name = active_config["display_name"]
 CONTEXT_WINDOW = active_config["max_context"]
 
-ALLOW_PATCH = args.allow_patch
+# Enabled by default. Overridden only if the user explicitly passes --disable-replace
+ALLOW_PATCH = not args.disable_replace
 FORCE_TESTING = args.force_testing
 
 # Global State Placeholders
