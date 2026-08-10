@@ -430,7 +430,7 @@ def main():
                             system_feedback = (
                                 f"System Alert: AST Extraction successfully executed based on your JSON map.\n"
                                 f"Results:\n{report}\n\n"
-                                f"Next Step: The files contain the logic, but lack dependencies. Use `patch_file` or `write_file` "
+                                f"Next Step: The files contain the logic, but lack dependencies. Use `replace_lines` or `write_file` "
                                 f"to add the necessary `import` statements at the top of these newly created files. "
                                 f"Additionally, update the original file to import these extracted components and remove the old extracted code. "
                                 f"When the refactor is fully wired and syntactically correct, output 'Refactor Phase Complete'."
@@ -468,7 +468,7 @@ def main():
                                         passed = False
                                         report = (
                                             f"Dependency Error in '{file}':\n{linter_error}\n"
-                                            "Use your patch_file or write_file tool to add the missing imports at the top of the file."
+                                            "Use your replace_lines or write_file tool to add the missing imports at the top of the file."
                                         )
                                         break
                             if not passed:
@@ -519,30 +519,31 @@ def main():
                         if "filepath" in tool_args and not os.path.isabs(tool_args["filepath"]):
                             tool_args["filepath"] = os.path.abspath(os.path.join(session_cwd, tool_args["filepath"]))
 
-                        # 4. Keep empty file check
-                        if tool_name in ["write_file", "append_file"]:
-                            content = tool_args.get('content', '')
-                            clean_content = re.sub(r'```[a-zA-Z]*\s*```', '', content).strip()
+                            # 4. Keep empty file check
+                            if tool_name in ["write_file", "append_file", "replace_lines"]:
+                                content = tool_args.get('content', '')
+                                clean_content = re.sub(r'```[a-zA-Z]*\s*```', '', content).strip()
 
-                            if not clean_content:
-                                print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
-                                messages.append({
-                                    "role": "user",
-                                    "content": f"System Alert: You attempted to call {tool_name} with an empty payload. If you have no changes to make or the task is complete, DO NOT output a <tool_call>. Announce completion in plain text instead."
-                                })
-                                continue
+                                if not clean_content:
+                                    print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
+                                    messages.append({
+                                        "role": "user",
+                                        "content": f"System Alert: You attempted to call {tool_name} with an empty payload. If you have no changes to make or the task is complete, DO NOT output a <tool_call>. Announce completion in plain text instead."
+                                    })
+                                    continue
 
-                        print(f"\n⚠️  AGENT REQUESTS PERMISSION TO EXECUTE: {tool_name}")
-                        if tool_name in ["write_file", "append_file"]:
-                            print(f"Resolved Target File: {tool_args.get('filepath')}")
-                            print("Content Snippet: \n" + "-" * 20)
-                            print(tool_args.get('content', '')[:300] + "\n...[truncated snippet]\n" + "-" * 20)
-                        elif tool_name == "patch_file":
-                            print(f"Patching File: {tool_args.get('filepath')}")
-                            print(f"Targeting Code block:\n--->\n{tool_args.get('search_text')}\n<---")
-                            print(f"Replacing With:\n--->\n{tool_args.get('replace_text')}\n<---")
-                        else:
-                            print(f"Arguments: {tool_args}")
+                            print(f"\n⚠️  AGENT REQUESTS PERMISSION TO EXECUTE: {tool_name}")
+                            if tool_name in ["write_file", "append_file"]:
+                                print(f"Resolved Target File: {tool_args.get('filepath')}")
+                                print("Content Snippet: \n" + "-" * 20)
+                                print(tool_args.get('content', '')[:300] + "\n...[truncated snippet]\n" + "-" * 20)
+                            elif tool_name == "replace_lines":
+                                print(
+                                    f"Replacing lines {tool_args.get('start_line')} to {tool_args.get('end_line')} in: {tool_args.get('filepath')}")
+                                print("New Content Snippet: \n" + "-" * 20)
+                                print(tool_args.get('content', '')[:300] + "\n...[truncated snippet]\n" + "-" * 20)
+                            else:
+                                print(f"Arguments: {tool_args}")
 
                         approval = input("Allow this action? (y/n/edit): ").strip().lower()
 
@@ -602,7 +603,7 @@ def main():
                             "CRITICAL: If a test fails, you must follow these steps strictly:\n"
                             "1. Do NOT output a tool call immediately.\n"
                             "2. Audit the failing test case: Does the test input actually violate the original problem constraints?\n"
-                            "3. If the test itself is invalid, use `patch_file` or `write_file` to DELETE or FIX the bad test in the test file.\n"
+                            "3. If the test itself is invalid, use `replace_lines` or `write_file` to DELETE or FIX the bad test in the test file.\n"
                             "4. If the test is valid, analyze why your source code failed, and fix the source code.\n"
                             "5. Rerun the tests until they pass."
                         )

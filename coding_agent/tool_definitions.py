@@ -1,6 +1,7 @@
 import os
 import subprocess
 import ast
+from pathlib import Path
 
 
 # 2. Tool Definitions
@@ -149,8 +150,9 @@ def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_c
     except Exception as e:
         return f"Extraction Error: {e}"
 
-def replace_lines(filepath: str, start_line: int, end_line: int, new_content: str) -> str:
-    """Replaces a range of lines (inclusive, 1-indexed) with new_content."""
+
+def replace_lines(filepath: str, start_line: int, end_line: int, content: str) -> str:
+    """Replaces a range of lines (inclusive, 1-indexed) with content."""
     path = Path(filepath)
     if not path.exists():
         return f"Error: File '{filepath}' does not exist."
@@ -161,7 +163,7 @@ def replace_lines(filepath: str, start_line: int, end_line: int, new_content: st
         return f"Error: Invalid line range [{start_line}, {end_line}] for file with {len(lines)} lines."
 
     # Convert 1-based indices to 0-based slice
-    new_lines = [line + "\n" if not line.endswith("\n") else line for line in new_content.splitlines()]
+    new_lines = [line + "\n" if not line.endswith("\n") else line for line in content.splitlines()]
     lines[start_line - 1:end_line] = new_lines
 
     path.write_text("".join(lines), encoding="utf-8")

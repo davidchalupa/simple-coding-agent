@@ -3,7 +3,7 @@ def build_system_prompt(allow_patch=False):
     Builds and returns a system prompt for a language model.
     """
     tools_section = (
-        '4. `patch_file`: {"filepath": "<str>", "search_text": "<str>", "replace_text": "<str>"}\n5. `run_cmd`: {"command": "<str>"}'
+        '4. `replace_lines`: {"filepath": "<str>", "start_line": <int>, "end_line": <int>} - Replaces lines (1-indexed, inclusive). REQUIRES a <payload> block.\n5. `run_cmd`: {"command": "<str>"}'
         if allow_patch else
         '4. `run_cmd`: {"command": "<str>"}'
     )
