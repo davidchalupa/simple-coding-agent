@@ -1,6 +1,7 @@
 import os
 import subprocess
 import ast
+import re
 from pathlib import Path
 
 
@@ -168,3 +169,119 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str) -
 
     path.write_text("".join(lines), encoding="utf-8")
     return f"Successfully replaced lines {start_line}-{end_line} in {filepath}."
+
+
+# Common directories and file types to hide from the LLM to save context
+IGNORE_DIRS = {'.git', 'node_modules', '__pycache__', 'venv', 'env', '.venv', 'build', 'dist', '.idea', '.vscode'}
+IGNORE_EXTS = {'.pyc', '.exe', '.dll', '.so', '.dylib', '.png', '.jpg', '.jpeg', '.pdf', '.zip', '.tar', '.gz', '.mp4'}
+
+
+def list_tree(dir_path=".", max_depth=2):
+    """
+    Returns a visual tree structure of the codebase.
+    Crucial for allowing the agent to discover files on its own.
+    """
+    try:
+        max_depth = int(max_depth)
+        base_path = Path(dir_path).resolve()
+
+        if not base_path.exists() or not base_path.is_dir():
+            return f"Error: '{dir_path}' is not a valid directory."
+
+        tree_str = []
+
+        def walk(current_path, current_depth, prefix=""):
+            if current_depth > max_depth:
+                return
+            try:
+                # Filter out hidden files and ignored directories
+                items = sorted([item for item in current_path.iterdir()
+                                if item.name not in IGNORE_DIRS
+                                and not item.name.startswith('.')])
+            except PermissionError:
+                return
+
+            limit = 50  # Prevent context blowup in massive flat directories
+            for i, item in enumerate(items[:limit]):
+                is_last = (i == min(len(items), limit) - 1)
+                connector = "└── " if is_last else "├── "
+                tree_str.append(f"{prefix}{connector}{item.name}")
+
+                if item.is_dir():
+                    extension = "    " if is_last else "│   "
+                    walk(item, current_depth + 1, prefix + extension)
+
+            if len(items) > limit:
+                tree_str.append(f"{prefix}└── ... [{len(items) - limit} more items hidden. Use a more specific path.]")
+
+        tree_str.append(f"{base_path.name}/")
+        walk(base_path, 1)
+
+        result = "\n".join(tree_str)
+        return result if result.strip() else f"Directory '{dir_path}' is empty."
+
+    except Exception as e:
+        return f"Error generating tree: {e}"
+
+
+def search_codebase(dir_path=".", query="", is_regex=False, max_matches=50):
+    """
+    Native Python grep equivalent. Searches for a string or regex pattern
+    across all text files in the directory.
+    """
+    try:
+        max_matches = int(max_matches)
+        base_path = Path(dir_path).resolve()
+
+        if not base_path.exists() or not base_path.is_dir():
+            return f"Error: '{dir_path}' is not a valid directory."
+
+        if not query:
+            return "Error: Search query cannot be empty."
+
+        if not str(is_regex).lower() in ['true', '1', 't']:
+            query = re.escape(query)
+
+        try:
+            pattern = re.compile(query, re.IGNORECASE)
+        except re.error as e:
+            return f"Error: Invalid regex pattern - {e}"
+
+        results = []
+        match_count = 0
+
+        for root, dirs, files in os.walk(base_path):
+            # Filter directories in-place to avoid traversing into ignored paths
+            dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith('.')]
+
+            for file in files:
+                if any(file.endswith(ext) for ext in IGNORE_EXTS) or file.startswith('.'):
+                    continue
+
+                filepath = Path(root) / file
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        for line_num, line in enumerate(f, 1):
+                            if pattern.search(line):
+                                # Make paths relative to keep output clean and short
+                                rel_path = filepath.relative_to(base_path)
+                                # Strip whitespace and truncate very long minified lines
+                                clean_line = line.strip()[:120]
+                                results.append(f"{rel_path}:{line_num}: {clean_line}")
+                                match_count += 1
+
+                                if match_count >= max_matches:
+                                    results.append(
+                                        f"\n... [TRUNCATED] Reached maximum of {max_matches} matches. Please narrow your search query.")
+                                    return "\n".join(results)
+                except (UnicodeDecodeError, PermissionError):
+                    # Silently skip binary files or files without read permissions
+                    continue
+
+        if not results:
+            return f"No matches found for '{query}' in {dir_path}."
+
+        return "\n".join(results)
+
+    except Exception as e:
+        return f"Error searching codebase: {e}"
