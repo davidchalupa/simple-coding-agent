@@ -184,7 +184,7 @@ def test_agent_workflow_knapsack_01():
         "2. `self.assertEqual(knapsack(capacity, [], []), 0)` (No items always yields 0) "
         "3. `self.assertLessEqual(knapsack(capacity, weights, values), sum(values))` (Max value cannot exceed the sum of all item values) "
         "4. `self.assertGreaterEqual(knapsack(capacity + 1, weights, values), knapsack(capacity, weights, values))` (Increasing capacity never decreases the result). "
-        "Include these property checks alongside at least 2 standard deterministic cases.",
+        "Strictly avoid hardcoded deterministic test cases or magic numbers."
         "/send",
 
         # --- PHASE 2.5: Hardened Active Verification ---

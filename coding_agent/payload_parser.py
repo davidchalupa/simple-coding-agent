@@ -35,14 +35,20 @@ def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict |
     return parse_robust_tool_call(response_content, tool_json_str, allow_patch=allow_patch)
 
 
-# --- HYPER-ROBUST PAYLOAD PARSER (UNTOUCHED LOGIC) ---
+# --- HYPER-ROBUST PAYLOAD PARSER ---
 def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True):
     payload_match = re.search(r"<payload>(.*?)(?:</payload>|$)", response_content, re.DOTALL)
-    raw_payload = payload_match.group(1).strip() if payload_match else None
+
+    # ---------------------------------------------------------
+    # BUG FIX: Use .strip('\r\n') instead of .strip() to preserve
+    # the leading spaces/indentation of the injected code.
+    # ---------------------------------------------------------
+    raw_payload = payload_match.group(1).strip('\r\n') if payload_match else None
 
     if not raw_payload:
         md_block_match = re.search(r"```[a-zA-Z]*\n(.*?)\n```", response_content.split("</tool_call>")[-1], re.DOTALL)
         if md_block_match:
+            # We don't strip here because the regex explicitly anchors to the newlines
             raw_payload = md_block_match.group(1)
 
     json_clean = re.sub(r"<payload>.*?(?:</payload>|$)", "", tool_json_str, flags=re.DOTALL).strip()
@@ -51,17 +57,17 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True):
         data = json.loads(json_clean, strict=False)
         if "name" not in data or data.get("name") is None:
             raise json.JSONDecodeError(
-                "Parsed JSON has no 'name' field — likely matched the wrong block (e.g. JSON PLAN instead of tool call).",
+                "Parsed JSON has no 'name' field — likely matched the wrong block.",
                 json_clean, 0
             )
         if "args" not in data:
             data["args"] = {}
 
         if raw_payload is not None:
-            if data.get("name") in ["write_file", "append_file"]:
+            if data.get("name") in ["write_file", "append_file", "replace_lines"]:
                 data["args"]["content"] = raw_payload
         else:
-            if data.get("name") in ["write_file", "append_file"] and "content" not in data["args"]:
+            if data.get("name") in ["write_file", "append_file", "replace_lines"] and "content" not in data["args"]:
                 data["args"]["content"] = ""
 
         return data
@@ -69,7 +75,8 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True):
         pass
 
     cleaned = json_clean.strip()
-    allowed_tools = "write_file|append_file|read_file|run_cmd|patch_file|extract_code_blocks" if allow_patch else "write_file|append_file|read_file|run_cmd|extract_code_blocks"
+
+    allowed_tools = "write_file|append_file|replace_lines|read_file|run_cmd|patch_file|extract_code_blocks|list_tree|search_codebase" if allow_patch else "write_file|append_file|read_file|run_cmd|extract_code_blocks|list_tree|search_codebase"
     name_match = re.search(fr'"name"\s*:\s*"({allowed_tools})"', cleaned)
 
     if not name_match:
@@ -108,6 +115,22 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True):
                 args["content"] = ""
 
         if "filepath" in args:
+            return {"name": tool_name, "args": args}
+
+    elif tool_name == "replace_lines":
+        fp_match = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
+        if fp_match: args["filepath"] = fp_match.group(1)
+        sl_match = re.search(r'"start_line"\s*:\s*(\d+)', cleaned)
+        if sl_match: args["start_line"] = int(sl_match.group(1))
+        el_match = re.search(r'"end_line"\s*:\s*(\d+)', cleaned)
+        if el_match: args["end_line"] = int(el_match.group(1))
+
+        if raw_payload is not None:
+            args["content"] = raw_payload
+        else:
+            args["content"] = ""
+
+        if "filepath" in args and "start_line" in args and "end_line" in args:
             return {"name": tool_name, "args": args}
 
     elif tool_name == "patch_file":
@@ -160,6 +183,24 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True):
         if sl_match: args["start_line"] = int(sl_match.group(1))
         ml_match = re.search(r'"max_lines"\s*:\s*(\d+)', cleaned)
         if ml_match: args["max_lines"] = int(ml_match.group(1))
+        return {"name": tool_name, "args": args}
+
+    elif tool_name == "list_tree":
+        dp_match = re.search(r'"dir_path"\s*:\s*"(.*?)"', cleaned)
+        if dp_match: args["dir_path"] = dp_match.group(1)
+        md_match = re.search(r'"max_depth"\s*:\s*(\d+)', cleaned)
+        if md_match: args["max_depth"] = int(md_match.group(1))
+        return {"name": tool_name, "args": args}
+
+    elif tool_name == "search_codebase":
+        dp_match = re.search(r'"dir_path"\s*:\s*"(.*?)"', cleaned)
+        if dp_match: args["dir_path"] = dp_match.group(1)
+        q_match = re.search(r'"query"\s*:\s*"(.*?)"', cleaned)
+        if q_match: args["query"] = q_match.group(1).replace('\\"', '"').replace('\\\\', '\\')
+        re_match = re.search(r'"is_regex"\s*:\s*(true|false)', cleaned, re.IGNORECASE)
+        if re_match: args["is_regex"] = re_match.group(1).lower() == 'true'
+        mm_match = re.search(r'"max_matches"\s*:\s*(\d+)', cleaned)
+        if mm_match: args["max_matches"] = int(mm_match.group(1))
         return {"name": tool_name, "args": args}
 
     elif tool_name == "extract_code_blocks":

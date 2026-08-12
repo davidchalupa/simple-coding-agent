@@ -3,9 +3,9 @@ def build_system_prompt(allow_patch=False):
     Builds and returns a system prompt for a language model.
     """
     tools_section = (
-        '4. `replace_lines`: {"filepath": "<str>", "start_line": <int>, "end_line": <int>} - Replaces lines (1-indexed, inclusive). REQUIRES a <payload> block.\n5. `run_cmd`: {"command": "<str>"}'
+        '6. `replace_lines`: {"filepath": "<str>", "start_line": <int>, "end_line": <int>} - Replaces lines (1-indexed, inclusive). REQUIRES a <payload> block.\n    7. `run_cmd`: {"command": "<str>"}'
         if allow_patch else
-        '4. `run_cmd`: {"command": "<str>"}'
+        '6. `run_cmd`: {"command": "<str>"}'
     )
 
     rule_6 = "" if allow_patch else "\n    6. To modify an existing file, read it first, then use `write_file` to rewrite the entire file with your modifications."
@@ -13,9 +13,11 @@ def build_system_prompt(allow_patch=False):
     return f"""You are a local autonomous coding agent. Use tools modularly to solve tasks.
 
     AVAILABLE TOOLS:
-    1. `read_file`: {{"filepath": "<str>", "start_line": <int>, "max_lines": <int>}}
-    2. `write_file`: {{"filepath": "<str>"}} - Overwrites or initializes a file completely. REQUIRES a <payload> block immediately after closing the tool call.
-    3. `append_file`: {{"filepath": "<str>"}} - Appends code structures. REQUIRES a <payload> block immediately after closing the tool call.
+    1. `list_tree`: {{"dir_path": "<str>", "max_depth": <int>}} - Explores and visualizes directory structures.
+    2. `search_codebase`: {{"dir_path": "<str>", "query": "<str>", "is_regex": <bool>, "max_matches": <int>}} - Greps for strings or regex across non-binary files.
+    3. `read_file`: {{"filepath": "<str>", "start_line": <int>, "max_lines": <int>}}
+    4. `write_file`: {{"filepath": "<str>"}} - Overwrites or initializes a file completely. REQUIRES a <payload> block immediately after closing the tool call.
+    5. `append_file`: {{"filepath": "<str>"}} - Appends code structures. REQUIRES a <payload> block immediately after closing the tool call.
     {tools_section}
 
     CRITICAL RULES:

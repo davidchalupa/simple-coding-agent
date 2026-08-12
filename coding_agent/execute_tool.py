@@ -4,7 +4,9 @@ from coding_agent.tool_definitions import (
     write_file,
     append_file,
     replace_lines,
-    run_cmd
+    run_cmd,
+    list_tree,
+    search_codebase
 )
 from coding_agent import native_linter
 
@@ -22,6 +24,18 @@ def execute_tool(tool_name, tool_args, is_split_mode):
         s_line = tool_args.get("start_line", 1)
         m_lines = tool_args.get("max_lines", 75)
         tool_result = read_file(tool_args.get("filepath"), start_line=s_line, max_lines=m_lines)
+
+    elif tool_name == "list_tree":
+        d_path = tool_args.get("dir_path", ".")
+        m_depth = tool_args.get("max_depth", 2)
+        tool_result = list_tree(dir_path=d_path, max_depth=m_depth)
+
+    elif tool_name == "search_codebase":
+        d_path = tool_args.get("dir_path", ".")
+        qry = tool_args.get("query", "")
+        is_re = tool_args.get("is_regex", False)
+        m_matches = tool_args.get("max_matches", 50)
+        tool_result = search_codebase(dir_path=d_path, query=qry, is_regex=is_re, max_matches=m_matches)
 
     elif tool_name == "write_file":
         file_was_modified = True
@@ -64,6 +78,32 @@ def execute_tool(tool_name, tool_args, is_split_mode):
         filepath = tool_args.get("filepath")
         start_line = tool_args.get("start_line")
         end_line = tool_args.get("end_line")
+
+        # --- SMART AUTO-INDENTATION FIX ---
+        if filepath and start_line is not None:
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    file_lines = f.readlines()
+
+                start_idx = start_line - 1
+                if 0 <= start_idx < len(file_lines):
+                    original_line = file_lines[start_idx]
+                    # Extract the leading whitespace (spaces/tabs) from the target line
+                    original_indent = original_line[:len(original_line) - len(original_line.lstrip(' \t'))]
+
+                    new_lines = content.splitlines()
+                    # If the LLM sent code flush-left, but the original file line was indented:
+                    if original_indent and new_lines and not new_lines[0].startswith((' ', '\t')):
+                        indented_lines = []
+                        for line in new_lines:
+                            if line.strip():  # Don't add spaces to empty lines
+                                indented_lines.append(original_indent + line)
+                            else:
+                                indented_lines.append(line)
+                        content = '\n'.join(indented_lines)
+            except Exception:
+                pass  # Fallback gracefully if any read error occurs
+        # -----------------------------------
 
         tool_result = replace_lines(filepath, start_line, end_line, content)
 

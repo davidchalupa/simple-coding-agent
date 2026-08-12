@@ -518,34 +518,39 @@ def main():
                             raise json.JSONDecodeError("Incomplete payload due to context limit truncation.", "", 0)
 
                         # 3. Keep path resolution
+                        # 3. Keep path resolution
+                        # Resolve relative file and directory paths against active session_cwd
                         if "filepath" in tool_args and not os.path.isabs(tool_args["filepath"]):
                             tool_args["filepath"] = os.path.abspath(os.path.join(session_cwd, tool_args["filepath"]))
 
-                            # 4. Keep empty file check
-                            if tool_name in ["write_file", "append_file", "replace_lines"]:
-                                content = tool_args.get('content', '')
-                                clean_content = re.sub(r'```[a-zA-Z]*\s*```', '', content).strip()
+                        if "dir_path" in tool_args and not os.path.isabs(tool_args["dir_path"]):
+                            tool_args["dir_path"] = os.path.abspath(os.path.join(session_cwd, tool_args["dir_path"]))
 
-                                if not clean_content:
-                                    print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
-                                    messages.append({
-                                        "role": "user",
-                                        "content": f"System Alert: You attempted to call {tool_name} with an empty payload. If you have no changes to make or the task is complete, DO NOT output a <tool_call>. Announce completion in plain text instead."
-                                    })
-                                    continue
+                        # 4. Keep empty file check
+                        if tool_name in ["write_file", "append_file", "replace_lines"]:
+                            content = tool_args.get('content', '')
+                            clean_content = re.sub(r'```[a-zA-Z]*\s*```', '', content).strip()
 
-                            print(f"\n⚠️  AGENT REQUESTS PERMISSION TO EXECUTE: {tool_name}")
-                            if tool_name in ["write_file", "append_file"]:
-                                print(f"Resolved Target File: {tool_args.get('filepath')}")
-                                print("Content Snippet: \n" + "-" * 20)
-                                print(tool_args.get('content', '')[:300] + "\n...[truncated snippet]\n" + "-" * 20)
-                            elif tool_name == "replace_lines":
-                                print(
-                                    f"Replacing lines {tool_args.get('start_line')} to {tool_args.get('end_line')} in: {tool_args.get('filepath')}")
-                                print("New Content Snippet: \n" + "-" * 20)
-                                print(tool_args.get('content', '')[:300] + "\n...[truncated snippet]\n" + "-" * 20)
-                            else:
-                                print(f"Arguments: {tool_args}")
+                            if not clean_content:
+                                print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
+                                messages.append({
+                                    "role": "user",
+                                    "content": f"System Alert: You attempted to call {tool_name} with an empty payload. If you have no changes to make or the task is complete, DO NOT output a <tool_call>. Announce completion in plain text instead."
+                                })
+                                continue
+
+                        print(f"\n⚠️  AGENT REQUESTS PERMISSION TO EXECUTE: {tool_name}")
+                        if tool_name in ["write_file", "append_file"]:
+                            print(f"Resolved Target File: {tool_args.get('filepath')}")
+                            print("Content Snippet: \n" + "-" * 20)
+                            print(tool_args.get('content', '')[:300] + "\n...[truncated snippet]\n" + "-" * 20)
+                        elif tool_name == "replace_lines":
+                            print(
+                                f"Replacing lines {tool_args.get('start_line')} to {tool_args.get('end_line')} in: {tool_args.get('filepath')}")
+                            print("New Content Snippet: \n" + "-" * 20)
+                            print(tool_args.get('content', '')[:300] + "\n...[truncated snippet]\n" + "-" * 20)
+                        else:
+                            print(f"Arguments: {tool_args}")
 
                         approval = input("Allow this action? (y/n/edit): ").strip().lower()
 
