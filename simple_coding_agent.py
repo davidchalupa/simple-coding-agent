@@ -164,6 +164,15 @@ def initialize_agent():
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
 
+def find_last_code_block(messages):
+    """Scan backwards through assistant turns for the most recent fenced code block."""
+    for msg in reversed(messages):
+        if msg["role"] == "assistant":
+            match = re.search(r"```(?:python)?\s*\n(.*?)\n```", msg["content"], re.DOTALL)
+            if match:
+                return match.group(1)
+    return None
+
 def main():
     global messages, session_cwd, is_split_mode, is_execute_mode, original_split_file, sandbox_directory, automated_followup, has_prompted_for_tests
 
@@ -532,12 +541,25 @@ def main():
                             clean_content = re.sub(r'```[a-zA-Z]*\s*```', '', content).strip()
 
                             if not clean_content:
-                                print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
-                                messages.append({
-                                    "role": "user",
-                                    "content": f"System Alert: You attempted to call {tool_name} with an empty payload. If you have no changes to make or the task is complete, DO NOT output a <tool_call>. Announce completion in plain text instead."
-                                })
-                                continue
+                                recovered = find_last_code_block(messages)
+                                if recovered and recovered.strip():
+                                    print(
+                                        f"🔧 [Recovery] Empty payload detected — reusing last drafted code block for {tool_name}.")
+                                    tool_args["content"] = recovered
+                                    # fall through to execute the write with recovered content instead of blocking
+                                else:
+                                    print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
+                                    messages.append({
+                                        "role": "user",
+                                        "content": (
+                                            f"System Alert: Your {tool_name} call FAILED — no file was written because the payload was empty. "
+                                            f"This is NOT the same as having nothing to do. You must retry immediately using the exact format:\n"
+                                            f"<tool_call>{{\"name\": \"{tool_name}\", \"args\": {{\"filepath\": \"...\"}}}}</tool_call>\n"
+                                            f"<payload>\nYOUR ACTUAL FILE CONTENT HERE\n</payload>\n"
+                                            f"Do not claim the file was saved — it was not. Do not respond in plain text until the write actually succeeds."
+                                        )
+                                    })
+                                    continue
 
                         print(f"\n⚠️  AGENT REQUESTS PERMISSION TO EXECUTE: {tool_name}")
                         if tool_name in ["write_file", "append_file"]:

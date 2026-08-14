@@ -8,47 +8,49 @@ def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict |
     and passes them to the hyper-robust parser without altering internal mechanics.
     """
     tool_json_str = None
+    search_start = 0  # where to start looking for <payload> after this
 
-    # Strategy 1: Explicit <tool_call> tags (Qwen / Custom system prompt)
     tool_match = re.search(r"<tool_call>(.*?)</tool_call>", response_content, re.DOTALL)
     if tool_match:
         tool_json_str = tool_match.group(1).strip()
-
-    # Strategy 2: Markdown ```json code blocks containing a "name" key (StarCoder / Llama / DeepSeek)
+        search_start = tool_match.end()
     else:
         for md_match in re.finditer(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL):
             candidate = md_match.group(1).strip()
             if '"name"' in candidate:
                 tool_json_str = candidate
+                search_start = md_match.end()
                 break
 
-    # Strategy 3: Naked JSON object containing a "name" key (Fallback)
     if not tool_json_str:
         naked_match = re.search(r'\{\s*"name"\s*:\s*"[^"]+".*?\}', response_content, re.DOTALL)
         if naked_match:
             tool_json_str = naked_match.group(0).strip()
+            search_start = naked_match.end()
 
     if not tool_json_str:
         return None
 
-    # Forward to the untouched robust parser
-    return parse_robust_tool_call(response_content, tool_json_str, allow_patch=allow_patch)
+    return parse_robust_tool_call(response_content, tool_json_str, allow_patch=allow_patch, search_start=search_start)
 
 
 # --- HYPER-ROBUST PAYLOAD PARSER ---
-def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True):
-    payload_match = re.search(r"<payload>(.*?)(?:</payload>|$)", response_content, re.DOTALL)
+def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, search_start=0):
+    remainder = response_content[search_start:]
 
-    # ---------------------------------------------------------
-    # BUG FIX: Use .strip('\r\n') instead of .strip() to preserve
-    # the leading spaces/indentation of the injected code.
-    # ---------------------------------------------------------
+    payload_match = re.search(r"<payload>(.*?)(?:</payload>|$)", remainder, re.DOTALL)
     raw_payload = payload_match.group(1).strip('\r\n') if payload_match else None
 
+    # NEW: the model sometimes embeds <payload> inside the same fence as the tool call
+    # itself, so the outer search_start-anchored lookup finds nothing. Check tool_json_str too.
+    if raw_payload is None:
+        inline_payload_match = re.search(r"<payload>(.*?)(?:</payload>|$)", tool_json_str, re.DOTALL)
+        if inline_payload_match:
+            raw_payload = inline_payload_match.group(1).strip('\r\n')
+
     if not raw_payload:
-        md_block_match = re.search(r"```[a-zA-Z]*\n(.*?)\n```", response_content.split("</tool_call>")[-1], re.DOTALL)
+        md_block_match = re.search(r"```[a-zA-Z]*\n(.*?)\n```", remainder, re.DOTALL)
         if md_block_match:
-            # We don't strip here because the regex explicitly anchors to the newlines
             raw_payload = md_block_match.group(1)
 
     json_clean = re.sub(r"<payload>.*?(?:</payload>|$)", "", tool_json_str, flags=re.DOTALL).strip()
