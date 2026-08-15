@@ -31,7 +31,7 @@ def setup_agent_model(request):
     # Inject active model config into simple_coding_agent
     if selected_model in simple_coding_agent.MODEL_REGISTRY:
         active_config = simple_coding_agent.MODEL_REGISTRY[selected_model]
-        simple_coding_agent.target_path = simple_coding_agent.script_dir / "models" / active_config["filename"]
+        simple_coding_agent.target_path = simple_coding_agent.target_path
         simple_coding_agent.loaded_model_name = active_config["display_name"]
         simple_coding_agent.active_config = active_config
 

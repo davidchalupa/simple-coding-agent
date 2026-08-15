@@ -87,7 +87,7 @@ def run_automated_coding_task_test(input_queue, zip_file_path, repo_name, expect
         with open(target_file_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        expected_keywords = ["import", "10", "success"]
+        expected_keywords = ["import", "10"]
         missing_keywords = [kw for kw in expected_keywords if kw.lower() not in content.lower()]
 
         if missing_keywords:

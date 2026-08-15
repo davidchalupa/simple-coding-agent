@@ -4,7 +4,6 @@ import json
 import re
 import shutil
 import psutil
-import argparse
 
 import llama_cpp
 from llama_cpp import Llama
@@ -16,57 +15,27 @@ from coding_agent.tool_definitions import read_file, extract_code_blocks
 from coding_agent.execute_tool import execute_tool
 from coding_agent.system_prompt_builder import build_system_prompt
 from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context, \
-    gather_deep_context_ast
+ gather_deep_context_ast
+from coding_agent.self_verification import find_last_code_block, run_self_verification
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import file_splitter
 from coding_agent import native_linter
 from coding_agent import payload_parser
+from cli import parse_cli_arguments
+from model_registry import MODEL_REGISTRY
 
-# 1. Configuration & Model Registry
-script_dir = Path(__file__).resolve().parent
+parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
 
-MODEL_REGISTRY = {
-    "qwen2.5": {
-        "filename": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
-        "display_name": "Qwen 2.5 Coder 7B",
-        "chat_format": "chatml",
-        "max_context": 32768,
-        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
-    },
-    "hermes3": {
-        "filename": "Hermes-3-Llama-3.1-8B.Q4_K_M.gguf",
-        "display_name": "Hermes 3 (Llama 3.1 8B)",
-        "stop": ["<|im_end|>", "<|eot_id|>", "<|endoftext|>"],
-        "temperature": 0.2,
-        "max_context": 32768,
-        "gpu_layers": -1,  # -1 or 99 offloads all layers to your RTX 5050 GPU
-        "chat_format": "chatml"  # Hermes 3 uses standard ChatML formatting
-    }
-}
+ALLOW_PATCH = parsed_args["allow_patch"]
+FORCE_TESTING = parsed_args["force_testing"]
+SELF_VERIFY_PY_WRITES = parsed_args["self_verify_py_writes"]
 
-# 2. CLI Argument Parsing
-parser = argparse.ArgumentParser(description="Coding Agent CLI")
-parser.add_argument("--model", type=str, default="qwen2.5", choices=MODEL_REGISTRY.keys(),
-                    help="Select the model to run from the registry.")
-parser.add_argument("--disable-replace", action="store_true",
-                    help="Disable the replace_lines tool (forces full file rewrites).")
-parser.add_argument("--force-testing", action="store_true", help="Force automated test prompting.")
-parser.add_argument("--disable-self-verify", action="store_true",
-                    help="Disable automatic post-write lint/import self-verification on .py files.")
-args, unknown = parser.parse_known_args()
+active_config = MODEL_REGISTRY[parsed_args["model"]]
 
-# Extract selected configuration
-active_config = MODEL_REGISTRY[args.model]
-target_path = script_dir / "models" / active_config["filename"]
+target_path = Path(__file__).resolve().parent / "models" / active_config["filename"]
 loaded_model_name = active_config["display_name"]
 CONTEXT_WINDOW = active_config["max_context"]
 
-# Enabled by default. Overridden only if the user explicitly passes --disable-replace
-ALLOW_PATCH = not args.disable_replace
-FORCE_TESTING = args.force_testing
-# Enabled by default. Generalizes the self-correction loop that used to be /split-only
-# to every write_file / append_file / replace_lines call that touches a .py file.
-SELF_VERIFY_PY_WRITES = not args.disable_self_verify
 
 # Global State Placeholders
 llm = None
@@ -167,40 +136,6 @@ def initialize_agent():
     # State Setup
     SYSTEM_PROMPT = build_system_prompt(ALLOW_PATCH)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-
-def find_last_code_block(messages):
-    """Scan backwards through assistant turns for the most recent fenced code block."""
-    for msg in reversed(messages):
-        if msg["role"] == "assistant":
-            match = re.search(r"```(?:python)?\s*\n(.*?)\n```", msg["content"], re.DOTALL)
-            if match:
-                return match.group(1)
-    return None
-
-
-def run_self_verification(filepath):
-    """
-    Generalized post-write self-verification for Python files.
-
-    Runs the same native_linter syntax/import check that /split's sandbox
-    verification uses, but applies it to ANY write_file / append_file /
-    replace_lines call that touches a .py file — not just inside sandbox mode.
-
-    Returns the linter error string, or None if the file passes (or isn't
-    something we can/should check).
-    """
-    if not filepath or not filepath.endswith(".py"):
-        return None
-    if not os.path.isfile(filepath):
-        return None
-
-    try:
-        return native_linter.check_python_syntax_and_imports(filepath)
-    except Exception as e:
-        # Failsafe: never let a linter crash take down the agent loop.
-        print(f"⚠️ [Self-Verification] Linter itself raised an error, skipping check: {e}")
-        return None
 
 
 def main():
@@ -583,16 +518,6 @@ def main():
                             tool_args["dir_path"] = os.path.abspath(os.path.join(session_cwd, tool_args["dir_path"]))
 
                         # 4. Keep empty file check + payload recovery
-                        #
-                        # NOTE: this block finalizes tool_args["content"] (from the model's own
-                        # payload, or via recovery) BEFORE the Loop Guardrail signature is computed
-                        # below. Previously the signature was computed first, using only the raw
-                        # JSON args (filepath/start_line/etc) with no "content" key at all when the
-                        # model omitted a <payload> — so two write_file/replace_lines calls to the
-                        # same file with no payload looked byte-identical to the guardrail even when
-                        # the model's actual intent differed (e.g. a genuine fix attempt following a
-                        # self-verification failure vs. the original broken draft). That silently
-                        # blocked real fix attempts as "duplicates."
                         if tool_name in ["write_file", "append_file", "replace_lines"]:
                             content = tool_args.get('content', '')
                             clean_content = re.sub(r'```[a-zA-Z]*\s*```', '', content).strip()
@@ -601,12 +526,6 @@ def main():
                                 recovered = find_last_code_block(messages)
 
                                 # --- STALE-FIX GUARD ---
-                                # If this exact file just failed self-verification, and the only
-                                # code block available to recover is the SAME content that already
-                                # failed, this isn't a real fix — it's the recovery mechanism about
-                                # to silently resubmit the broken draft because the model only
-                                # described its fix in prose instead of redrafting the file. Refuse
-                                # to auto-recover in that case and force an explicit redraft.
                                 is_stale_reuse = bool(
                                     recovered
                                     and recovered.strip()
@@ -660,10 +579,6 @@ def main():
                                     continue
 
                         # --- Loop Guardrail ---
-                        # Computed AFTER content is finalized above, so write_file/replace_lines
-                        # calls to the same file are only flagged as duplicates when the content
-                        # they'd actually write matches too — not merely because both omitted a
-                        # <payload> in the raw model output.
                         current_signature = f"{tool_name}:{str(tool_args)}"
                         if current_signature == last_tool_call_signature:
                             print(f"🛑 [Loop Guardrail] Blocked identical consecutive tool call: {tool_name}")
@@ -706,12 +621,7 @@ def main():
                                 file_was_modified = True
                             print(f"⚙️  Tool execution finished.")
 
-                            # --- GENERALIZED SELF-VERIFICATION ---
-                            # Previously this syntax/import check only ran inside /split's sandbox
-                            # promotion flow, gated behind the model saying "task complete". Now it
-                            # runs after ANY successful write/append/replace touching a .py file,
-                            # regardless of mode, so the agent can catch and fix its own mistakes
-                            # (e.g. a hallucinated missing import) before ever declaring a task done.
+                            # --- GENERALIZED SELF-VERIFICATION ---.
                             if SELF_VERIFY_PY_WRITES and was_mod and tool_name in ["write_file", "append_file", "replace_lines"]:
                                 target_fp = tool_args.get("filepath", "")
                                 linter_error = run_self_verification(target_fp)
@@ -722,9 +632,6 @@ def main():
                                         f"🚨 [Self-Verification] Lint/import check FAILED on "
                                         f"{os.path.basename(target_fp)}:\n{linter_error}"
                                     )
-                                    # Remember exactly what content failed, so that if the model's
-                                    # next attempt has no <payload> and recovery would just reuse
-                                    # this same broken content, the Stale-Fix Guard above can catch it.
                                     last_verification_failure = {
                                         "filepath": target_fp,
                                         "content": tool_args.get("content", ""),
