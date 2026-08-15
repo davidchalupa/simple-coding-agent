@@ -22,6 +22,7 @@ from coding_agent import file_splitter
 from coding_agent import native_linter
 from coding_agent import payload_parser
 from cli import parse_cli_arguments
+# the agent currently supports: Qwen2.5-Coder-7B-Instruct-Q4_K_M, Hermes-3-Llama-3.1-8B.Q4_K_M
 from model_registry import MODEL_REGISTRY
 
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
@@ -325,405 +326,233 @@ def main():
         consecutive_lint_failures = 0  # <-- Track repeated self-verification failures on the same turn
         last_verification_failure = None  # <-- Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
 
-        while True:
-            # --- CONTEXT TOKEN GUARDRAIL ---
+        def check_context_guardrail(messages, llm, limit):
+            """Calculates tokens and warns on memory overload."""
             try:
-                # Calculate exact token usage of history + ChatML format buffer
-                current_tokens = sum(len(llm.tokenize(m["content"].encode('utf-8'))) + 10 for m in messages)
-
-                if current_tokens > CONTEXT_WINDOW:
-                    print(f"\n🚨 [MEMORY OVERLOAD]: Prompt size is {current_tokens} tokens (Limit: {CONTEXT_WINDOW}).")
-                    print("   The agent will likely hallucinate or output truncated JSON.")
-                    print("   Consider using '/clear' or falling back to '--deep-ast' instead of '--deep'.")
-                elif current_tokens > int(CONTEXT_WINDOW * 0.85):
-                    usage_percent = (current_tokens / CONTEXT_WINDOW) * 100
+                tokens = sum(len(llm.tokenize(m["content"].encode('utf-8'))) + 10 for m in messages)
+                if tokens > limit:
                     print(
-                        f"\n⚠️  [MEMORY WARNING]: Approaching context limit ({current_tokens}/{CONTEXT_WINDOW} tokens, {usage_percent:.1f}%).")
+                        f"\n🚨 [MEMORY OVERLOAD]: Prompt size is {tokens} tokens (Limit: {limit}).\n   The agent will likely hallucinate... Consider using '/clear' or '--deep-ast'.")
+                elif tokens > int(limit * 0.85):
+                    print(
+                        f"\n⚠️  [MEMORY WARNING]: Approaching context limit ({tokens}/{limit} tokens, {(tokens / limit) * 100:.1f}%).")
             except Exception:
-                # Failsafe if the tokenizer crashes so the main loop survives
                 pass
-            # -------------------------------
 
+        def stream_agent_response(llm, messages):
+            """Streams response, handles interruptions, and auto-closes tags. Returns (content, is_truncated, interrupted)."""
             print(f"\n[Agent]: ", end="", flush=True)
-            response_content = ""
+            content, finish_reason = "", None
+            try:
+                for chunk in llm.create_chat_completion(messages=messages, stream=True, temperature=0.1):
+                    choice = chunk['choices'][0]
+                    finish_reason = choice.get('finish_reason') or finish_reason
+                    if 'content' in (delta := choice.get('delta', {})):
+                        print(delta['content'], end="", flush=True)
+                        content += delta['content']
+            except KeyboardInterrupt:
+                print("\n\n🛑 [Generation Interrupted by User]")
+                if "<tool_call> " in content and "</tool_call>" not in content:
+                    content = re.sub(r"<tool_call>.*$", "", content, flags=re.DOTALL).strip()
+                if content: messages.append({"role": "assistant", "content": content + " [Interrupted]"})
+                return content, False, True
+
+            if "<tool_call>" in content and "</tool_call>" not in content:
+                content += "</tool_call>"
+                print("</tool_call>", end="", flush=True)
+
+            print()
+            messages.append({"role": "assistant", "content": content})
+            return content, (finish_reason == "length"), False
+
+        def handle_ast_extraction(content, split_file, sandbox_dir):
+            """Intercepts JSON routing plan and extracts blocks. Returns (was_handled, alert_message)."""
+            match = re.search(r"```json\s*\n(.*?)\n```", content, re.DOTALL)
+            if not match: return False, None
+            try:
+                plan = json.loads(match.group(1))
+                print("\n⚙️  [System] Intercepted JSON routing plan. Executing AST extraction natively...")
+                results = [f"[{fn}]: {extract_code_blocks(split_file, os.path.join(sandbox_dir, fn), blocks)}"
+                           for fn, blocks in plan.items() if isinstance(blocks, list)]
+                report = "\n".join(results)
+                print(report)
+                return True, f"System Alert: AST Extraction successfully executed.\nResults:\n{report}\n\nNext Step: Add missing imports with replace_lines/write_file, then output 'Refactor Phase Complete'."
+            except json.JSONDecodeError:
+                print("\n❌ [System] Failed to parse JSON plan.")
+                return True, "System Alert: Your JSON block was invalid. Please output ONLY valid JSON in the ```json block."
+
+        def verify_sandbox_health(split_file, sandbox_dir):
+            """Checks structural integrity and lints sandbox files. Returns (passed, report)."""
+            print("\n⚙️  [System Guardrail] Analyzing sandbox refactoring health...")
+            passed, report = file_splitter.verify_refactor_integrity(split_file, sandbox_dir)
+
+            if passed:
+                for root, _, files in os.walk(sandbox_dir):
+                    for file in files:
+                        if file.endswith('.py') and not file.startswith('.'):
+                            err = native_linter.check_python_syntax_and_imports(os.path.join(root, file))
+                            if err: return False, f"Dependency Error in '{file}':\n{err}\nUse tools to add missing imports."
+            return passed, report
+
+        while True:
+            check_context_guardrail(messages, llm, CONTEXT_WINDOW)
 
             try:
-                stream = llm.create_chat_completion(
-                    messages=messages, stream=True, temperature=0.1,
-                )
+                response_content, is_truncated, interrupted = stream_agent_response(llm, messages)
+                if interrupted: break
 
-                finish_reason = None
-
-                # --- INNER STREAM WRAPPED FOR INTERRUPT HANDLING ---
-                try:
-                    for chunk in stream:
-                        choice = chunk['choices'][0]
-                        if choice.get('finish_reason'):
-                            finish_reason = choice['finish_reason']
-
-                        delta = choice.get('delta')
-                        if 'content' in delta:
-                            piece = delta['content']
-                            print(piece, end="", flush=True)
-                            response_content += piece
-
-                except KeyboardInterrupt:
-                    print("\n\n🛑 [Generation Interrupted by User]")
-
-                    # CRITICAL CLEANUP: If the agent was mid-tool-call, strip the broken JSON
-                    if "<tool_call> " in response_content and "</tool_call>" not in response_content:
-                        response_content = re.sub(r"<tool_call>.*$", "", response_content, flags=re.DOTALL).strip()
-
-                    if response_content:
-                        messages.append({"role": "assistant", "content": response_content + " [Interrupted]"})
-                    break
-
-                is_truncated = (finish_reason == "length")
-
-                if "<tool_call>" in response_content and "</tool_call>" not in response_content:
-                    response_content += "</tool_call>"
-                    print("</tool_call>", end="", flush=True)
-
-                print()
-                messages.append({"role": "assistant", "content": response_content})
-
-                # --- NEW: AST EXTRACTION INTERCEPTOR FOR EXECUTE MODE ---
+                # --- AST EXTRACTION INTERCEPTOR ---
                 if is_split_mode and is_execute_mode and "```json" in response_content:
-                    json_match = re.search(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL)
-                    if json_match:
-                        try:
-                            split_plan = json.loads(json_match.group(1))
-                            print("\n⚙️  [System] Intercepted JSON routing plan. Executing AST extraction natively...")
+                    handled, alert = handle_ast_extraction(response_content, original_split_file, sandbox_directory)
+                    if handled:
+                        messages.append({"role": "user", "content": alert})
+                        is_execute_mode = False if "successfully executed" in alert else is_execute_mode
+                        continue
 
-                            extraction_results = []
-                            for target_filename, blocks in split_plan.items():
-                                if not isinstance(blocks, list):
-                                    continue
-                                target_filepath = os.path.join(sandbox_directory, target_filename)
-                                # Deterministically extract the blocks without LLM generation
-                                result = extract_code_blocks(original_split_file, target_filepath, blocks)
-                                extraction_results.append(f"[{target_filename}]: {result}")
-
-                            report = "\n".join(extraction_results)
-                            print(report)
-
-                            system_feedback = (
-                                f"System Alert: AST Extraction successfully executed based on your JSON map.\n"
-                                f"Results:\n{report}\n\n"
-                                f"Next Step: The files contain the logic, but lack dependencies. Use `replace_lines` or `write_file` "
-                                f"to add the necessary `import` statements at the top of these newly created files. "
-                                f"Additionally, update the original file to import these extracted components and remove the old extracted code. "
-                                f"When the refactor is fully wired and syntactically correct, output 'Refactor Phase Complete'."
-                            )
-
-                            messages.append({"role": "user", "content": system_feedback})
-                            is_execute_mode = False  # Reset so we don't extract twice on the next loop iteration
-                            continue  # Jump to next loop iteration so the agent can write imports
-
-                        except json.JSONDecodeError:
-                            print("\n❌ [System] Failed to parse JSON plan.")
-                            messages.append({
-                                "role": "user",
-                                "content": "System Alert: Your JSON block was invalid and could not be parsed. Please output ONLY valid JSON in the ```json block."
-                            })
-                            continue
-
-                # --- SYSTEM GUARDRAIL INTERCEPTOR FOR SANDBOX MODE ---
-                if is_split_mode and (
-                        "refactor phase complete" in response_content.lower() or "task complete" in response_content.lower()):
-                    print("\n⚙️  [System Guardrail] Analyzing sandbox refactoring health...")
-
-                    # Step 1: Check structural integrity
-                    passed, report = file_splitter.verify_refactor_integrity(original_split_file, sandbox_directory)
-
-                    # Step 2: Native Linter Check
+                # --- SANDBOX GUARDRAIL ---
+                if is_split_mode and any(
+                        x in response_content.lower() for x in ["refactor phase complete", "task complete"]):
+                    passed, report = verify_sandbox_health(original_split_file, sandbox_directory)
                     if passed:
-                        for root, _, files in os.walk(sandbox_directory):
-                            for file in files:
-                                if file.endswith('.py') and not file.startswith('.'):
-                                    filepath = os.path.join(root, file)
-                                    linter_error = native_linter.check_python_syntax_and_imports(filepath)
-
-                                    if linter_error:
-                                        passed = False
-                                        report = (
-                                            f"Dependency Error in '{file}':\n{linter_error}\n"
-                                            "Use your replace_lines or write_file tool to add the missing imports at the top of the file."
-                                        )
-                                        break
-                            if not passed:
-                                break
-
-                    # Step 3: Resolution
-                    if passed:
-                        print("✅ Sandbox passed structural AND dependency checks!")
-                        print(f"Files are safely staged in: {sandbox_directory}")
-                        approval = input("Would you like to promote these files to production? (y/n): ").strip().lower()
-
-                        if approval == 'y':
+                        print(f"✅ Sandbox passed! Staged in: {sandbox_directory}")
+                        if input("Promote to production? (y/n): ").strip().lower() == 'y':
                             target_dir = os.path.dirname(original_split_file)
                             for item in os.listdir(sandbox_directory):
-                                src = os.path.join(sandbox_directory, item)
-                                dst = os.path.join(target_dir, item)
-                                if os.path.isfile(src) and not item.startswith('.'):
-                                    shutil.copy2(src, dst)
-                            print("🚀 Files successfully promoted to production folder.")
-
-                        # Reset Mode
-                        is_split_mode = False
-                        is_execute_mode = False
+                                if not item.startswith('.'):
+                                    shutil.copy2(os.path.join(sandbox_directory, item), os.path.join(target_dir, item))
+                            print("🚀 Files successfully promoted.")
+                        is_split_mode = is_execute_mode = False
                         session_cwd = os.path.dirname(original_split_file)
                         break
-                    else:
-                        print(f"❌ Verification Failed:\n{report}")
-                        messages.append({
-                            "role": "user",
-                            "content": f"System Verification Failed:\n{report}\n\nPlease use your tools to correct this error. When done, output 'Refactor Phase Complete'."
-                        })
-                        continue
-                # -----------------------------------------------------
 
-                # 1. Extract and parse tool request
+                    print(f"❌ Verification Failed:\n{report}")
+                    messages.append({"role": "user",
+                                     "content": f"System Verification Failed:\n{report}\n\nCorrect this error and output 'Refactor Phase Complete'."})
+                    continue
+
+                # --- TOOL PARSING ---
                 tool_request = payload_parser.extract_tool_call(response_content, allow_patch=ALLOW_PATCH)
 
-                if tool_request:
-                    try:
-                        tool_name = tool_request.get("name")
-                        tool_args = tool_request.get("args", {})
+                if not tool_request:
+                    # AUTOMATED FOLLOW-UP TRIGGER
+                    if FORCE_TESTING and file_was_modified and not is_split_mode:
+                        raw_path = tool_args.get("filepath", "") if 'tool_args' in locals() else ""
+                        fn = Path(raw_path).name.lower()
+                        if raw_path and fn.endswith(".py") and (
+                                fn.startswith("test_") or fn.endswith("_test.py")) and not has_prompted_for_tests:
+                            print("\n[System]: Automatically queuing follow-up test prompt.")
+                            safe_exec = sys.executable.replace("\\", "/")
+                            messages.append({"role": "user",
+                                             "content": f"Great. Use `run_cmd` (e.g. `\"{safe_exec}\" -m unittest`) to verify. If a test fails, analyze if the test itself is wrong before fixing the source code."})
+                            has_prompted_for_tests = True
+                        else:
+                            print("\n[System]: Main script written / modified.")
+                    break
 
-                        # --- NEW GUARDRAIL: Block payloads on non-writing tools ---
-                        if tool_name in ["read_file", "run_cmd"] and "<payload>" in response_content:
-                            print(
-                                f"🛑 [Parser Interceptor] Blocked {tool_name} because it contained an invalid <payload> block.")
-                            messages.append({
-                                "role": "user",
-                                "content": (
-                                    f"System Alert: You included a <payload> block with the `{tool_name}` tool. "
-                                    f"This tool does NOT accept payloads. Only use <payload> for `write_file`, "
-                                    f"`replace_lines`, or `append_file`. Please retry the `{tool_name}` call using ONLY the JSON block."
-                                )
-                            })
-                            continue
+                tool_name = tool_request.get("name")
+                tool_args = tool_request.get("args", {})
 
-                        # 2. Keep the truncation check
-                        if is_truncated and tool_name == "write_file":
-                            raise json.JSONDecodeError("Incomplete payload due to context limit truncation.", "", 0)
+                # --- PRE-FLIGHT VALIDATION & GUARDRAILS ---
+                if tool_name in ["read_file", "run_cmd"] and "<payload>" in response_content:
+                    messages.append({"role": "user",
+                                     "content": f"System Alert: Tool `{tool_name}` does NOT accept <payload> blocks. Retry with ONLY the JSON block."})
+                    continue
 
-                        # 3. Keep path resolution
-                        # Resolve relative file and directory paths against active session_cwd
-                        if "filepath" in tool_args and not os.path.isabs(tool_args["filepath"]):
-                            tool_args["filepath"] = os.path.abspath(os.path.join(session_cwd, tool_args["filepath"]))
+                if is_truncated and tool_name == "write_file":
+                    raise json.JSONDecodeError("Incomplete payload due to context limit.", "", 0)
 
-                        if "dir_path" in tool_args and not os.path.isabs(tool_args["dir_path"]):
-                            tool_args["dir_path"] = os.path.abspath(os.path.join(session_cwd, tool_args["dir_path"]))
+                # Path resolution
+                for key in ["filepath", "dir_path"]:
+                    if key in tool_args and not os.path.isabs(tool_args[key]):
+                        tool_args[key] = os.path.abspath(os.path.join(session_cwd, tool_args[key]))
 
-                        # 4. Keep empty file check + payload recovery
-                        if tool_name in ["write_file", "append_file", "replace_lines"]:
-                            content = tool_args.get('content', '')
-                            clean_content = re.sub(r'```[a-zA-Z]*\s*```', '', content).strip()
+                # Payload recovery & Empty file guard
+                if tool_name in ["write_file", "append_file", "replace_lines"]:
+                    content_clean = re.sub(r'```[a-zA-Z]*\s*```', '', tool_args.get('content', '')).strip()
+                    if not content_clean:
+                        recovered = find_last_code_block(messages)
+                        is_stale = bool(recovered and last_verification_failure and
+                                        last_verification_failure.get("filepath") == tool_args.get("filepath") and
+                                        recovered.strip() == last_verification_failure.get("content", "").strip())
 
-                            if not clean_content:
-                                recovered = find_last_code_block(messages)
+                        if recovered and recovered.strip() and not is_stale:
+                            print(f"🔧 [Recovery] Reusing last drafted code block for {tool_name}.")
+                            tool_args["content"] = recovered
+                        else:
+                            msg = (f"System Alert: Blocked empty {tool_name}." if not is_stale else
+                                   f"System Alert: Stale-Fix Guard. You provided the SAME failing code again.\n{last_verification_failure.get('error', '')}")
+                            msg += f"\nYou MUST provide the corrected code inside a <payload> block. Retry {tool_name}."
 
-                                # --- STALE-FIX GUARD ---
-                                is_stale_reuse = bool(
-                                    recovered
-                                    and recovered.strip()
-                                    and last_verification_failure is not None
-                                    and last_verification_failure.get("filepath") == tool_args.get("filepath")
-                                    and recovered.strip() == last_verification_failure.get("content", "").strip()
-                                )
-
-                                if recovered and recovered.strip() and not is_stale_reuse:
-                                    print(
-                                        f"🔧 [Recovery] Empty payload detected — reusing last drafted code block for {tool_name}.")
-                                    tool_args["content"] = recovered
-                                    # fall through to execute the write with recovered content instead of blocking
-                                else:
-                                    if is_stale_reuse:
-                                        print(
-                                            f"🛑 [Stale-Fix Guard] Blocked {tool_name}: the only available code block for "
-                                            f"{os.path.basename(tool_args.get('filepath', ''))} is the SAME content that "
-                                            f"just failed self-verification. The model described a fix in prose but never "
-                                            f"actually redrafted the file."
-                                        )
-                                        alert = (
-                                            f"System Alert: Your {tool_name} call FAILED because no new <payload> was "
-                                            f"provided, and the only code you previously drafted is the SAME version "
-                                            f"that just failed the self-verification check:\n"
-                                            f"{last_verification_failure.get('error', '')}\n\n"
-                                            f"Describing a fix in words is not enough — you must actually apply it. "
-                                            f"You MUST output a COMPLETE, CORRECTED version of the code (with the fix "
-                                            f"really applied) inside a fenced code block or a <payload> block. "
-                                            f"Retry now with the full corrected content, not a description of the change."
-                                        )
-                                    else:
-                                        print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
-                                        alert = (
-                                            f"System Alert: Your {tool_name} call FAILED because the <payload> was missing or empty. "
-                                            f"You MUST provide the new code inside a payload block. Retry IMMEDIATELY using this exact format:\n\n"
-                                            f"```json\n"
-                                            f"{{\"name\": \"{tool_name}\", \"args\": {{\"filepath\": \"{tool_args.get('filepath', '...')}\", \"start_line\": {tool_args.get('start_line', 1)}, \"end_line\": {tool_args.get('end_line', 1)}}}}}\n"
-                                            f"```\n"
-                                            f"<payload>\nYOUR NEW CODE GOES HERE\n</payload>\n\n"
-                                            f"Do not restart from the beginning. Just fix the {tool_name} call."
-                                        )
-
-                                    # --- NEW: Circuit Breaker ---
-                                    consecutive_errors += 1
-                                    if consecutive_errors >= 3:
-                                        print("🛑 [Circuit Breaker] Agent is stuck in a syntax loop. Forcing exit.")
-                                        break  # This breaks the while True loop, ending the turn
-                                    # ----------------------------
-                                    messages.append({"role": "user", "content": alert})
-                                    continue
-
-                        # --- Loop Guardrail ---
-                        current_signature = f"{tool_name}:{str(tool_args)}"
-                        if current_signature == last_tool_call_signature:
-                            print(f"🛑 [Loop Guardrail] Blocked identical consecutive tool call: {tool_name}")
-                            messages.append({
-                                "role": "user",
-                                "content": "System Alert: You just attempted this exact same tool call with the exact same arguments. "
-                                           "Do NOT repeat identical actions. Either change your arguments, add the missing <payload>, or output plain text to stop."
-                            })
                             consecutive_errors += 1
                             if consecutive_errors >= 3:
-                                print("🛑 [Circuit Breaker] Agent is stuck in a loop. Forcing turn end.")
+                                print("🛑 [Circuit Breaker] Agent stuck in syntax loop. Forcing exit.")
                                 break
+                            messages.append({"role": "user", "content": msg})
                             continue
 
-                        last_tool_call_signature = current_signature
-                        # ----------------------
-
-                        print(f"\n⚠️  AGENT REQUESTS PERMISSION TO EXECUTE: {tool_name}")
-                        if tool_name in ["write_file", "append_file"]:
-                            print(f"Resolved Target File: {tool_args.get('filepath')}")
-                            print("Content Snippet: \n" + "-" * 20)
-                            print(tool_args.get('content', '')[:300] + "\n...[truncated snippet]\n" + "-" * 20)
-                        elif tool_name == "replace_lines":
-                            print(
-                                f"Replacing lines {tool_args.get('start_line')} to {tool_args.get('end_line')} in: {tool_args.get('filepath')}")
-                            print("New Content Snippet: \n" + "-" * 20)
-                            print(tool_args.get('content', '')[:300] + "\n...[truncated snippet]\n" + "-" * 20)
-                        else:
-                            print(f"Arguments: {tool_args}")
-
-                        approval = input("Allow this action? (y/n/edit): ").strip().lower()
-
-                        tool_result = ""
-                        tool_reinforcement = ""
-
-                        if approval == 'y':
-                            # --- REFACTORED TOOL DISPATCH ---
-                            tool_result, tool_reinforcement, was_mod = execute_tool(tool_name, tool_args, is_split_mode)
-                            if was_mod:
-                                file_was_modified = True
-                            print(f"⚙️  Tool execution finished.")
-
-                            # --- GENERALIZED SELF-VERIFICATION ---.
-                            if SELF_VERIFY_PY_WRITES and was_mod and tool_name in ["write_file", "append_file", "replace_lines"]:
-                                target_fp = tool_args.get("filepath", "")
-                                linter_error = run_self_verification(target_fp)
-
-                                if linter_error:
-                                    consecutive_lint_failures += 1
-                                    print(
-                                        f"🚨 [Self-Verification] Lint/import check FAILED on "
-                                        f"{os.path.basename(target_fp)}:\n{linter_error}"
-                                    )
-                                    last_verification_failure = {
-                                        "filepath": target_fp,
-                                        "content": tool_args.get("content", ""),
-                                        "error": linter_error,
-                                    }
-                                    tool_reinforcement += (
-                                        f"\n\nSystem Alert (Self-Verification): '{os.path.basename(target_fp)}' was "
-                                        f"written, but an automated syntax/import check found a problem. You are "
-                                        f"NOT done — you must fix this before declaring the task complete:\n"
-                                        f"{linter_error}\n\n"
-                                        f"Use `replace_lines` or `write_file` to correct it (e.g. add any missing "
-                                        f"imports), then retry with the FULL corrected code — not just a description "
-                                        f"of the fix."
-                                    )
-
-                                    if consecutive_lint_failures >= 3:
-                                        print(
-                                            "🛑 [Circuit Breaker] Repeated self-verification failures on this turn. "
-                                            "Forcing turn end so the user can intervene."
-                                        )
-                                        messages.append({
-                                            "role": "user",
-                                            "content": f"Tool Execution Result:\n{tool_result}{tool_reinforcement}"
-                                        })
-                                        break
-                                else:
-                                    if consecutive_lint_failures > 0:
-                                        print(
-                                            f"✅ [Self-Verification] {os.path.basename(target_fp)} now passes "
-                                            f"syntax/import checks."
-                                        )
-                                    consecutive_lint_failures = 0
-                                    last_verification_failure = None
-                            # --------------------------------------
-
-                        elif approval == 'edit':
-                            feedback = input("Provide feedback or correction to the agent: ")
-                            tool_result = f"User denied the action and provided this feedback: {feedback}"
-                        else:
-                            tool_result = "User denied permission to execute this tool."
-                            print("🛑 Action blocked by user.")
-
-                        messages.append(
-                            {"role": "user", "content": f"Tool Execution Result:\n{tool_result}{tool_reinforcement}"})
-                        continue
-
-                    except json.JSONDecodeError as e:
-                        error_msg = (
-                            f"Formatting Failure: {str(e)}\n"
-                            "Your block string parsing crashed. Remember to output using the minified raw tag:\n"
-                            "<tool_call>{\"name\": \"write_file\", \"args\": {\"filepath\": \"target_file.md\"}}</tool_call>\n"
-                            "<payload>\nRAW UNESCAPED CONTENT HERE\n</payload>"
-                        )
-                        print(f"\n❌ [Parser Interceptor] Halted a syntax loop. Returning loop control to user.")
-                        messages.append({"role": "user", "content": error_msg})
+                # Loop Guardrail
+                curr_sig = f"{tool_name}:{str(tool_args)}"
+                if curr_sig == last_tool_call_signature:
+                    consecutive_errors += 1
+                    if consecutive_errors >= 3:
+                        print("🛑 [Circuit Breaker] Agent loop. Forcing turn end.")
                         break
+                    messages.append({"role": "user",
+                                     "content": "System Alert: Identical consecutive tool call blocked. Change arguments or stop."})
+                    continue
+                last_tool_call_signature = curr_sig
 
-                # --- AUTOMATED FOLLOW-UP TRIGGER ---
-                if FORCE_TESTING and file_was_modified and not is_split_mode:
-                    raw_path = tool_args.get("filepath", "")
+                # --- EXECUTION ---
+                print(f"\n⚠️  AGENT REQUESTS EXECUTION: {tool_name}")
+                snippet = tool_args.get('content', '')[:300] + (
+                    "\n...[truncated]" if len(tool_args.get('content', '')) > 300 else "")
+                if tool_name in ["write_file", "append_file", "replace_lines"]:
+                    print(f"Target: {tool_args.get('filepath')}\nSnippet:\n{'-' * 20}\n{snippet}\n{'-' * 20}")
+                else:
+                    print(f"Arguments: {tool_args}")
 
-                    if raw_path:
-                        path_obj = Path(raw_path)
-                        filename = path_obj.name.lower()
-                        is_test_filename = filename.startswith("test_") or filename.endswith("_test.py")
-                        is_test_file = is_test_filename and filename.endswith(".py")
-                    else:
-                        is_test_file = False
+                approval = input("Allow this action? (y/n/edit): ").strip().lower()
+                tool_result, tool_reinforcement = "", ""
 
-                    if is_test_file and not has_prompted_for_tests:
-                        print(
-                            "\n[System]: Catching unverified test changes. Automatically queuing follow-up test prompt.")
-                        # Use the absolute path to the current interpreter (e.g., inside the .venv)
-                        # Replace backslashes with forward slashes to prevent JSON escaping crashes on Windows
-                        safe_py_exec = sys.executable.replace("\\", "/")
+                if approval == 'y':
+                    tool_result, tool_reinforcement, was_mod = execute_tool(tool_name, tool_args, is_split_mode)
+                    file_was_modified = file_was_modified or was_mod
+                    print(f"⚙️  Tool execution finished.")
 
-                        automated_followup = (
-                            f"Great. Now use `run_cmd` to run this test file (e.g., using `\"{safe_py_exec}\" -m unittest`) to verify your logic. "
-                            "CRITICAL: If a test fails, you must follow these steps strictly:\n"
-                            "1. Do NOT output a tool call immediately.\n"
-                            "2. Audit the failing test case: Does the test input actually violate the original problem constraints?\n"
-                            "3. If the test itself is invalid, use `replace_lines` or `write_file` to DELETE or FIX the bad test in the test file.\n"
-                            "4. If the test is valid, analyze why your source code failed, and fix the source code.\n"
-                            "5. Rerun the tests until they pass."
-                        )
-                        has_prompted_for_tests = True
-                    else:
-                        print("\n[System]: Main script written / modified.")
-                        automated_followup = None
+                    # Self-Verification
+                    if SELF_VERIFY_PY_WRITES and was_mod and tool_name in ["write_file", "append_file",
+                                                                           "replace_lines"]:
+                        fp = tool_args.get("filepath", "")
+                        if linter_error := run_self_verification(fp):
+                            consecutive_lint_failures += 1
+                            print(f"🚨 [Self-Verification] FAILED on {os.path.basename(fp)}:\n{linter_error}")
+                            last_verification_failure = {"filepath": fp, "content": tool_args.get("content", ""),
+                                                         "error": linter_error}
+                            tool_reinforcement += f"\n\nSystem Alert: File written but syntax/import check failed:\n{linter_error}\nFix it."
 
+                            if consecutive_lint_failures >= 3:
+                                print("🛑 [Circuit Breaker] Repeated lint failures. Forcing turn end.")
+                                messages.append(
+                                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
+                                break
+                        else:
+                            if consecutive_lint_failures > 0: print(f"✅ {os.path.basename(fp)} now passes checks.")
+                            consecutive_lint_failures, last_verification_failure = 0, None
+
+                elif approval == 'edit':
+                    tool_result = f"User denied and provided feedback: {input('Feedback: ')}"
+                else:
+                    tool_result = "User denied permission."
+                    print("🛑 Action blocked.")
+
+                messages.append(
+                    {"role": "user", "content": f"Tool Execution Result:\n{tool_result}{tool_reinforcement}"})
+
+            except json.JSONDecodeError as e:
+                print(f"\n❌ [Parser Interceptor] Halted syntax loop.")
+                messages.append({"role": "user",
+                                 "content": f"Formatting Failure: {e}\nRemember to use raw unescaped content inside <payload>."})
                 break
-
             except Exception as e:
                 print(f"\n[Error during generation]: {e}")
                 break
