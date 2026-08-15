@@ -197,15 +197,15 @@ def test_agent_minesweeper_modify():
     target_file = "test_data/test_minesweeper/minesweeper.py"
 
     input_queue = [
-        (
-            "Task: Modify the `run_game_loop` function in `test_data/test_minesweeper/minesweeper.py` "
-            "so it returns `True` if the game was won, and `False` otherwise.\n\n"
-            "Steps:\n"
-            "1. Use `read_file` to examine the code.\n"
-            "2. Use `replace_lines` to apply the actual working logic changes (do NOT use placeholder code).\n"
-            "3. Once the file is successfully updated, output plain text saying 'Task Complete' and stop."
-        ),
+        "Read the the code in `test_data/test_minesweeper/minesweeper.py`. ",
+        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file."
         "/send",
+
+        "Good. Now I will need you to change the run_game_loop function so that it has a return value. ",
+        "It should return True if the game was won and otherwise it should return False. ",
+        "Identify the places where return statements should be placed and make targeted replacements using the `replace_lines` tool.",
+        "/send",
+
         "/quit"
     ]
 
