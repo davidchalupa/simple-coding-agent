@@ -51,6 +51,8 @@ parser.add_argument("--model", type=str, default="qwen2.5", choices=MODEL_REGIST
 parser.add_argument("--disable-replace", action="store_true",
                     help="Disable the replace_lines tool (forces full file rewrites).")
 parser.add_argument("--force-testing", action="store_true", help="Force automated test prompting.")
+parser.add_argument("--disable-self-verify", action="store_true",
+                    help="Disable automatic post-write lint/import self-verification on .py files.")
 args, unknown = parser.parse_known_args()
 
 # Extract selected configuration
@@ -62,6 +64,9 @@ CONTEXT_WINDOW = active_config["max_context"]
 # Enabled by default. Overridden only if the user explicitly passes --disable-replace
 ALLOW_PATCH = not args.disable_replace
 FORCE_TESTING = args.force_testing
+# Enabled by default. Generalizes the self-correction loop that used to be /split-only
+# to every write_file / append_file / replace_lines call that touches a .py file.
+SELF_VERIFY_PY_WRITES = not args.disable_self_verify
 
 # Global State Placeholders
 llm = None
@@ -172,6 +177,31 @@ def find_last_code_block(messages):
             if match:
                 return match.group(1)
     return None
+
+
+def run_self_verification(filepath):
+    """
+    Generalized post-write self-verification for Python files.
+
+    Runs the same native_linter syntax/import check that /split's sandbox
+    verification uses, but applies it to ANY write_file / append_file /
+    replace_lines call that touches a .py file — not just inside sandbox mode.
+
+    Returns the linter error string, or None if the file passes (or isn't
+    something we can/should check).
+    """
+    if not filepath or not filepath.endswith(".py"):
+        return None
+    if not os.path.isfile(filepath):
+        return None
+
+    try:
+        return native_linter.check_python_syntax_and_imports(filepath)
+    except Exception as e:
+        # Failsafe: never let a linter crash take down the agent loop.
+        print(f"⚠️ [Self-Verification] Linter itself raised an error, skipping check: {e}")
+        return None
+
 
 def main():
     global messages, session_cwd, is_split_mode, is_execute_mode, original_split_file, sandbox_directory, automated_followup, has_prompted_for_tests
@@ -357,6 +387,8 @@ def main():
         file_was_modified = False  # Track if any files change during this cycle
         last_tool_call_signature = None  # <-- Track the last tool run
         consecutive_errors = 0  # <-- Track infinite loop traps
+        consecutive_lint_failures = 0  # <-- Track repeated self-verification failures on the same turn
+        last_verification_failure = None  # <-- Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
 
         while True:
             # --- CONTEXT TOKEN GUARDRAIL ---
@@ -524,24 +556,6 @@ def main():
                         tool_name = tool_request.get("name")
                         tool_args = tool_request.get("args", {})
 
-                        # --- Loop Guardrail ---
-                        current_signature = f"{tool_name}:{str(tool_args)}"
-                        if current_signature == last_tool_call_signature:
-                            print(f"🛑 [Loop Guardrail] Blocked identical consecutive tool call: {tool_name}")
-                            messages.append({
-                                "role": "user",
-                                "content": "System Alert: You just attempted this exact same tool call with the exact same arguments. "
-                                           "Do NOT repeat identical actions. Either change your arguments, add the missing <payload>, or output plain text to stop."
-                            })
-                            consecutive_errors += 1
-                            if consecutive_errors >= 3:
-                                print("🛑 [Circuit Breaker] Agent is stuck in a loop. Forcing turn end.")
-                                break
-                            continue
-
-                        last_tool_call_signature = current_signature
-                        # ----------------------
-
                         # --- NEW GUARDRAIL: Block payloads on non-writing tools ---
                         if tool_name in ["read_file", "run_cmd"] and "<payload>" in response_content:
                             print(
@@ -568,29 +582,65 @@ def main():
                         if "dir_path" in tool_args and not os.path.isabs(tool_args["dir_path"]):
                             tool_args["dir_path"] = os.path.abspath(os.path.join(session_cwd, tool_args["dir_path"]))
 
-                        # 4. Keep empty file check
+                        # 4. Keep empty file check + payload recovery
+                        #
+                        # NOTE: this block finalizes tool_args["content"] (from the model's own
+                        # payload, or via recovery) BEFORE the Loop Guardrail signature is computed
+                        # below. Previously the signature was computed first, using only the raw
+                        # JSON args (filepath/start_line/etc) with no "content" key at all when the
+                        # model omitted a <payload> — so two write_file/replace_lines calls to the
+                        # same file with no payload looked byte-identical to the guardrail even when
+                        # the model's actual intent differed (e.g. a genuine fix attempt following a
+                        # self-verification failure vs. the original broken draft). That silently
+                        # blocked real fix attempts as "duplicates."
                         if tool_name in ["write_file", "append_file", "replace_lines"]:
                             content = tool_args.get('content', '')
                             clean_content = re.sub(r'```[a-zA-Z]*\s*```', '', content).strip()
 
                             if not clean_content:
                                 recovered = find_last_code_block(messages)
-                                if recovered and recovered.strip():
+
+                                # --- STALE-FIX GUARD ---
+                                # If this exact file just failed self-verification, and the only
+                                # code block available to recover is the SAME content that already
+                                # failed, this isn't a real fix — it's the recovery mechanism about
+                                # to silently resubmit the broken draft because the model only
+                                # described its fix in prose instead of redrafting the file. Refuse
+                                # to auto-recover in that case and force an explicit redraft.
+                                is_stale_reuse = bool(
+                                    recovered
+                                    and recovered.strip()
+                                    and last_verification_failure is not None
+                                    and last_verification_failure.get("filepath") == tool_args.get("filepath")
+                                    and recovered.strip() == last_verification_failure.get("content", "").strip()
+                                )
+
+                                if recovered and recovered.strip() and not is_stale_reuse:
                                     print(
                                         f"🔧 [Recovery] Empty payload detected — reusing last drafted code block for {tool_name}.")
                                     tool_args["content"] = recovered
                                     # fall through to execute the write with recovered content instead of blocking
                                 else:
-                                    print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
-                                    # --- NEW: Circuit Breaker ---
-                                    consecutive_errors += 1
-                                    if consecutive_errors >= 3:
-                                        print("🛑 [Circuit Breaker] Agent is stuck in a syntax loop. Forcing exit.")
-                                        break  # This breaks the while True loop, ending the turn
-                                    # ----------------------------
-                                    messages.append({
-                                        "role": "user",
-                                        "content": (
+                                    if is_stale_reuse:
+                                        print(
+                                            f"🛑 [Stale-Fix Guard] Blocked {tool_name}: the only available code block for "
+                                            f"{os.path.basename(tool_args.get('filepath', ''))} is the SAME content that "
+                                            f"just failed self-verification. The model described a fix in prose but never "
+                                            f"actually redrafted the file."
+                                        )
+                                        alert = (
+                                            f"System Alert: Your {tool_name} call FAILED because no new <payload> was "
+                                            f"provided, and the only code you previously drafted is the SAME version "
+                                            f"that just failed the self-verification check:\n"
+                                            f"{last_verification_failure.get('error', '')}\n\n"
+                                            f"Describing a fix in words is not enough — you must actually apply it. "
+                                            f"You MUST output a COMPLETE, CORRECTED version of the code (with the fix "
+                                            f"really applied) inside a fenced code block or a <payload> block. "
+                                            f"Retry now with the full corrected content, not a description of the change."
+                                        )
+                                    else:
+                                        print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
+                                        alert = (
                                             f"System Alert: Your {tool_name} call FAILED because the <payload> was missing or empty. "
                                             f"You MUST provide the new code inside a payload block. Retry IMMEDIATELY using this exact format:\n\n"
                                             f"```json\n"
@@ -599,8 +649,37 @@ def main():
                                             f"<payload>\nYOUR NEW CODE GOES HERE\n</payload>\n\n"
                                             f"Do not restart from the beginning. Just fix the {tool_name} call."
                                         )
-                                    })
+
+                                    # --- NEW: Circuit Breaker ---
+                                    consecutive_errors += 1
+                                    if consecutive_errors >= 3:
+                                        print("🛑 [Circuit Breaker] Agent is stuck in a syntax loop. Forcing exit.")
+                                        break  # This breaks the while True loop, ending the turn
+                                    # ----------------------------
+                                    messages.append({"role": "user", "content": alert})
                                     continue
+
+                        # --- Loop Guardrail ---
+                        # Computed AFTER content is finalized above, so write_file/replace_lines
+                        # calls to the same file are only flagged as duplicates when the content
+                        # they'd actually write matches too — not merely because both omitted a
+                        # <payload> in the raw model output.
+                        current_signature = f"{tool_name}:{str(tool_args)}"
+                        if current_signature == last_tool_call_signature:
+                            print(f"🛑 [Loop Guardrail] Blocked identical consecutive tool call: {tool_name}")
+                            messages.append({
+                                "role": "user",
+                                "content": "System Alert: You just attempted this exact same tool call with the exact same arguments. "
+                                           "Do NOT repeat identical actions. Either change your arguments, add the missing <payload>, or output plain text to stop."
+                            })
+                            consecutive_errors += 1
+                            if consecutive_errors >= 3:
+                                print("🛑 [Circuit Breaker] Agent is stuck in a loop. Forcing turn end.")
+                                break
+                            continue
+
+                        last_tool_call_signature = current_signature
+                        # ----------------------
 
                         print(f"\n⚠️  AGENT REQUESTS PERMISSION TO EXECUTE: {tool_name}")
                         if tool_name in ["write_file", "append_file"]:
@@ -626,6 +705,60 @@ def main():
                             if was_mod:
                                 file_was_modified = True
                             print(f"⚙️  Tool execution finished.")
+
+                            # --- GENERALIZED SELF-VERIFICATION ---
+                            # Previously this syntax/import check only ran inside /split's sandbox
+                            # promotion flow, gated behind the model saying "task complete". Now it
+                            # runs after ANY successful write/append/replace touching a .py file,
+                            # regardless of mode, so the agent can catch and fix its own mistakes
+                            # (e.g. a hallucinated missing import) before ever declaring a task done.
+                            if SELF_VERIFY_PY_WRITES and was_mod and tool_name in ["write_file", "append_file", "replace_lines"]:
+                                target_fp = tool_args.get("filepath", "")
+                                linter_error = run_self_verification(target_fp)
+
+                                if linter_error:
+                                    consecutive_lint_failures += 1
+                                    print(
+                                        f"🚨 [Self-Verification] Lint/import check FAILED on "
+                                        f"{os.path.basename(target_fp)}:\n{linter_error}"
+                                    )
+                                    # Remember exactly what content failed, so that if the model's
+                                    # next attempt has no <payload> and recovery would just reuse
+                                    # this same broken content, the Stale-Fix Guard above can catch it.
+                                    last_verification_failure = {
+                                        "filepath": target_fp,
+                                        "content": tool_args.get("content", ""),
+                                        "error": linter_error,
+                                    }
+                                    tool_reinforcement += (
+                                        f"\n\nSystem Alert (Self-Verification): '{os.path.basename(target_fp)}' was "
+                                        f"written, but an automated syntax/import check found a problem. You are "
+                                        f"NOT done — you must fix this before declaring the task complete:\n"
+                                        f"{linter_error}\n\n"
+                                        f"Use `replace_lines` or `write_file` to correct it (e.g. add any missing "
+                                        f"imports), then retry with the FULL corrected code — not just a description "
+                                        f"of the fix."
+                                    )
+
+                                    if consecutive_lint_failures >= 3:
+                                        print(
+                                            "🛑 [Circuit Breaker] Repeated self-verification failures on this turn. "
+                                            "Forcing turn end so the user can intervene."
+                                        )
+                                        messages.append({
+                                            "role": "user",
+                                            "content": f"Tool Execution Result:\n{tool_result}{tool_reinforcement}"
+                                        })
+                                        break
+                                else:
+                                    if consecutive_lint_failures > 0:
+                                        print(
+                                            f"✅ [Self-Verification] {os.path.basename(target_fp)} now passes "
+                                            f"syntax/import checks."
+                                        )
+                                    consecutive_lint_failures = 0
+                                    last_verification_failure = None
+                            # --------------------------------------
 
                         elif approval == 'edit':
                             feedback = input("Provide feedback or correction to the agent: ")
