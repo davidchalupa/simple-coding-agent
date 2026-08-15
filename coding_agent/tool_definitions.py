@@ -59,26 +59,26 @@ def append_file(filepath, content):
         return f"Error appending to file: {e}"
 
 
-def patch_file(filepath, search_text, replace_text):
-    """Surgically replaces a specific block of text inside a file."""
-    try:
-        if not os.path.exists(filepath):
-            return f"Error: File '{filepath}' does not exist."
-
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        if search_text not in content:
-            return "Error: The exact 'search_text' block was not found in the file. Patch failed."
-
-        updated_content = content.replace(search_text, replace_text, 1)  # Only replace first match for safety
-
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(updated_content)
-
-        return f"Successfully patched {filepath}."
-    except Exception as e:
-        return f"Error patching file: {e}"
+# def patch_file(filepath, search_text, replace_text):
+#     """Surgically replaces a specific block of text inside a file."""
+#     try:
+#         if not os.path.exists(filepath):
+#             return f"Error: File '{filepath}' does not exist."
+#
+#         with open(filepath, 'r', encoding='utf-8') as f:
+#             content = f.read()
+#
+#         if search_text not in content:
+#             return "Error: The exact 'search_text' block was not found in the file. Patch failed."
+#
+#         updated_content = content.replace(search_text, replace_text, 1)  # Only replace first match for safety
+#
+#         with open(filepath, 'w', encoding='utf-8') as f:
+#             f.write(updated_content)
+#
+#         return f"Successfully patched {filepath}."
+#     except Exception as e:
+#         return f"Error patching file: {e}"
 
 
 def run_cmd(command):
@@ -173,23 +173,9 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str) -
     return f"Successfully replaced lines {start_line}-{end_line} in {filepath}."
 
 
-def patch_file_anchored(filepath: str, old_content: str, new_content: str) -> str:
+def patch_file(filepath: str, old_content: str, new_content: str) -> str:
     """
     Anchor-based, content-addressed replace.
-
-    Instead of requiring the caller to guess numeric line ranges — something
-    small/quantized models are structurally unreliable at producing correctly,
-    even when they've read the file — this locates an exact, UNIQUE occurrence
-    of `old_content` in the file and swaps it for `new_content`.
-
-    Contract:
-      - `old_content` must match a contiguous span of the file EXACTLY, including
-        whitespace/indentation, and must occur exactly once. This forces every edit
-        to be grounded in the file's real, current content rather than the model's
-        (possibly stale) memory of it.
-      - The result reports a line-count delta so drastically disproportionate edits
-        (e.g. 50 lines collapsed to 1) are visible immediately, not discovered later
-        via linting or a crash.
     """
     path = Path(filepath)
     if not path.exists():
@@ -254,8 +240,7 @@ def patch_file_anchored(filepath: str, old_content: str, new_content: str) -> st
 def _closest_match_hint(text: str, old: str, context_lines: int = 2) -> str:
     """
     Best-effort diagnostic for a failed match: scan for the closest whitespace-
-    insensitive candidate of the same size, so a failed edit points the model at
-    a concrete location instead of leaving it to guess blind again.
+    insensitive candidate of the same size
     """
     file_lines = text.split("\n")
     old_lines = old.split("\n")

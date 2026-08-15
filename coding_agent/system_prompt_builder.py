@@ -3,11 +3,12 @@ def build_system_prompt(allow_patch=False):
     Builds and returns a system prompt for a language model.
     """
     tools_section = (
-        '6. `replace_lines`: {"filepath": "<str>", "start_line": <int>, "end_line": <int>} - Replaces lines (1-indexed, inclusive). REQUIRES a <payload> block.\n    7. `run_cmd`: {"command": "<str>"}'
+        # '6. `replace_lines`: {"filepath": "<str>", "start_line": <int>, "end_line": <int>} - Replaces lines (1-indexed, inclusive). REQUIRES a <payload> block.\n    '
+        '6. `patch_file`: {"filepath": "<str>", "old_content": "<str>", "new_content": "<str>"} - Anchor-based replace. `old_content` must match the file EXACTLY (including indentation). Pass code inside the JSON (properly escaped), no <payload> block.\n    '
+        '7. `run_cmd`: {"command": "<str>"}'
         if allow_patch else
         '6. `run_cmd`: {"command": "<str>"}'
     )
-
     rule_6 = "" if allow_patch else "\n    6. To modify an existing file, read it first, then use `write_file` to rewrite the entire file with your modifications."
 
     return f"""You are a local autonomous coding agent. Use tools modularly to solve tasks.

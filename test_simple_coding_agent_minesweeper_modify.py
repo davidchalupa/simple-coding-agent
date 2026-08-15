@@ -14,7 +14,8 @@ def run_automated_agent_test(
         target_file_path,
         max_calls_limit=30,
         expected_strings=None,
-        validation_test_file=None
+        validation_test_file=None,
+        check_for_change=True,
 ):
     """
     General-purpose automated runner for testing agent file modifications in an isolated sandbox.
@@ -46,9 +47,9 @@ def run_automated_agent_test(
     simple_coding_agent.session_cwd = test_sandbox
     simple_coding_agent.FORCE_TESTING = False
 
-    # disallowing patch tool for now, as the agent tends to just guess line numbers
-    # forcing the agent to rewrite the entire file this way
-    simple_coding_agent.ALLOW_PATCH = False
+    # # disallowing patch tool for now, as the agent tends to just guess line numbers
+    # # forcing the agent to rewrite the entire file this way
+    # simple_coding_agent.ALLOW_PATCH = False
 
     safety_counter = {"calls": 0, "max_calls": max_calls_limit}
 
@@ -83,52 +84,53 @@ def run_automated_agent_test(
                 print(f"\n🏁 Agent session terminated with code: {e.code}", flush=True)
 
         # --- Phase 1: File Modification Audit ---
-        print("\n" + "=" * 60, flush=True)
-        print("📊 Phase 1: Modification & Content Verification", flush=True)
+        if check_for_change:
+            print("\n" + "=" * 60, flush=True)
+            print("📊 Phase 1: Modification & Content Verification", flush=True)
 
-        # Physically check if the file contents have actually changed
-        file_changed = False
-        if os.path.isfile(sandbox_dest_path):
-            with open(sandbox_dest_path, "r", encoding="utf-8") as f:
-                modified_content = f.read()
-            with open(source_path, "r", encoding="utf-8") as f:
-                original_content = f.read()
+            # Physically check if the file contents have actually changed
+            file_changed = False
+            if os.path.isfile(sandbox_dest_path):
+                with open(sandbox_dest_path, "r", encoding="utf-8") as f:
+                    modified_content = f.read()
+                with open(source_path, "r", encoding="utf-8") as f:
+                    original_content = f.read()
 
-            if modified_content != original_content:
-                file_changed = True
+                if modified_content != original_content:
+                    file_changed = True
 
-        elif os.path.isdir(sandbox_dest_path):
-            # If it's a directory, check if any file inside was modified or created
-            for root, _, files in os.walk(sandbox_dest_path):
-                for file in files:
-                    s_dest = os.path.join(root, file)
-                    s_src = os.path.join(source_path, os.path.relpath(s_dest, sandbox_dest_path))
-                    if os.path.exists(s_src):
-                        with open(s_dest, "r", encoding="utf-8") as fd, open(s_src, "r", encoding="utf-8") as fs:
-                            if fd.read() != fs.read():
-                                file_changed = True
-                                break
+            elif os.path.isdir(sandbox_dest_path):
+                # If it's a directory, check if any file inside was modified or created
+                for root, _, files in os.walk(sandbox_dest_path):
+                    for file in files:
+                        s_dest = os.path.join(root, file)
+                        s_src = os.path.join(source_path, os.path.relpath(s_dest, sandbox_dest_path))
+                        if os.path.exists(s_src):
+                            with open(s_dest, "r", encoding="utf-8") as fd, open(s_src, "r", encoding="utf-8") as fs:
+                                if fd.read() != fs.read():
+                                    file_changed = True
+                                    break
+                        else:
+                            file_changed = True  # New file was created
+                    if file_changed:
+                        break
+
+            if not file_changed:
+                pytest.fail("❌ Test failed: The agent did not make any actual changes to the target code.")
+            else:
+                print(f"✅ Target file/directory content was successfully modified by the agent.", flush=True)
+
+            # Content String Assertions
+            if expected_strings and os.path.isfile(sandbox_dest_path):
+                with open(sandbox_dest_path, "r", encoding="utf-8") as f:
+                    modified_content = f.read()
+
+                for expected in expected_strings:
+                    if expected not in modified_content:
+                        print(f"❌ Missing expected content fragment: '{expected}'", flush=True)
+                        pytest.fail(f"Agent failed content verification. '{expected}' was not found in modified file.")
                     else:
-                        file_changed = True  # New file was created
-                if file_changed:
-                    break
-
-        if not file_changed:
-            pytest.fail("❌ Test failed: The agent did not make any actual changes to the target code.")
-        else:
-            print(f"✅ Target file/directory content was successfully modified by the agent.", flush=True)
-
-        # Content String Assertions
-        if expected_strings and os.path.isfile(sandbox_dest_path):
-            with open(sandbox_dest_path, "r", encoding="utf-8") as f:
-                modified_content = f.read()
-
-            for expected in expected_strings:
-                if expected not in modified_content:
-                    print(f"❌ Missing expected content fragment: '{expected}'", flush=True)
-                    pytest.fail(f"Agent failed content verification. '{expected}' was not found in modified file.")
-                else:
-                    print(f"✅ Content fragment found: '{expected}'", flush=True)
+                        print(f"✅ Content fragment found: '{expected}'", flush=True)
 
         # --- Phase 2: Syntax Verification ---
         print("\n" + "=" * 60, flush=True)
@@ -193,45 +195,19 @@ def run_automated_agent_test(
         print(f"\n🧹 Cleaned up temporary sandbox.", flush=True)
 
 
-def test_agent_minesweeper_modify():
-    """
-    Tests the agent's ability to read an existing file, locate a specific function,
-    and modify its logic and return values using its file editing tools.
-    """
+def test_agent_minesweeper_modify_generate_only():
     target_file = "test_data/test_minesweeper/minesweeper.py"
 
-    # patch-based formulation - not ready yet
-    # input_queue = [
-    #     "Read the the code in `test_data/test_minesweeper/minesweeper.py`. ",
-    #     "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file."
-    #     "/send",
-    #
-    #     "Good. Now I will need you to change the run_game_loop function so that it has a return value. ",
-    #     "It should return True if the game was won and otherwise it should return False. ",
-    #     "Identify the places where return statements should be placed and make targeted replacements using the `replace_lines` tool.",
-    #     "/send",
-    #
-    #     "/quit"
-    # ]
-
     input_queue = [
-        "Read the code in `test_data/test_minesweeper/minesweeper.py`. "
+        "Read the the code in `test_data/test_minesweeper/minesweeper.py`. ",
         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
         "/send",
 
-        "Good. Now I will need you to rewrite the file so that run_game_loop function has a return value. ",
+        "Good. Now I will need you to change the run_game_loop function so that it has a return value. ",
         "It should return True if the game was won and otherwise it should return False. ",
-        "CRITICAL: Rewrite the entire file, do NOT include just the run_game_loop function.",
-        "CRITICAL: Just output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
+        "CRITICAL: Just output the python code in a standard ```python markdown block.",
         "/send",
 
-        "Perfect. Now use the `write_file` tool to save the code you just wrote into `test_data/test_minesweeper/minesweeper.py`. "
-        "You MUST use this exact raw format. Do not use markdown ```json blocks:\n\n"
-        "<tool_call>{\"name\": \"write_file\", \"args\": {\"filepath\": \"test_data/test_minesweeper/minesweeper.py\"}}</tool_call>\n"
-        "<payload>\n[INSERT YOUR PYTHON CODE HERE]\n</payload>",
-        "/send",
-
-        # Turn 3: Graceful exit
         "/quit"
     ]
 
@@ -239,5 +215,62 @@ def test_agent_minesweeper_modify():
         input_queue=input_queue,
         target_file_path=target_file,
         max_calls_limit=30,
-        # validation_test_file=validation_test  # Uncomment if you have a Pytest/Unittest file for this
+        check_for_change=False,
     )
+
+
+# def test_agent_minesweeper_modify_with_rewrite():
+#     target_file = "test_data/test_minesweeper/minesweeper.py"
+#
+#     input_queue = [
+#         "Read the code in `test_data/test_minesweeper/minesweeper.py`. "
+#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
+#         "/send",
+#
+#         "Good. Now I will need you to rewrite the file so that run_game_loop function has a return value. ",
+#         "It should return True if the game was won and otherwise it should return False. ",
+#         "CRITICAL: Rewrite the entire file, do NOT include just the run_game_loop function.",
+#         "CRITICAL: Just output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
+#         "/send",
+#
+#         "Perfect. Now use the `write_file` tool to save the code you just wrote into `test_data/test_minesweeper/minesweeper.py`. "
+#         "You MUST use this exact raw format. Do not use markdown ```json blocks:\n\n"
+#         "<tool_call>{\"name\": \"write_file\", \"args\": {\"filepath\": \"test_data/test_minesweeper/minesweeper.py\"}}</tool_call>\n"
+#         "<payload>\n[INSERT YOUR PYTHON CODE HERE]\n</payload>",
+#         "/send",
+#
+#         # Turn 3: Graceful exit
+#         "/quit"
+#     ]
+#
+#     run_automated_agent_test(
+#         input_queue=input_queue,
+#         target_file_path=target_file,
+#         max_calls_limit=30,
+#         # validation_test_file=validation_test  # Uncomment if you have a Pytest/Unittest file for this
+#     )
+
+
+# def test_agent_minesweeper_modify_with_patch():
+#     target_file = "test_data/test_minesweeper/minesweeper.py"
+#
+#     # patch-based formulation - not ready yet
+#     input_queue = [
+#         "Read the the code in `test_data/test_minesweeper/minesweeper.py`. ",
+#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file."
+#         "/send",
+#
+#         "Good. Now I will need you to change the run_game_loop function so that it has a return value. ",
+#         "It should return True if the game was won and otherwise it should return False. ",
+#         "Identify the places where return statements should be placed and make targeted replacements using the `patch_file` tool.",
+#         "/send",
+#
+#         "/quit"
+#     ]
+#
+#     run_automated_agent_test(
+#         input_queue=input_queue,
+#         target_file_path=target_file,
+#         max_calls_limit=30,
+#         # validation_test_file=validation_test  # Uncomment if you have a Pytest/Unittest file for this
+#     )

@@ -140,29 +140,29 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
         if fp_match:
             args["filepath"] = fp_match.group(1)
 
-        st_match = re.search(r'"search_text"\s*:\s*"', cleaned)
-        if st_match:
-            start_st = st_match.end()
-            end_st_match = re.search(r'",\s*"replace_text"', cleaned)
-            if end_st_match:
-                args["search_text"] = cleaned[start_st:end_st_match.start()]
+        oc_match = re.search(r'"old_content"\s*:\s*"', cleaned)
+        if oc_match:
+            start_oc = oc_match.end()
+            end_oc_match = re.search(r'",\s*"new_content"', cleaned)
+            if end_oc_match:
+                args["old_content"] = cleaned[start_oc:end_oc_match.start()]
             else:
-                args["search_text"] = cleaned[start_st:].split('",')[0]
-            args["search_text"] = args["search_text"].replace('\\"', '"').replace('\\\\', '\\').replace('\\n', '\n')
+                args["old_content"] = cleaned[start_oc:].split('",')[0]
+            args["old_content"] = args["old_content"].replace('\\"', '"').replace('\\\\', '\\').replace('\\n', '\n')
 
-        rt_match = re.search(r'"replace_text"\s*:\s*"', cleaned)
-        if rt_match:
-            start_rt = rt_match.end()
-            end_rt_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
-            if end_rt_match:
-                args["replace_text"] = cleaned[start_rt:end_rt_match.start()]
+        nc_match = re.search(r'"new_content"\s*:\s*"', cleaned)
+        if nc_match:
+            start_nc = nc_match.end()
+            end_nc_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
+            if end_nc_match:
+                args["new_content"] = cleaned[start_nc:end_nc_match.start()]
             else:
-                raw_tail = cleaned[start_rt:].rstrip(' \n\t}')
+                raw_tail = cleaned[start_nc:].rstrip(' \n\t}')
                 if raw_tail.endswith('"'): raw_tail = raw_tail[:-1]
-                args["replace_text"] = raw_tail
-            args["replace_text"] = args["replace_text"].replace('\\"', '"').replace('\\\\', '\\').replace('\\n', '\n')
+                args["new_content"] = raw_tail
+            args["new_content"] = args["new_content"].replace('\\"', '"').replace('\\\\', '\\').replace('\\n', '\n')
 
-        if "filepath" in args and "search_text" in args and "replace_text" in args:
+        if "filepath" in args and "old_content" in args and "new_content" in args:
             return {"name": tool_name, "args": args}
 
     elif tool_name == "run_cmd":

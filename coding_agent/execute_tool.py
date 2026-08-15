@@ -4,6 +4,7 @@ from coding_agent.tool_definitions import (
     write_file,
     append_file,
     replace_lines,
+    patch_file,
     run_cmd,
     list_tree,
     search_codebase
@@ -66,6 +67,30 @@ def execute_tool(tool_name, tool_args, is_split_mode):
             tool_reinforcement = "\n\n(System Rule: Append successful. If your wiring is done, output 'Refactor Phase Complete'.)"
         else:
             tool_reinforcement = "\n\n(System Rule: Append successful. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
+
+    elif tool_name == "patch_file":
+        file_was_modified = True
+        filepath = tool_args.get("filepath")
+        old_content = tool_args.get("old_content", "")
+        new_content = tool_args.get("new_content", "")
+
+        # Strip markdown fences if the LLM wraps the payloads in them
+        old_content = re.sub(r"^```[a-zA-Z]*\n", "", old_content)
+        old_content = re.sub(r"\n```$", "", old_content)
+        new_content = re.sub(r"^```[a-zA-Z]*\n", "", new_content)
+        new_content = re.sub(r"\n```$", "", new_content)
+
+        tool_result = patch_file(filepath, old_content, new_content)
+
+        # Run linter after patching to catch broken indentation or missing imports
+        linter_error = native_linter.check_python_syntax_and_imports(filepath)
+        if linter_error:
+            tool_result += f"\n\n⚠️ CRITICAL WARNING: The file was patched, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
+
+        if is_split_mode:
+            tool_reinforcement = "\n\n(System Rule: Patch successful. If your wiring is done, output 'Refactor Phase Complete'.)"
+        else:
+            tool_reinforcement = "\n\n(System Rule: Patch successful. Do not summarize. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
 
     elif tool_name == "replace_lines":
         file_was_modified = True

@@ -15,7 +15,7 @@ from coding_agent.tool_definitions import read_file, extract_code_blocks
 from coding_agent.execute_tool import execute_tool
 from coding_agent.system_prompt_builder import build_system_prompt
 from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context, \
- gather_deep_context_ast
+    gather_deep_context_ast
 from coding_agent.self_verification import find_last_code_block, run_self_verification
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import file_splitter
@@ -36,7 +36,6 @@ active_config = MODEL_REGISTRY[parsed_args["model"]]
 target_path = Path(__file__).resolve().parent / "models" / active_config["filename"]
 loaded_model_name = active_config["display_name"]
 CONTEXT_WINDOW = active_config["max_context"]
-
 
 # Global State Placeholders
 llm = None
@@ -376,7 +375,7 @@ def main():
                            for fn, blocks in plan.items() if isinstance(blocks, list)]
                 report = "\n".join(results)
                 print(report)
-                return True, f"System Alert: AST Extraction successfully executed.\nResults:\n{report}\n\nNext Step: Add missing imports with replace_lines/write_file, then output 'Refactor Phase Complete'."
+                return True, f"System Alert: AST Extraction successfully executed.\nResults:\n{report}\n\nNext Step: Add missing imports with patch_file/write_file, then output 'Refactor Phase Complete'."
             except json.JSONDecodeError:
                 print("\n❌ [System] Failed to parse JSON plan.")
                 return True, "System Alert: Your JSON block was invalid. Please output ONLY valid JSON in the ```json block."
@@ -466,9 +465,13 @@ def main():
                     if key in tool_args and not os.path.isabs(tool_args[key]):
                         tool_args[key] = os.path.abspath(os.path.join(session_cwd, tool_args[key]))
 
+                # Define standard payload key handling
+                content_key = "new_content" if tool_name == "patch_file" else "content"
+
                 # Payload recovery & Empty file guard
-                if tool_name in ["write_file", "append_file", "replace_lines"]:
-                    content_clean = re.sub(r'```[a-zA-Z]*\s*```', '', tool_args.get('content', '')).strip()
+                if tool_name in ["write_file", "append_file", "patch_file"]:
+                    content_clean = re.sub(r'```[a-zA-Z]*\s*```', '', tool_args.get(content_key, '')).strip()
+
                     if not content_clean:
                         recovered = find_last_code_block(messages)
                         is_stale = bool(recovered and last_verification_failure and
@@ -477,7 +480,7 @@ def main():
 
                         if recovered and recovered.strip() and not is_stale:
                             print(f"🔧 [Recovery] Reusing last drafted code block for {tool_name}.")
-                            tool_args["content"] = recovered
+                            tool_args[content_key] = recovered
                         else:
                             msg = (f"System Alert: Blocked empty {tool_name}." if not is_stale else
                                    f"System Alert: Stale-Fix Guard. You provided the SAME failing code again.\n{last_verification_failure.get('error', '')}")
@@ -504,10 +507,16 @@ def main():
 
                 # --- EXECUTION ---
                 print(f"\n⚠️  AGENT REQUESTS EXECUTION: {tool_name}")
-                snippet = tool_args.get('content', '')[:300] + (
-                    "\n...[truncated]" if len(tool_args.get('content', '')) > 300 else "")
-                if tool_name in ["write_file", "append_file", "replace_lines"]:
-                    print(f"Target: {tool_args.get('filepath')}\nSnippet:\n{'-' * 20}\n{snippet}\n{'-' * 20}")
+
+                target_code = tool_args.get(content_key, '')
+                snippet = target_code[:300] + ("\n...[truncated]" if len(target_code) > 300 else "")
+
+                if tool_name in ["write_file", "append_file", "patch_file"]:
+                    if tool_name == "patch_file":
+                        print(
+                            f"Target: {tool_args.get('filepath')}\n--- Replacing ---\n{tool_args.get('old_content', '')[:100]}...\n--- With ---\n{snippet}\n{'-' * 20}")
+                    else:
+                        print(f"Target: {tool_args.get('filepath')}\nSnippet:\n{'-' * 20}\n{snippet}\n{'-' * 20}")
                 else:
                     print(f"Arguments: {tool_args}")
 
@@ -521,13 +530,19 @@ def main():
 
                     # Self-Verification
                     if SELF_VERIFY_PY_WRITES and was_mod and tool_name in ["write_file", "append_file",
-                                                                           "replace_lines"]:
+                                                                           "patch_file"]:
                         fp = tool_args.get("filepath", "")
                         if linter_error := run_self_verification(fp):
                             consecutive_lint_failures += 1
                             print(f"🚨 [Self-Verification] FAILED on {os.path.basename(fp)}:\n{linter_error}")
-                            last_verification_failure = {"filepath": fp, "content": tool_args.get("content", ""),
-                                                         "error": linter_error}
+
+                            # Track failure using dynamic content_key
+                            last_verification_failure = {
+                                "filepath": fp,
+                                "content": tool_args.get(content_key, ""),
+                                "error": linter_error
+                            }
+
                             tool_reinforcement += f"\n\nSystem Alert: File written but syntax/import check failed:\n{linter_error}\nFix it."
 
                             if consecutive_lint_failures >= 3:
