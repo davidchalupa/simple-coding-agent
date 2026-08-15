@@ -355,6 +355,8 @@ def main():
 
         # Internal Agent Execution Loop
         file_was_modified = False  # Track if any files change during this cycle
+        last_tool_call_signature = None  # <-- Track the last tool run
+        consecutive_errors = 0  # <-- Track infinite loop traps
 
         while True:
             # --- CONTEXT TOKEN GUARDRAIL ---
@@ -514,7 +516,7 @@ def main():
                         continue
                 # -----------------------------------------------------
 
-                # 1. Extract and parse tool request using the new wrapper
+                # 1. Extract and parse tool request
                 tool_request = payload_parser.extract_tool_call(response_content, allow_patch=ALLOW_PATCH)
 
                 if tool_request:
@@ -522,11 +524,42 @@ def main():
                         tool_name = tool_request.get("name")
                         tool_args = tool_request.get("args", {})
 
+                        # --- Loop Guardrail ---
+                        current_signature = f"{tool_name}:{str(tool_args)}"
+                        if current_signature == last_tool_call_signature:
+                            print(f"🛑 [Loop Guardrail] Blocked identical consecutive tool call: {tool_name}")
+                            messages.append({
+                                "role": "user",
+                                "content": "System Alert: You just attempted this exact same tool call with the exact same arguments. "
+                                           "Do NOT repeat identical actions. Either change your arguments, add the missing <payload>, or output plain text to stop."
+                            })
+                            consecutive_errors += 1
+                            if consecutive_errors >= 3:
+                                print("🛑 [Circuit Breaker] Agent is stuck in a loop. Forcing turn end.")
+                                break
+                            continue
+
+                        last_tool_call_signature = current_signature
+                        # ----------------------
+
+                        # --- NEW GUARDRAIL: Block payloads on non-writing tools ---
+                        if tool_name in ["read_file", "run_cmd"] and "<payload>" in response_content:
+                            print(
+                                f"🛑 [Parser Interceptor] Blocked {tool_name} because it contained an invalid <payload> block.")
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"System Alert: You included a <payload> block with the `{tool_name}` tool. "
+                                    f"This tool does NOT accept payloads. Only use <payload> for `write_file`, "
+                                    f"`replace_lines`, or `append_file`. Please retry the `{tool_name}` call using ONLY the JSON block."
+                                )
+                            })
+                            continue
+
                         # 2. Keep the truncation check
                         if is_truncated and tool_name == "write_file":
                             raise json.JSONDecodeError("Incomplete payload due to context limit truncation.", "", 0)
 
-                        # 3. Keep path resolution
                         # 3. Keep path resolution
                         # Resolve relative file and directory paths against active session_cwd
                         if "filepath" in tool_args and not os.path.isabs(tool_args["filepath"]):
@@ -549,14 +582,22 @@ def main():
                                     # fall through to execute the write with recovered content instead of blocking
                                 else:
                                     print(f"🛑 [Parser Interceptor] Blocked an empty {tool_name} operation.")
+                                    # --- NEW: Circuit Breaker ---
+                                    consecutive_errors += 1
+                                    if consecutive_errors >= 3:
+                                        print("🛑 [Circuit Breaker] Agent is stuck in a syntax loop. Forcing exit.")
+                                        break  # This breaks the while True loop, ending the turn
+                                    # ----------------------------
                                     messages.append({
                                         "role": "user",
                                         "content": (
-                                            f"System Alert: Your {tool_name} call FAILED — no file was written because the payload was empty. "
-                                            f"This is NOT the same as having nothing to do. You must retry immediately using the exact format:\n"
-                                            f"<tool_call>{{\"name\": \"{tool_name}\", \"args\": {{\"filepath\": \"...\"}}}}</tool_call>\n"
-                                            f"<payload>\nYOUR ACTUAL FILE CONTENT HERE\n</payload>\n"
-                                            f"Do not claim the file was saved — it was not. Do not respond in plain text until the write actually succeeds."
+                                            f"System Alert: Your {tool_name} call FAILED because the <payload> was missing or empty. "
+                                            f"You MUST provide the new code inside a payload block. Retry IMMEDIATELY using this exact format:\n\n"
+                                            f"```json\n"
+                                            f"{{\"name\": \"{tool_name}\", \"args\": {{\"filepath\": \"{tool_args.get('filepath', '...')}\", \"start_line\": {tool_args.get('start_line', 1)}, \"end_line\": {tool_args.get('end_line', 1)}}}}}\n"
+                                            f"```\n"
+                                            f"<payload>\nYOUR NEW CODE GOES HERE\n</payload>\n\n"
+                                            f"Do not restart from the beginning. Just fix the {tool_name} call."
                                         )
                                     })
                                     continue
