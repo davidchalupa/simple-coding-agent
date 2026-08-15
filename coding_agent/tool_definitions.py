@@ -2,6 +2,8 @@ import os
 import subprocess
 import ast
 import re
+import difflib
+
 from pathlib import Path
 
 
@@ -169,6 +171,117 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str) -
 
     path.write_text("".join(lines), encoding="utf-8")
     return f"Successfully replaced lines {start_line}-{end_line} in {filepath}."
+
+
+def patch_file_anchored(filepath: str, old_content: str, new_content: str) -> str:
+    """
+    Anchor-based, content-addressed replace.
+
+    Instead of requiring the caller to guess numeric line ranges — something
+    small/quantized models are structurally unreliable at producing correctly,
+    even when they've read the file — this locates an exact, UNIQUE occurrence
+    of `old_content` in the file and swaps it for `new_content`.
+
+    Contract:
+      - `old_content` must match a contiguous span of the file EXACTLY, including
+        whitespace/indentation, and must occur exactly once. This forces every edit
+        to be grounded in the file's real, current content rather than the model's
+        (possibly stale) memory of it.
+      - The result reports a line-count delta so drastically disproportionate edits
+        (e.g. 50 lines collapsed to 1) are visible immediately, not discovered later
+        via linting or a crash.
+    """
+    path = Path(filepath)
+    if not path.exists():
+        return f"Error: File '{filepath}' does not exist."
+    if not old_content:
+        return "Error: 'old_content' must not be empty. Provide the exact existing code to replace."
+
+    raw = path.read_text(encoding="utf-8")
+
+    # Normalize line endings for matching so CRLF vs LF can't derail an otherwise
+    # correct match; restore the file's original convention on write.
+    uses_crlf = "\r\n" in raw
+    text = raw.replace("\r\n", "\n")
+    old = old_content.replace("\r\n", "\n")
+    new = new_content.replace("\r\n", "\n")
+
+    occurrences = text.count(old)
+
+    if occurrences == 0:
+        hint = _closest_match_hint(text, old)
+        return (
+            f"Error: 'old_content' was not found VERBATIM in '{filepath}' (0 exact matches).\n"
+            f"This usually means the file has changed since you last read it, or the "
+            f"whitespace/indentation doesn't match exactly.\n"
+            f"Action: re-read the current file content and copy the exact text you want "
+            f"to replace, including indentation.{hint}"
+        )
+
+    if occurrences > 1:
+        return (
+            f"Error: 'old_content' matched {occurrences} separate locations in "
+            f"'{filepath}' — it must be unique.\n"
+            f"Action: include more surrounding context (e.g. the function signature, "
+            f"or a preceding/following line) so the match is unambiguous."
+        )
+
+    new_text = text.replace(old, new, 1)
+    if uses_crlf:
+        new_text = new_text.replace("\n", "\r\n")
+
+    path.write_text(new_text, encoding="utf-8")
+
+    old_line_count = old.count("\n") + 1
+    new_line_count = new.count("\n") + 1
+    delta = new_line_count - old_line_count
+    delta_str = f"+{delta}" if delta > 0 else str(delta)
+
+    size_warning = ""
+    if old_line_count >= 5 and new_line_count <= 1:
+        size_warning = (
+            f"\nNote: this collapsed {old_line_count} lines down to {new_line_count}. "
+            f"If you only meant to ADD something (like an import) rather than replace "
+            f"an entire block, double-check this was intentional."
+        )
+
+    return (
+        f"Successfully replaced {old_line_count} line(s) with {new_line_count} line(s) "
+        f"in '{filepath}' (line delta: {delta_str}).{size_warning}"
+    )
+
+
+def _closest_match_hint(text: str, old: str, context_lines: int = 2) -> str:
+    """
+    Best-effort diagnostic for a failed match: scan for the closest whitespace-
+    insensitive candidate of the same size, so a failed edit points the model at
+    a concrete location instead of leaving it to guess blind again.
+    """
+    file_lines = text.split("\n")
+    old_lines = old.split("\n")
+    window = len(old_lines)
+
+    if window == 0 or len(file_lines) < window or len(file_lines) > 5000:
+        return ""  # skip on pathological input or very large files (cost control)
+
+    normalized_old = "\n".join(l.strip() for l in old_lines)
+    best_ratio, best_start = 0.0, None
+
+    for i in range(len(file_lines) - window + 1):
+        normalized_candidate = "\n".join(l.strip() for l in file_lines[i:i + window])
+        ratio = difflib.SequenceMatcher(None, normalized_old, normalized_candidate).ratio()
+        if ratio > best_ratio:
+            best_ratio, best_start = ratio, i
+
+    if best_start is not None and best_ratio > 0.6:
+        start = max(0, best_start - context_lines)
+        end = min(len(file_lines), best_start + window + context_lines)
+        snippet = "\n".join(file_lines[start:end])
+        return (
+            f"\n\nClosest match found around line {best_start + 1} "
+            f"(similarity: {best_ratio:.0%}):\n---\n{snippet}\n---"
+        )
+    return ""
 
 
 # Common directories and file types to hide from the LLM to save context
