@@ -46,6 +46,10 @@ def run_automated_agent_test(
     simple_coding_agent.session_cwd = test_sandbox
     simple_coding_agent.FORCE_TESTING = False
 
+    # disallowing patch tool for now, as the agent tends to just guess line numbers
+    # forcing the agent to rewrite the entire file this way
+    simple_coding_agent.ALLOW_PATCH = False
+
     safety_counter = {"calls": 0, "max_calls": max_calls_limit}
 
     def smart_input_mocker(prompt=""):
@@ -196,16 +200,38 @@ def test_agent_minesweeper_modify():
     """
     target_file = "test_data/test_minesweeper/minesweeper.py"
 
+    # patch-based formulation - not ready yet
+    # input_queue = [
+    #     "Read the the code in `test_data/test_minesweeper/minesweeper.py`. ",
+    #     "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file."
+    #     "/send",
+    #
+    #     "Good. Now I will need you to change the run_game_loop function so that it has a return value. ",
+    #     "It should return True if the game was won and otherwise it should return False. ",
+    #     "Identify the places where return statements should be placed and make targeted replacements using the `replace_lines` tool.",
+    #     "/send",
+    #
+    #     "/quit"
+    # ]
+
     input_queue = [
-        "Read the the code in `test_data/test_minesweeper/minesweeper.py`. ",
-        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file."
+        "Read the code in `test_data/test_minesweeper/minesweeper.py`. "
+        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
         "/send",
 
-        "Good. Now I will need you to change the run_game_loop function so that it has a return value. ",
+        "Good. Now I will need you to rewrite the file so that run_game_loop function has a return value. ",
         "It should return True if the game was won and otherwise it should return False. ",
-        "Identify the places where return statements should be placed and make targeted replacements using the `replace_lines` tool.",
+        "CRITICAL: Rewrite the entire file, do NOT include just the run_game_loop function.",
+        "CRITICAL: Just output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
         "/send",
 
+        "Perfect. Now use the `write_file` tool to save the code you just wrote into `test_data/test_minesweeper/minesweeper.py`. "
+        "You MUST use this exact raw format. Do not use markdown ```json blocks:\n\n"
+        "<tool_call>{\"name\": \"write_file\", \"args\": {\"filepath\": \"test_data/test_minesweeper/minesweeper.py\"}}</tool_call>\n"
+        "<payload>\n[INSERT YOUR PYTHON CODE HERE]\n</payload>",
+        "/send",
+
+        # Turn 3: Graceful exit
         "/quit"
     ]
 
