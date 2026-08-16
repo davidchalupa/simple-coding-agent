@@ -136,6 +136,11 @@ def run_automated_coding_task_test(input_queue, zip_file_path, repo_name, expect
 
 
 def test_agent_minesweeper_stats_write_script_read_only_main_premade():
+    """
+    Works on minesweeper-solve-with-changes.zip that already has required changes in minesweeper.py.
+    Intentionally reads only the main file.
+    Keeps the agent free in choice of solution.
+    """
     zip_target = "test_data/minesweeper-solve-with-changes.zip"
     repo_name = "minesweeper-solve"
 
@@ -150,15 +155,10 @@ def test_agent_minesweeper_stats_write_script_read_only_main_premade():
         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire files. You can call the tool multiple times if needed.",
         "/send",
 
-        # # Step 2b: Read relevant files
-        # "Now, use your `read_file` tool to inspect further python files you just found (e.g. the agent files). "
-        # "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire files. You can call the tool multiple times if needed.",
-        # "/send",
-
         # Step 3: Draft the code IN CHAT ONLY
         "Based on the code you read across those files, write the code for `benchmark.py`. "
-        "The script should do the necessary imports, instantiate the game, run 10 games for the Rule-based agent "
-        "and 10 for the DFS agent, calculate their success rates, and print the results. \n\n"
+        "The script should do the necessary imports, instantiate the game, run 100 games for the Rule-based agent "
+        "and the same number for the DFS agent, calculate their success rates, and print the results. \n\n"
         "CRITICAL: Just output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
         "/send",
 
@@ -183,6 +183,61 @@ def test_agent_minesweeper_stats_write_script_read_only_main_premade():
         expected_file="benchmark.py",
         max_calls_limit=60
     )
+
+
+# def test_agent_minesweeper_stats_write_script_two_phase_read_premade():
+#     """
+#     Works on minesweeper-solve-with-changes.zip that already has required changes in minesweeper.py.
+#     Reads both the main and agent filea.
+#     Keeps the agent free in choice of solution.
+#     """
+#     zip_target = "test_data/minesweeper-solve-with-changes.zip"
+#     repo_name = "minesweeper-solve"
+#
+#     input_queue = [
+#         # Step 1: Force it to explore the repo
+#         "Use the `list_tree` (or equivalent) tool to view the files in this directory. "
+#         "Take note of all the `.py` files, especially the ones containing the agent implementations.",
+#         "/send",
+#
+#         # Step 2a: Read relevant files
+#         "Now, use your `read_file` tool to inspect the main python file you just found (the main game file). "
+#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire files. You can call the tool multiple times if needed.",
+#         "/send",
+#
+#         # Step 2b: Read relevant files
+#         "Now, use your `read_file` tool to inspect further python files you just found (e.g. the agent files). "
+#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire files. You can call the tool multiple times if needed.",
+#         "/send",
+#
+#         # Step 3: Draft the code IN CHAT ONLY
+#         "Based on the code you read across those files, write the code for `benchmark.py`. "
+#         "The script should do the necessary imports, instantiate the game, run 100 games for the Rule-based agent "
+#         "and the same number for the DFS agent, calculate their success rates, and print the results. \n\n"
+#         "CRITICAL: Just output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
+#         "/send",
+#
+#         # Step 4: Write the file using the strict syntax
+#         "Perfect. Now use the `write_file` tool to save the code you just wrote into `benchmark.py`. "
+#         "You MUST use this exact raw format. Do not use markdown ```json blocks:\n\n"
+#         "<tool_call>{\"name\": \"write_file\", \"args\": {\"filepath\": \"benchmark.py\"}}</tool_call>\n"
+#         "<payload>\n[INSERT YOUR PYTHON CODE HERE]\n</payload>",
+#         "/send",
+#
+#         # Finish
+#         "Looks good, task complete.",
+#         "/send",
+#
+#         "/quit"
+#     ]
+#
+#     run_automated_coding_task_test(
+#         input_queue=input_queue,
+#         zip_file_path=zip_target,
+#         repo_name=repo_name,
+#         expected_file="benchmark.py",
+#         max_calls_limit=60
+#     )
 
 
 # def test_agent_minesweeper_stats_write_script():
