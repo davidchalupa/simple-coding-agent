@@ -44,7 +44,14 @@ def run_automated_agent_test(
     print(f"🌱 Copied target to sandbox: {target_file_path}", flush=True)
 
     # --- State Setup ---
+    simple_coding_agent.messages = []
+    simple_coding_agent.is_split_mode = False
+    simple_coding_agent.is_execute_mode = False
+    simple_coding_agent.sandbox_directory = None
+    simple_coding_agent.automated_followup = None
+    simple_coding_agent.has_prompted_for_tests = False
     simple_coding_agent.session_cwd = test_sandbox
+
     simple_coding_agent.FORCE_TESTING = False
 
     # # disallowing patch tool for now, as the agent tends to just guess line numbers
@@ -219,6 +226,42 @@ def test_agent_minesweeper_modify_generate_only():
     )
 
 
+def test_agent_minesweeper_modify_with_patch():
+    target_file = "test_data/test_minesweeper/minesweeper.py"
+
+    # patch-based formulation - not ready yet
+    input_queue = [
+        # Turn 1: Read the file
+        "Read the code in `test_data/test_minesweeper/minesweeper.py`. "
+        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
+        "/send",
+
+        # Turn 2: First patch instruction
+        "Good. Now I will need you to change the run_game_loop function so that it has a return value. "
+        "It should return True if the game was won and False if a mine was clicked. "
+        "Use the `patch_file` tool to make targeted replacements. "
+        "CRITICAL RULES FOR PATCHING:\n"
+        "1. Replace the existing `break` statements inside the win/loss conditions with `return True` or `return False`.\n"
+        "2. You MUST preserve the exact leading spaces (indentation) in both `old_content` and `new_content` to prevent Python IndentationErrors.\n"
+        "3. Issue only ONE tool call per turn. Wait for my confirmation before issuing the next one.",
+        "/send",
+
+        # Turn 3: Second patch instruction
+        "Great, now do the second patch.",
+        "/send",
+
+        # Turn 4: Session termination
+        "/quit"
+    ]
+
+    run_automated_agent_test(
+        input_queue=input_queue,
+        target_file_path=target_file,
+        max_calls_limit=30,
+        # validation_test_file=validation_test  # Uncomment if you have a Pytest/Unittest file for this
+    )
+
+
 # def test_agent_minesweeper_modify_with_rewrite():
 #     target_file = "test_data/test_minesweeper/minesweeper.py"
 #
@@ -250,27 +293,3 @@ def test_agent_minesweeper_modify_generate_only():
 #         # validation_test_file=validation_test  # Uncomment if you have a Pytest/Unittest file for this
 #     )
 
-
-# def test_agent_minesweeper_modify_with_patch():
-#     target_file = "test_data/test_minesweeper/minesweeper.py"
-#
-#     # patch-based formulation - not ready yet
-#     input_queue = [
-#         "Read the the code in `test_data/test_minesweeper/minesweeper.py`. ",
-#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file."
-#         "/send",
-#
-#         "Good. Now I will need you to change the run_game_loop function so that it has a return value. ",
-#         "It should return True if the game was won and otherwise it should return False. ",
-#         "Identify the places where return statements should be placed and make targeted replacements using the `patch_file` tool.",
-#         "/send",
-#
-#         "/quit"
-#     ]
-#
-#     run_automated_agent_test(
-#         input_queue=input_queue,
-#         target_file_path=target_file,
-#         max_calls_limit=30,
-#         # validation_test_file=validation_test  # Uncomment if you have a Pytest/Unittest file for this
-#     )
