@@ -509,14 +509,25 @@ def main():
                 print(f"\n⚠️  AGENT REQUESTS EXECUTION: {tool_name}")
 
                 target_code = tool_args.get(content_key, '')
-                snippet = target_code[:300] + ("\n...[truncated]" if len(target_code) > 300 else "")
 
                 if tool_name in ["write_file", "append_file", "patch_file"]:
                     if tool_name == "patch_file":
+                        old_snip = tool_args.get('old_content', '')
                         print(
-                            f"Target: {tool_args.get('filepath')}\n--- Replacing ---\n{tool_args.get('old_content', '')[:100]}...\n--- With ---\n{snippet}\n{'-' * 20}")
+                            f"Target: {tool_args.get('filepath')}\n"
+                            f"--- Replacing ---\n{old_snip}\n"
+                            f"--- With ---\n{target_code}\n{'-' * 20}"
+                        )
                     else:
-                        print(f"Target: {tool_args.get('filepath')}\nSnippet:\n{'-' * 20}\n{snippet}\n{'-' * 20}")
+                        line_count = target_code.count('\n') + 1 if target_code else 0
+                        MAX_PREVIEW_CHARS = 5000
+                        if len(target_code) > MAX_PREVIEW_CHARS:
+                            shown = target_code[:MAX_PREVIEW_CHARS]
+                            print(
+                                f"Target: {tool_args.get('filepath')} ({line_count} lines, showing first {MAX_PREVIEW_CHARS} chars)\n{'-' * 20}\n{shown}\n...\n{'-' * 20}")
+                        else:
+                            print(
+                                f"Target: {tool_args.get('filepath')} ({line_count} lines)\n{'-' * 20}\n{target_code}\n{'-' * 20}")
                 else:
                     print(f"Arguments: {tool_args}")
 

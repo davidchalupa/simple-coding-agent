@@ -270,8 +270,10 @@ def test_agent_minesweeper_modify_with_patch():
         "/send",
 
         # --- PHASE 2: Testing ---
-        "Great. Now write a test file named `minesweeper-solve/test_run_game_loop.py` using the `unittest` framework that tests whether the run_game_loop function in `minesweeper-solve/minesweeper.py` now returns a boolean value. ",
-        # "Do not test for the actual value, just its presence. ",
+        "Great. Now write a test file named `minesweeper-solve/test_run_game_loop.py` using the `unittest` framework "
+        "that tests whether the run_game_loop function in `minesweeper-solve/minesweeper.py` now returns a boolean value. "
+        "CRITICAL: Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
+        "properly escaped (use \\n for newlines). Do not use a `<payload>` block.",
         "/send",
 
         "/quit"

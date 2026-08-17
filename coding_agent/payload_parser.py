@@ -2,6 +2,28 @@ import json
 import re
 
 
+def _normalize_double_escaped_content(text):
+    """
+    Some models JSON-escape their own intended escape sequences (writing \\n
+    instead of \n inside the JSON string), so after a normal json.loads() pass
+    the text still contains literal backslash-n instead of a real newline.
+    Detect that pattern and fix it.
+    """
+    if not isinstance(text, str):
+        return text
+    if '\n' in text:
+        # Already has real newlines -- content is fine as-is, don't touch it.
+        return text
+    if '\\n' not in text and '\\t' not in text and '\\r' not in text:
+        return text
+    return (
+        text.replace('\\r\\n', '\n')
+            .replace('\\n', '\n')
+            .replace('\\t', '\t')
+            .replace('\\r', '\n')
+    )
+
+
 def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict | None:
     """
     Model-agnostic wrapper that isolates candidate tool JSON strings
@@ -65,12 +87,19 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
         if "args" not in data:
             data["args"] = {}
 
-        if raw_payload is not None:
-            if data.get("name") in ["write_file", "append_file", "replace_lines"]:
-                data["args"]["content"] = raw_payload
-        else:
-            if data.get("name") in ["write_file", "append_file", "replace_lines"] and "content" not in data["args"]:
-                data["args"]["content"] = ""
+        needs_content = data.get("name") in ["write_file", "append_file", "replace_lines"]
+        has_inline_content = (
+            needs_content
+            and isinstance(data["args"].get("content"), str)
+            and data["args"]["content"] != ""
+        )
+
+        if needs_content and not has_inline_content:
+            data["args"]["content"] = raw_payload if raw_payload is not None else ""
+
+        for key in ("content", "old_content", "new_content"):
+            if key in data["args"]:
+                data["args"][key] = _normalize_double_escaped_content(data["args"][key])
 
         return data
     except json.JSONDecodeError:
@@ -92,29 +121,30 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
         if fp_match:
             args["filepath"] = fp_match.group(1)
 
-        if raw_payload is not None:
+        content_match = re.search(r'"content"\s*:\s*"', cleaned)
+        if content_match:
+            start_idx = content_match.end()
+            end_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
+            if end_match:
+                args["content"] = cleaned[start_idx:end_match.start()]
+            else:
+                raw_tail = cleaned[start_idx:].rstrip(' \n\t}')
+                if raw_tail.endswith('"'): raw_tail = raw_tail[:-1]
+                args["content"] = raw_tail
+            args["content"] = (
+                args["content"]
+                .replace('\\"', '"')
+                .replace('\\\\', '\\')
+            )
+            args["content"] = _normalize_double_escaped_content(args["content"])
+        elif raw_payload is not None:
             args["content"] = raw_payload
         else:
-            if '"name"' in cleaned or '"args"' in cleaned:
-                raise json.JSONDecodeError(
-                    "CRITICAL: You forgot to provide the raw file data! "
-                    "You must include a separate <payload> block containing the actual code.",
-                    cleaned, 0
-                )
-
-            content_match = re.search(r'"content"\s*:\s*"', cleaned)
-            if content_match:
-                start_idx = content_match.end()
-                end_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
-                if end_match:
-                    args["content"] = cleaned[start_idx:end_match.start()]
-                else:
-                    raw_tail = cleaned[start_idx:].rstrip(' \n\t}')
-                    if raw_tail.endswith('"'): raw_tail = raw_tail[:-1]
-                    args["content"] = raw_tail
-                args["content"] = args["content"].replace('\\"', '"').replace('\\\\', '\\')
-            else:
-                args["content"] = ""
+            raise json.JSONDecodeError(
+                "CRITICAL: You forgot to provide the file content! "
+                "Include a \"content\" field with the full file text (properly escaped) directly inside the JSON tool call.",
+                cleaned, 0
+            )
 
         if "filepath" in args:
             return {"name": tool_name, "args": args}
