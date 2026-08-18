@@ -185,36 +185,45 @@ def run_automated_agent_test(
             if not check_passed:
                 pytest.fail("Syntax verification failed on modified code!")
 
-            # --- Phase 3: Optional Logic Verification (Unit Tests) ---
-            if validation_test_file:
+            # --- Phase 3: Independent Verification ---
+            if expected_new_files:
                 print("\n" + "=" * 60, flush=True)
-                print("🧪 Phase 3: Unit Test Logic Verification", flush=True)
+                print("🕵️  Phase 3: Independent Verification", flush=True)
+                print("Running tests externally to verify agent logic...", flush=True)
 
-                test_source_path = os.path.join(original_cwd, validation_test_file)
-                if not os.path.exists(test_source_path):
-                    pytest.fail(f"Validation test file not found at: {test_source_path}")
+                expected_test_file = expected_new_files[0]
+                test_file_abs = os.path.join(test_sandbox, expected_test_file)
+                test_dir = os.path.dirname(test_file_abs)
 
-                test_sandbox_dest = os.path.join(test_sandbox, validation_test_file)
-                os.makedirs(os.path.dirname(test_sandbox_dest), exist_ok=True)
-                shutil.copy2(test_source_path, test_sandbox_dest)
+                # Add both sandbox root and target subdirectory to PYTHONPATH
+                current_env = os.environ.copy()
+                python_paths = [test_sandbox, test_dir]
+                if current_env.get("PYTHONPATH"):
+                    python_paths.append(current_env["PYTHONPATH"])
+                current_env["PYTHONPATH"] = os.path.pathsep.join(python_paths)
 
-                target_dir = os.path.dirname(sandbox_dest_path) if os.path.isfile(
-                    sandbox_dest_path) else sandbox_dest_path
-                os.chdir(target_dir)
-                current_env["PYTHONPATH"] = os.path.pathsep.join([target_dir, current_env.get("PYTHONPATH", "")])
-
+                # Execute unittest relative to the test directory
+                test_filename = os.path.basename(expected_test_file)
                 result = subprocess.run(
-                    [sys.executable, "-m", "unittest", os.path.basename(validation_test_file)],
+                    [sys.executable, "-m", "unittest", test_filename],
                     capture_output=True,
                     text=True,
-                    env=current_env
+                    cwd=test_dir,
+                    env=current_env,
+                    timeout=30  # Guard against infinite loops during test execution
                 )
 
-                if result.returncode != 0:
-                    print(f"❌ LOGIC VERIFICATION FAILED:\n{result.stdout}\n{result.stderr}", flush=True)
-                    pytest.fail("Unit tests failed on the modified code!")
+                if result.returncode == 0:
+                    print("✅ VERIFICATION PASSED! The LLM wrote valid, functioning code.")
+                    print("--- Test Output ---")
+                    print(result.stderr.strip())
                 else:
-                    print(f"✅ Logic Verification Passed.\n{result.stderr}", flush=True)
+                    print("❌ VERIFICATION FAILED! The generated tests failed.")
+                    print("--- Error Output (stdout) ---")
+                    print(result.stdout)
+                    print("--- Error Output (stderr) ---")
+                    print(result.stderr)
+                    pytest.fail("Verification failed!")
 
         finally:
             os.chdir(original_cwd)
@@ -274,6 +283,10 @@ def test_agent_minesweeper_modify_with_patch():
         "that tests whether the run_game_loop function in `minesweeper-solve/minesweeper.py` now returns a boolean value. "
         "CRITICAL: Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
         "properly escaped (use \\n for newlines). Do not use a `<payload>` block.",
+        "/send",
+
+        "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
+        "If they all passed, just reply 'All good'.",
         "/send",
 
         "/quit"
