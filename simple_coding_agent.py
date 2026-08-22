@@ -339,16 +339,38 @@ def main():
                 pass
 
         def stream_agent_response(llm, messages):
-            """Streams response, handles interruptions, and auto-closes tags. Returns (content, is_truncated, interrupted)."""
             print(f"\n[Agent]: ", end="", flush=True)
             content, finish_reason = "", None
+
             try:
-                for chunk in llm.create_chat_completion(messages=messages, stream=True, temperature=0.1):
+                for chunk in llm.create_chat_completion(
+                        messages=messages,
+                        stream=True,
+                        temperature=0.1,
+                        max_tokens=4096
+                ):
                     choice = chunk['choices'][0]
                     finish_reason = choice.get('finish_reason') or finish_reason
                     if 'content' in (delta := choice.get('delta', {})):
-                        print(delta['content'], end="", flush=True)
-                        content += delta['content']
+                        new_text = delta['content']
+                        print(new_text, end="", flush=True)
+                        content += new_text
+
+                        # --- SAFE LOOP BREAKER ---
+                        if '\n' in new_text:
+                            # Only track lines longer than 10 chars (ignores brackets, short syntax)
+                            significant_lines = [
+                                line.strip() for line in content.split('\n')
+                                if len(line.strip()) > 10
+                            ]
+
+                            # Trigger only if 8 consecutive significant lines are identical
+                            if len(significant_lines) >= 8:
+                                if len(set(significant_lines[-8:])) == 1:
+                                    print("\n\n🛑 [System]: Repetition loop detected. Forcing halt.")
+                                    finish_reason = "repetition_loop"
+                                    break
+
             except KeyboardInterrupt:
                 print("\n\n🛑 [Generation Interrupted by User]")
                 if "<tool_call> " in content and "</tool_call>" not in content:
