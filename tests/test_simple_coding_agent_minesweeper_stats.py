@@ -14,10 +14,18 @@ import simple_coding_agent
 def check_benchmark_success_rates(stdout: str):
     """
     Specialized validation function for the benchmark script output.
-    Ensures that win rates are parsed and are not identically 0.0
-    (which indicates the agent failed to place mines and tested on an empty board).
+    First ensures that the correct benchmark text was printed, then ensures
+    that win rates are parsed and are not identically 0.0
     """
-    # Find all float values or percentages associated with rate/%
+    stdout_lower = stdout.lower()
+
+    # Check 1: Ensure it actually output the benchmark data
+    if "dfs" not in stdout_lower or ("rate" not in stdout_lower and "%" not in stdout_lower):
+        pytest.fail(
+            f"❌ FAILED: Script ran, but output indicates the benchmarks didn't actually execute (missing 'dfs' or 'rate'/'%').\nOutput was: {stdout.strip()}"
+        )
+
+    # Check 2: Find all float values or percentages associated with rate/%
     floats = re.findall(r'\b\d+\.\d+\b', stdout)
     percents = re.findall(r'\b(\d+(?:\.\d+)?)\s*%', stdout)
 
@@ -45,6 +53,7 @@ def run_automated_coding_task_test(
         run_unittest_file=None,
         run_script_file=None,
         max_calls_limit=50,
+        expected_keywords=None,
         custom_output_validator=None
 ):
     """
@@ -64,10 +73,8 @@ def run_automated_coding_task_test(
     with zipfile.ZipFile(source_zip_path, 'r') as zip_ref:
         zip_ref.extractall(test_sandbox)
 
-    # --- PATH FIX: Target the repo directly ---
     repo_sandbox = os.path.join(test_sandbox, repo_name)
 
-    # Snapshot pristine file if we are checking for modifications
     pristine_contents = {}
     if check_for_change and target_file_path:
         sandbox_dest_path = os.path.join(repo_sandbox, target_file_path)
@@ -100,7 +107,6 @@ def run_automated_coding_task_test(
         return "/quit"
 
     try:
-        # Move execution directly into the repo folder
         os.chdir(repo_sandbox)
 
         with patch("builtins.input", side_effect=smart_input_mocker):
@@ -126,7 +132,6 @@ def run_automated_coding_task_test(
             else:
                 print(f"✅ SUCCESS: Target file '{target_file_path}' was modified.")
 
-        # Compile list of files to check for existence
         files_to_check = []
         if expected_file:
             files_to_check.append(expected_file)
@@ -153,20 +158,20 @@ def run_automated_coding_task_test(
             with open(target_file_path_abs, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            expected_keywords = ["import", "10"]
-            missing_keywords = [kw for kw in expected_keywords if kw.lower() not in content.lower()]
-
-            if missing_keywords:
-                print(f"\n--- WRITTEN FILE CONTENT START ---\n{content}\n--- WRITTEN FILE CONTENT END ---\n")
-                pytest.fail(f"❌ FAILED: Script missing expected keywords: {missing_keywords}.")
+            if expected_keywords:
+                missing_keywords = [kw for kw in expected_keywords if kw.lower() not in content.lower()]
+                if missing_keywords:
+                    print(f"\n--- WRITTEN FILE CONTENT START ---\n{content}\n--- WRITTEN FILE CONTENT END ---\n")
+                    pytest.fail(f"❌ FAILED: Script missing expected keywords: {missing_keywords}.")
+                else:
+                    print("✅ Content sanity check passed. All expected keywords found.")
             else:
-                print("✅ Content sanity check passed.")
+                print("✅ Content sanity check skipped (no expected keywords provided).")
 
         # --- Phase 3: Execution Check ---
         print("\n" + "=" * 60, flush=True)
         print("🚀 Phase 3: Execution Check", flush=True)
 
-        # Execute Unittests if specified
         if run_unittest_file:
             try:
                 test_file_abs = os.path.join(repo_sandbox, run_unittest_file)
@@ -189,7 +194,6 @@ def run_automated_coding_task_test(
             except subprocess.TimeoutExpired:
                 pytest.fail("❌ FAILED: Unittest execution timed out (>30s).")
 
-        # Execute Script if specified
         script_to_run = run_script_file or expected_file
         if script_to_run:
             try:
@@ -212,17 +216,11 @@ def run_automated_coding_task_test(
                 elif not result.stdout.strip():
                     pytest.fail("❌ FAILED: Script executed but produced no output.")
 
-                # Output Sanity Check
-                stdout_lower = result.stdout.lower()
-                if "dfs" not in stdout_lower or ("rate" not in stdout_lower and "%" not in stdout_lower):
-                    pytest.fail(
-                        f"❌ FAILED: Script ran, but output indicates the benchmarks didn't actually execute (missing 'dfs' or 'rate'/'%').\nOutput was: {result.stdout.strip()}")
-                else:
-                    print("✅ Execution check passed! Script ran successfully and produced valid benchmark output.")
-
-                # Specialized custom validation
+                # Custom Output Sanity Check handled via injected validator
                 if custom_output_validator:
                     custom_output_validator(result.stdout)
+                else:
+                    print("✅ Execution check passed! Script ran successfully.")
 
             except subprocess.TimeoutExpired:
                 pytest.fail("❌ FAILED: Script execution timed out (>60s).")
@@ -276,6 +274,8 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade():
         zip_file_path=zip_target,
         repo_name=repo_name,
         expected_file="benchmark.py",
+        expected_keywords=["import", "10"],
+        custom_output_validator=check_benchmark_success_rates,
         max_calls_limit=60
     )
 
@@ -326,6 +326,8 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
         zip_file_path=zip_target,
         repo_name=repo_name,
         expected_file="benchmark.py",
+        expected_keywords=["import", "10"],
+        custom_output_validator=check_benchmark_success_rates,
         max_calls_limit=60
     )
 
