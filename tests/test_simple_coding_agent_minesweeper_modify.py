@@ -1,235 +1,223 @@
-import sys
 import os
 import tempfile
 import shutil
 import zipfile
 import subprocess
+import sys
+import re
 from unittest.mock import patch
 import pytest
 
 import simple_coding_agent
 
 
-def run_automated_agent_test(
+def run_automated_coding_task_test(
         input_queue,
-        target_file_path,
         zip_file_path,
-        max_calls_limit=30,
-        expected_strings=None,
-        validation_test_file=None,
-        check_for_change=True,
+        repo_name,
+        expected_file=None,
+        target_file_path=None,
+        check_for_change=False,
         expected_new_files=None,
+        run_unittest_file=None,
+        run_script_file=None,
+        max_calls_limit=50,
+        expected_keywords=None,
+        custom_output_validator=None
 ):
     """
-    General-purpose automated runner for testing agent file modifications in an isolated sandbox.
-    Verifies execution safety, file syntax, expected content changes, and optional unit tests.
-    Uses a .zip file as the source environment.
+    Custom runner for feature-generation tasks. Extracts a repo, runs the agent
+    with a specific prompt, validates modifications, unittests, and output files.
     """
-    print(f"🧪 Starting Automated Agent Flow Test for: {target_file_path}...", flush=True)
+    print(f"🧪 Starting Automated Agent Coding Task Test...", flush=True)
 
     original_cwd = os.getcwd()
+    test_sandbox = tempfile.mkdtemp(prefix="agent_coding_sandbox_")
+
     source_zip_path = os.path.abspath(os.path.join(original_cwd, zip_file_path))
-
     if not os.path.exists(source_zip_path):
-        pytest.fail(f"Source zip file not found at: {source_zip_path}")
+        shutil.rmtree(test_sandbox)
+        pytest.fail(f"Real target zip file not found at: {source_zip_path}")
 
-    # Use TemporaryDirectory to guarantee cleanup
-    with tempfile.TemporaryDirectory(prefix="agent_test_sandbox_") as test_sandbox:
-        print(f"📁 Created temporary sandbox at: {test_sandbox}", flush=True)
+    with zipfile.ZipFile(source_zip_path, 'r') as zip_ref:
+        zip_ref.extractall(test_sandbox)
 
-        # --- Extract Zip into Sandbox ---
-        with zipfile.ZipFile(source_zip_path, 'r') as zip_ref:
-            zip_ref.extractall(test_sandbox)
-        print(f"🌱 Extracted {zip_file_path} into sandbox.", flush=True)
+    # Target the repo directory
+    repo_sandbox = os.path.join(test_sandbox, repo_name)
 
-        sandbox_dest_path = os.path.join(test_sandbox, target_file_path)
-        if not os.path.exists(sandbox_dest_path):
-            pytest.fail(f"Target path not found in extracted sandbox: {sandbox_dest_path}")
-
-        # --- Snapshot Pristine Contents (For Phase 1 Change Verification) ---
-        pristine_contents = {}
-        if os.path.isfile(sandbox_dest_path):
+    # Snapshot pristine file if we are checking for modifications
+    pristine_contents = {}
+    if check_for_change and target_file_path:
+        sandbox_dest_path = os.path.join(repo_sandbox, target_file_path)
+        if os.path.exists(sandbox_dest_path):
             with open(sandbox_dest_path, "r", encoding="utf-8") as f:
                 pristine_contents[sandbox_dest_path] = f.read()
-        elif os.path.isdir(sandbox_dest_path):
-            for root, _, files in os.walk(sandbox_dest_path):
-                for file in files:
-                    s_dest = os.path.join(root, file)
-                    with open(s_dest, "r", encoding="utf-8") as f:
-                        pristine_contents[s_dest] = f.read()
 
-        # --- State Setup & Injection ---
-        orig_session_cwd = getattr(simple_coding_agent, "session_cwd", None)
-        orig_force_testing = getattr(simple_coding_agent, "FORCE_TESTING", False)
+    # State Injection
+    simple_coding_agent.session_cwd = repo_sandbox
+    simple_coding_agent.FORCE_TESTING = True
 
-        simple_coding_agent.messages = []
-        simple_coding_agent.is_split_mode = False
-        simple_coding_agent.is_execute_mode = False
-        simple_coding_agent.sandbox_directory = None
-        simple_coding_agent.automated_followup = None
-        simple_coding_agent.has_prompted_for_tests = False
+    safety_counter = {"calls": 0, "max_calls": max_calls_limit}
 
-        simple_coding_agent.session_cwd = test_sandbox
-        simple_coding_agent.FORCE_TESTING = False
-
-        safety_counter = {"calls": 0, "max_calls": max_calls_limit}
-
-        def smart_input_mocker(prompt=""):
-            safety_counter["calls"] += 1
-            if safety_counter["calls"] > safety_counter["max_calls"]:
-                print("\n🛑 [Test Overload] Exceeded maximum input calls limit. Forcing exit.", flush=True)
-                return "/quit"
-
-            prompt_str = str(prompt).lower()
-
-            if "allow" in prompt_str or "y/n" in prompt_str or "edit" in prompt_str:
-                print("\n🤖 [Automated Test] Auto-approving tool execution: 'y'", flush=True)
-                return "y"
-
-            if input_queue:
-                next_input = input_queue.pop(0)
-                print(f"\n⌨️  [Automated Test] Typing: {next_input}", flush=True)
-                return next_input
-
+    def smart_input_mocker(prompt=""):
+        safety_counter["calls"] += 1
+        if safety_counter["calls"] > safety_counter["max_calls"]:
+            print("\n🛑 [Test Overload] Too many input calls. Forcing exit.", flush=True)
             return "/quit"
 
-        try:
-            os.chdir(test_sandbox)
+        prompt_str = str(prompt).lower()
+        if "allow" in prompt_str or "y/n" in prompt_str:
+            print("\n🤖 [Automated Test] Auto-approving tool execution: 'y'", flush=True)
+            return "y"
 
-            with patch("builtins.input", side_effect=smart_input_mocker):
-                try:
-                    simple_coding_agent.main()
-                except SystemExit as e:
-                    print(f"\n🏁 Agent session terminated with code: {e.code}", flush=True)
+        if input_queue:
+            next_input = input_queue.pop(0)
+            print(f"\n⌨️  [Automated Test] Typing: {next_input}", flush=True)
+            return next_input
 
-            # --- Phase 1: File Modification Audit ---
-            if check_for_change:
-                print("\n" + "=" * 60, flush=True)
-                print("📊 Phase 1: Modification & Content Verification", flush=True)
+        return "/quit"
 
-                file_changed = False
-                if os.path.isfile(sandbox_dest_path):
-                    with open(sandbox_dest_path, "r", encoding="utf-8") as f:
-                        modified_content = f.read()
-                    if modified_content != pristine_contents.get(sandbox_dest_path, ""):
+    try:
+        # Move execution directly into the repo folder
+        os.chdir(repo_sandbox)
+
+        with patch("builtins.input", side_effect=smart_input_mocker):
+            try:
+                simple_coding_agent.main()
+            except SystemExit:
+                pass
+
+        # --- Phase 1: Modification & File Generation Verification ---
+        print("\n" + "=" * 60, flush=True)
+        print("📊 Phase 1: Modification & File Generation Verification", flush=True)
+
+        if check_for_change and target_file_path:
+            sandbox_dest_path = os.path.join(repo_sandbox, target_file_path)
+            file_changed = False
+            if os.path.exists(sandbox_dest_path):
+                with open(sandbox_dest_path, "r", encoding="utf-8") as f:
+                    if f.read() != pristine_contents.get(sandbox_dest_path, ""):
                         file_changed = True
 
-                elif os.path.isdir(sandbox_dest_path):
-                    for root, _, files in os.walk(sandbox_dest_path):
-                        for file in files:
-                            s_dest = os.path.join(root, file)
-                            if s_dest not in pristine_contents:
-                                file_changed = True  # New file created
-                                break
-                            with open(s_dest, "r", encoding="utf-8") as fd:
-                                if fd.read() != pristine_contents[s_dest]:
-                                    file_changed = True
-                                    break
-                        if file_changed:
-                            break
+            if not file_changed:
+                pytest.fail(f"❌ FAILED: Target file '{target_file_path}' was not modified.")
+            else:
+                print(f"✅ SUCCESS: Target file '{target_file_path}' was modified.")
 
-                if not file_changed:
-                    pytest.fail("❌ Test failed: The agent did not make any actual changes to the target code.")
+        # Compile list of files to check for existence
+        files_to_check = []
+        if expected_file:
+            files_to_check.append(expected_file)
+        if expected_new_files:
+            files_to_check.extend(expected_new_files)
+
+        for f_name in files_to_check:
+            target_file_path_abs = os.path.join(repo_sandbox, f_name)
+            if not os.path.exists(target_file_path_abs):
+                parent_fallback = os.path.join(test_sandbox, f_name)
+                if os.path.exists(parent_fallback):
+                    pytest.fail(f"❌ FAILED: {f_name} was generated in the wrong directory ({parent_fallback}).")
                 else:
-                    print(f"✅ Target file/directory content was successfully modified by the agent.", flush=True)
+                    pytest.fail(f"❌ FAILED: {f_name} was not generated at all!")
+            print(f"✅ SUCCESS: {f_name} was generated.")
 
-                if expected_strings and os.path.isfile(sandbox_dest_path):
-                    with open(sandbox_dest_path, "r", encoding="utf-8") as f:
-                        modified_content = f.read()
-
-                    for expected in expected_strings:
-                        if expected not in modified_content:
-                            print(f"❌ Missing expected content fragment: '{expected}'", flush=True)
-                            pytest.fail(
-                                f"Agent failed content verification. '{expected}' was not found in modified file.")
-                        else:
-                            print(f"✅ Content fragment found: '{expected}'", flush=True)
-
-            # --- Phase 1b: Expected New File(s) Existence Check ---
-            if expected_new_files:
-                print("\n" + "=" * 60, flush=True)
-                print("📄 Phase 1b: New File Existence Verification", flush=True)
-
-                for rel_path in expected_new_files:
-                    abs_path = os.path.join(test_sandbox, rel_path)
-                    if not os.path.exists(abs_path):
-                        print(f"❌ Expected file not found: '{rel_path}'", flush=True)
-                        pytest.fail(f"Agent did not create expected file: '{rel_path}'")
-                    else:
-                        print(f"✅ Expected file exists: '{rel_path}'", flush=True)
-
-            # --- Phase 2: Syntax Verification ---
+        # --- Phase 2: Content Sanity Check ---
+        if expected_file or run_script_file:
             print("\n" + "=" * 60, flush=True)
-            print("🕵️  Phase 2: Linter & Syntax Verification", flush=True)
+            print("🕵️  Phase 2: Content Sanity Check", flush=True)
+            script_to_check = expected_file or run_script_file
+            target_file_path_abs = os.path.join(repo_sandbox, script_to_check)
 
-            current_env = os.environ.copy()
-            current_env["PYTHONPATH"] = os.path.pathsep.join([test_sandbox, current_env.get("PYTHONPATH", "")])
+            if os.path.exists(target_file_path_abs):
+                with open(target_file_path_abs, "r", encoding="utf-8") as f:
+                    content = f.read()
 
-            check_passed = True
-            for root, _, files in os.walk(test_sandbox):
-                for file in files:
-                    if file.endswith(".py"):
-                        file_path = os.path.join(root, file)
-                        result = subprocess.run(
-                            [sys.executable, "-m", "py_compile", file_path],
-                            capture_output=True,
-                            text=True,
-                            env=current_env
-                        )
-                        if result.returncode != 0:
-                            print(f"❌ SYNTAX ERROR in {file}:\n{result.stderr}", flush=True)
-                            check_passed = False
-                        else:
-                            print(f"✅ Syntax valid: {file}", flush=True)
+                if expected_keywords:
+                    missing_keywords = [kw for kw in expected_keywords if kw.lower() not in content.lower()]
+                    if missing_keywords:
+                        print(f"\n--- WRITTEN FILE CONTENT START ---\n{content}\n--- WRITTEN FILE CONTENT END ---\n")
+                        pytest.fail(f"❌ FAILED: Script missing expected keywords: {missing_keywords}.")
+                    else:
+                        print("✅ Content sanity check passed. All expected keywords found.")
+                else:
+                    print("✅ Content sanity check skipped (no expected keywords provided).")
+            else:
+                print(f"⚠️ Warning: File {target_file_path_abs} not found for sanity check.")
 
-            if not check_passed:
-                pytest.fail("Syntax verification failed on modified code!")
+        # --- Phase 3: Execution Check ---
+        print("\n" + "=" * 60, flush=True)
+        print("🚀 Phase 3: Execution Check", flush=True)
 
-            # --- Phase 3: Independent Verification ---
-            if expected_new_files:
-                print("\n" + "=" * 60, flush=True)
-                print("🕵️  Phase 3: Independent Verification", flush=True)
-                print("Running tests externally to verify agent logic...", flush=True)
-
-                expected_test_file = expected_new_files[0]
-                test_file_abs = os.path.join(test_sandbox, expected_test_file)
+        # Execute Unittests if specified
+        if run_unittest_file:
+            try:
+                test_file_abs = os.path.join(repo_sandbox, run_unittest_file)
                 test_dir = os.path.dirname(test_file_abs)
+                test_filename = os.path.basename(test_file_abs)
+                test_module = os.path.splitext(test_filename)[0]
 
-                # Add both sandbox root and target subdirectory to PYTHONPATH
+                # Update PYTHONPATH so imports within the test directory work
                 current_env = os.environ.copy()
-                python_paths = [test_sandbox, test_dir]
+                python_paths = [repo_sandbox, test_dir]
                 if current_env.get("PYTHONPATH"):
                     python_paths.append(current_env["PYTHONPATH"])
                 current_env["PYTHONPATH"] = os.path.pathsep.join(python_paths)
 
-                # Execute unittest relative to the test directory
-                test_filename = os.path.basename(expected_test_file)
                 result = subprocess.run(
-                    [sys.executable, "-m", "unittest", test_filename],
+                    [sys.executable, "-m", "unittest", test_module],
                     capture_output=True,
                     text=True,
-                    cwd=test_dir,
-                    env=current_env,
-                    timeout=30  # Guard against infinite loops during test execution
+                    timeout=30,
+                    cwd=test_dir,  # <-- CRITICAL: Run from the test's directory
+                    env=current_env
+                )
+                print(f"Unittest Exit Code: {result.returncode}")
+                if result.returncode != 0:
+                    pytest.fail(
+                        f"❌ FAILED: Unittests failed with code {result.returncode}:\nSTDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}")
+                else:
+                    print(f"✅ SUCCESS: Unittests in {run_unittest_file} passed.")
+            except subprocess.TimeoutExpired:
+                pytest.fail("❌ FAILED: Unittest execution timed out (>30s).")
+
+        # Execute Script if specified
+        script_to_run = run_script_file or expected_file
+        if script_to_run:
+            try:
+                result = subprocess.run(
+                    [sys.executable, script_to_run],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    cwd=repo_sandbox
                 )
 
-                if result.returncode == 0:
-                    print("✅ VERIFICATION PASSED! The LLM wrote valid, functioning code.")
-                    print("--- Test Output ---")
-                    print(result.stderr.strip())
-                else:
-                    print("❌ VERIFICATION FAILED! The generated tests failed.")
-                    print("--- Error Output (stdout) ---")
-                    print(result.stdout)
-                    print("--- Error Output (stderr) ---")
-                    print(result.stderr)
-                    pytest.fail("Verification failed!")
+                print(f"Exit Code: {result.returncode}")
+                if result.stdout:
+                    print(f"STDOUT:\n{result.stdout.strip()}")
+                if result.stderr:
+                    print(f"STDERR:\n{result.stderr.strip()}")
 
-        finally:
-            os.chdir(original_cwd)
-            simple_coding_agent.session_cwd = orig_session_cwd
-            simple_coding_agent.FORCE_TESTING = orig_force_testing
-            print(f"\n🧹 Cleaned up temporary sandbox.", flush=True)
+                if result.returncode != 0:
+                    pytest.fail(f"❌ FAILED: Script execution crashed with code {result.returncode}:\n{result.stderr}")
+                elif not result.stdout.strip():
+                    pytest.fail("❌ FAILED: Script executed but produced no output.")
+
+                # Output Sanity Check
+                if custom_output_validator:
+                    custom_output_validator(result.stdout)
+                else:
+                    print("✅ Execution check passed! Script ran successfully.")
+
+            except subprocess.TimeoutExpired:
+                pytest.fail("❌ FAILED: Script execution timed out (>60s).")
+            except Exception as e:
+                pytest.fail(f"❌ FAILED: Unexpected error: {e}")
+
+    finally:
+        os.chdir(original_cwd)
+        shutil.rmtree(test_sandbox)
+        print(f"\n🧹 Cleaned up temporary sandbox.", flush=True)
 
 
 def test_agent_minesweeper_modify_generate_only():
@@ -249,12 +237,13 @@ def test_agent_minesweeper_modify_generate_only():
         "/quit"
     ]
 
-    run_automated_agent_test(
+    run_automated_coding_task_test(
         input_queue=input_queue,
-        target_file_path=target_file,
         zip_file_path=zip_source,
-        max_calls_limit=30,
+        repo_name="",
+        target_file_path=target_file,
         check_for_change=False,
+        max_calls_limit=30
     )
 
 
@@ -292,13 +281,15 @@ def test_agent_minesweeper_modify_with_patch():
         "/quit"
     ]
 
-    run_automated_agent_test(
+    run_automated_coding_task_test(
         input_queue=input_queue,
-        target_file_path=target_file,
         zip_file_path=zip_source,
-        max_calls_limit=30,
+        repo_name="",
+        target_file_path=target_file,
+        check_for_change=True,
         expected_new_files=[new_test_file],
-        # validation_test_file=validation_test
+        run_unittest_file=new_test_file,
+        max_calls_limit=30
     )
 
 

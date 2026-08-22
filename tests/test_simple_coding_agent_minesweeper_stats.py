@@ -73,8 +73,10 @@ def run_automated_coding_task_test(
     with zipfile.ZipFile(source_zip_path, 'r') as zip_ref:
         zip_ref.extractall(test_sandbox)
 
+    # Target the repo directory
     repo_sandbox = os.path.join(test_sandbox, repo_name)
 
+    # Snapshot pristine file if we are checking for modifications
     pristine_contents = {}
     if check_for_change and target_file_path:
         sandbox_dest_path = os.path.join(repo_sandbox, target_file_path)
@@ -107,6 +109,7 @@ def run_automated_coding_task_test(
         return "/quit"
 
     try:
+        # Move execution directly into the repo folder
         os.chdir(repo_sandbox)
 
         with patch("builtins.input", side_effect=smart_input_mocker):
@@ -132,6 +135,7 @@ def run_automated_coding_task_test(
             else:
                 print(f"✅ SUCCESS: Target file '{target_file_path}' was modified.")
 
+        # Compile list of files to check for existence
         files_to_check = []
         if expected_file:
             files_to_check.append(expected_file)
@@ -155,45 +159,59 @@ def run_automated_coding_task_test(
             script_to_check = expected_file or run_script_file
             target_file_path_abs = os.path.join(repo_sandbox, script_to_check)
 
-            with open(target_file_path_abs, "r", encoding="utf-8") as f:
-                content = f.read()
+            if os.path.exists(target_file_path_abs):
+                with open(target_file_path_abs, "r", encoding="utf-8") as f:
+                    content = f.read()
 
-            if expected_keywords:
-                missing_keywords = [kw for kw in expected_keywords if kw.lower() not in content.lower()]
-                if missing_keywords:
-                    print(f"\n--- WRITTEN FILE CONTENT START ---\n{content}\n--- WRITTEN FILE CONTENT END ---\n")
-                    pytest.fail(f"❌ FAILED: Script missing expected keywords: {missing_keywords}.")
+                if expected_keywords:
+                    missing_keywords = [kw for kw in expected_keywords if kw.lower() not in content.lower()]
+                    if missing_keywords:
+                        print(f"\n--- WRITTEN FILE CONTENT START ---\n{content}\n--- WRITTEN FILE CONTENT END ---\n")
+                        pytest.fail(f"❌ FAILED: Script missing expected keywords: {missing_keywords}.")
+                    else:
+                        print("✅ Content sanity check passed. All expected keywords found.")
                 else:
-                    print("✅ Content sanity check passed. All expected keywords found.")
+                    print("✅ Content sanity check skipped (no expected keywords provided).")
             else:
-                print("✅ Content sanity check skipped (no expected keywords provided).")
+                print(f"⚠️ Warning: File {target_file_path_abs} not found for sanity check.")
 
         # --- Phase 3: Execution Check ---
         print("\n" + "=" * 60, flush=True)
         print("🚀 Phase 3: Execution Check", flush=True)
 
+        # Execute Unittests if specified
         if run_unittest_file:
             try:
                 test_file_abs = os.path.join(repo_sandbox, run_unittest_file)
+                test_dir = os.path.dirname(test_file_abs)
                 test_filename = os.path.basename(test_file_abs)
                 test_module = os.path.splitext(test_filename)[0]
+
+                # Update PYTHONPATH so imports within the test directory work
+                current_env = os.environ.copy()
+                python_paths = [repo_sandbox, test_dir]
+                if current_env.get("PYTHONPATH"):
+                    python_paths.append(current_env["PYTHONPATH"])
+                current_env["PYTHONPATH"] = os.path.pathsep.join(python_paths)
 
                 result = subprocess.run(
                     [sys.executable, "-m", "unittest", test_module],
                     capture_output=True,
                     text=True,
                     timeout=30,
-                    cwd=repo_sandbox
+                    cwd=test_dir,  # <-- CRITICAL: Run from the test's directory
+                    env=current_env
                 )
                 print(f"Unittest Exit Code: {result.returncode}")
                 if result.returncode != 0:
                     pytest.fail(
-                        f"❌ FAILED: Unittests failed with code {result.returncode}:\n{result.stderr}\n{result.stdout}")
+                        f"❌ FAILED: Unittests failed with code {result.returncode}:\nSTDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}")
                 else:
                     print(f"✅ SUCCESS: Unittests in {run_unittest_file} passed.")
             except subprocess.TimeoutExpired:
                 pytest.fail("❌ FAILED: Unittest execution timed out (>30s).")
 
+        # Execute Script if specified
         script_to_run = run_script_file or expected_file
         if script_to_run:
             try:
@@ -216,7 +234,7 @@ def run_automated_coding_task_test(
                 elif not result.stdout.strip():
                     pytest.fail("❌ FAILED: Script executed but produced no output.")
 
-                # Custom Output Sanity Check handled via injected validator
+                # Output Sanity Check
                 if custom_output_validator:
                     custom_output_validator(result.stdout)
                 else:
