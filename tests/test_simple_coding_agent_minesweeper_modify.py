@@ -28,50 +28,150 @@ def test_agent_minesweeper_modify_generate_only():
     )
 
 
-def test_agent_minesweeper_modify_with_patch():
-    target_file = "minesweeper-solve/minesweeper.py"
-    zip_source = "test_data/minesweeper-solve.zip"
-    new_test_file = "minesweeper-solve/test_run_game_loop.py"
+# def test_agent_minesweeper_modify_with_patch():
+#     target_file = "minesweeper-solve/minesweeper.py"
+#     zip_source = "test_data/minesweeper-solve.zip"
+#     new_test_file = "minesweeper-solve/test_run_game_loop.py"
+#
+#     input_queue = [
+#         "Read the code in `minesweeper-solve/minesweeper.py`. "
+#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
+#         "/send",
+#
+#         "Good. Now I will need you to change the run_game_loop function so that it has a return value. "
+#         "It should return True if the game was won and otherwise it should return False. ",
+#         "Use the `patch_file` tool to make targeted replacements. ",
+#         "CRITICAL RULES FOR PATCHING:\n"
+#         "1. Replace the existing `break` statements inside the win/loss/quit conditions with `return True` or `return False`.\n"
+#         "2. CONTEXT RULE: You MUST include at least 3 lines of surrounding code in your `old_content` to uniquely identify the location. DO NOT just put 'break'.\n"
+#         "3. You MUST preserve the exact leading spaces (indentation) in both `old_content` and `new_content` to prevent Python IndentationErrors.\n"
+#         "4. ANTI-LOOP RULE: If `patch_file` fails to find your `old_content`, DO NOT blindly add more lines of context. Instead, use the `read_file` tool again to verify the exact text, spaces, and newlines.",
+#         "/send",
+#
+#         # --- PHASE 2: Testing ---
+#         "Great. Now write a test file named `minesweeper-solve/test_run_game_loop.py` using the `unittest` framework "
+#         "that tests whether the run_game_loop function in `minesweeper-solve/minesweeper.py` now returns a boolean value. "
+#         "CRITICAL: Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
+#         "properly escaped (use \\n for newlines). Do not use a `<payload>` block.",
+#         "/send",
+#
+#         "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
+#         "If they all passed, just reply 'All good'.",
+#         "/send",
+#
+#         "/quit"
+#     ]
+#
+#     run_automated_coding_task_test(
+#         input_queue=input_queue,
+#         zip_file_path=zip_source,
+#         repo_name="",
+#         target_file_path=target_file,
+#         check_for_change=True,
+#         expected_new_files=[new_test_file],
+#         run_unittest_file=new_test_file,
+#         max_calls_limit=30
+#     )
 
-    input_queue = [
-        "Read the code in `minesweeper-solve/minesweeper.py`. "
-        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
-        "/send",
 
-        "Good. Now I will need you to change the run_game_loop function so that it has a return value. "
-        "It should return True if the game was won and otherwise it should return False. ",
-        "Use the `patch_file` tool to make targeted replacements. ",
-        "CRITICAL RULES FOR PATCHING:\n"
-        "1. Replace the existing `break` statements inside the win/loss/quit conditions with `return True` or `return False`.\n"
-        "2. CONTEXT RULE: You MUST include at least 3 lines of surrounding code in your `old_content` to uniquely identify the location. DO NOT just put 'break'.\n"
-        "3. You MUST preserve the exact leading spaces (indentation) in both `old_content` and `new_content` to prevent Python IndentationErrors.\n"
-        "4. ANTI-LOOP RULE: If `patch_file` fails to find your `old_content`, DO NOT blindly add more lines of context. Instead, use the `read_file` tool again to verify the exact text, spaces, and newlines.",
-        "/send",
+# def test_agent_minesweeper_modify_with_patch_large_block():
+#     target_file = "minesweeper-solve/minesweeper.py"
+#     zip_source = "test_data/minesweeper-solve.zip"
+#     new_test_file = "minesweeper-solve/test_run_game_loop.py"
+#
+#     input_queue = [
+#         "Read the code in `minesweeper-solve/minesweeper.py`. "
+#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
+#         "/send",
+#
+#         "Good. Now I will need you to change the run_game_loop function so that it has a return value. "
+#         "It should return True if the game was won and otherwise it should return False. ",
+#         "Use the `patch_file` tool to make this change. "
+#         "CRITICAL RULES FOR PATCHING:\n"
+#         "1. Set `old_content` to the ENTIRE existing `run_game_loop` function, from the `def run_game_loop(...):` "
+#         "line down to (but not including) the next `def` line. Copy it EXACTLY as it appears in the file you just read, "
+#         "including all indentation, blank lines, comments, and docstrings.\n"
+#         "2. Set `new_content` to the FULL rewritten function with the same signature, replacing the `break` statements "
+#         "in the win/loss/quit branches with `return True` or `return False` as appropriate. Keep every other line unchanged.\n"
+#         "3. Do NOT patch individual lines or small snippets — replace the whole function body in a single `patch_file` call.\n"
+#         "4. Preserve the exact leading spaces (indentation) in both `old_content` and `new_content` to prevent "
+#         "Python IndentationErrors.",
+#         "/send",
+#
+#         # --- PHASE 2: Testing ---
+#         "Great. Now write a test file named `minesweeper-solve/test_run_game_loop.py` using the `unittest` framework "
+#         "that tests whether the run_game_loop function in `minesweeper-solve/minesweeper.py` now returns a boolean value. "
+#         "CRITICAL: Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
+#         "properly escaped (use \\n for newlines). Do not use a `<payload>` block.",
+#         "/send",
+#
+#         "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
+#         "If they all passed, just reply 'All good'.",
+#         "/send",
+#
+#         "/quit"
+#     ]
+#
+#     run_automated_coding_task_test(
+#         input_queue=input_queue,
+#         zip_file_path=zip_source,
+#         repo_name="",
+#         target_file_path=target_file,
+#         check_for_change=True,
+#         expected_new_files=[new_test_file],
+#         run_unittest_file=new_test_file,
+#         max_calls_limit=30
+#     )
 
-        # --- PHASE 2: Testing ---
-        "Great. Now write a test file named `minesweeper-solve/test_run_game_loop.py` using the `unittest` framework "
-        "that tests whether the run_game_loop function in `minesweeper-solve/minesweeper.py` now returns a boolean value. "
-        "CRITICAL: Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
-        "properly escaped (use \\n for newlines). Do not use a `<payload>` block.",
-        "/send",
 
-        "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
-        "If they all passed, just reply 'All good'.",
-        "/send",
-
-        "/quit"
-    ]
-
-    run_automated_coding_task_test(
-        input_queue=input_queue,
-        zip_file_path=zip_source,
-        repo_name="",
-        target_file_path=target_file,
-        check_for_change=True,
-        expected_new_files=[new_test_file],
-        run_unittest_file=new_test_file,
-        max_calls_limit=30
-    )
+# def test_agent_minesweeper_modify_with_rewrite():
+#     target_file = "minesweeper-solve/minesweeper.py"
+#     zip_source = "test_data/minesweeper-solve.zip"
+#     new_test_file = "minesweeper-solve/test_run_game_loop.py"
+#
+#     input_queue = [
+#         "Read the code in `minesweeper-solve/minesweeper.py`. "
+#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
+#         "/send",
+#
+#         "Good. Now I will need you to change the run_game_loop function so that it has a return value. "
+#         "It should return True if the game was won and otherwise it should return False. ",
+#         "Use the `write_file` tool to write out the COMPLETE, updated content of "
+#         "`minesweeper-solve/minesweeper.py` in one call. "
+#         "CRITICAL RULES:\n"
+#         "1. Include the ENTIRE file, not just the run_game_loop function — every import, every function, "
+#         "everything you read earlier, unchanged except for the specific edit below.\n"
+#         "2. Inside run_game_loop, replace the `break` statements in the win/loss/quit branches with "
+#         "`return True` (win) or `return False` (loss/quit) as appropriate. Do not change any other logic.\n"
+#         "3. Put the full file content directly inside the JSON `content` field, properly escaped "
+#         "(use \\n for newlines). Do not use a `<payload>` block.\n"
+#         "4. Do NOT use `patch_file` for this change — write the whole file with `write_file` instead.",
+#         "/send",
+#
+#         # --- PHASE 2: Testing ---
+#         "Great. Now write a test file named `minesweeper-solve/test_run_game_loop.py` using the `unittest` framework "
+#         "that tests whether the run_game_loop function in `minesweeper-solve/minesweeper.py` now returns a boolean value. "
+#         "CRITICAL: Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
+#         "properly escaped (use \\n for newlines). Do not use a `<payload>` block.",
+#         "/send",
+#
+#         "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
+#         "If they all passed, just reply 'All good'.",
+#         "/send",
+#
+#         "/quit"
+#     ]
+#
+#     run_automated_coding_task_test(
+#         input_queue=input_queue,
+#         zip_file_path=zip_source,
+#         repo_name="",
+#         target_file_path=target_file,
+#         check_for_change=True,
+#         expected_new_files=[new_test_file],
+#         run_unittest_file=new_test_file,
+#         max_calls_limit=30
+#     )
 
 
 # def test_agent_minesweeper_modify_with_rewrite():

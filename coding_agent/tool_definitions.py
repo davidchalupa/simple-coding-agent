@@ -155,7 +155,6 @@ def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_c
 
 
 def replace_lines(filepath: str, start_line: int, end_line: int, content: str) -> str:
-    """Replaces a range of lines (inclusive, 1-indexed) with content."""
     path = Path(filepath)
     if not path.exists():
         return f"Error: File '{filepath}' does not exist."
@@ -165,12 +164,18 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str) -
     if start_line < 1 or end_line > len(lines) or start_line > end_line:
         return f"Error: Invalid line range [{start_line}, {end_line}] for file with {len(lines)} lines."
 
-    # Convert 1-based indices to 0-based slice
-    new_lines = [line + "\n" if not line.endswith("\n") else line for line in content.splitlines()]
+    old_slice = "".join(lines[start_line - 1:end_line])
+
+    new_lines = [line + "\n" for line in content.splitlines()]
     lines[start_line - 1:end_line] = new_lines
 
     path.write_text("".join(lines), encoding="utf-8")
-    return f"Successfully replaced lines {start_line}-{end_line} in {filepath}."
+
+    return (
+        f"Successfully replaced lines {start_line}-{end_line} in {filepath}.\n"
+        f"--- Old content (for verification) ---\n{old_slice}"
+        f"--- New content ---\n{content}\n"
+    )
 
 
 def patch_file(filepath: str, old_content: str, new_content: str) -> str:
