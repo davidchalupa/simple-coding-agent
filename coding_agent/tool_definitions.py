@@ -174,33 +174,36 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str) -
 
 
 def patch_file(filepath: str, old_content: str, new_content: str) -> str:
-    """
-    Anchor-based, content-addressed replace.
-    """
     path = Path(filepath)
     if not path.exists():
         return f"Error: File '{filepath}' does not exist."
     if not old_content:
         return "Error: 'old_content' must not be empty. Provide the exact existing code to replace."
 
-    # --- STRICT CONTEXT VALIDATION ---
-    # Require at least 3 lines of context to prevent accidental replacement
-    # of single generic lines (like `break` or `return`).
-    if old_content.count('\n') < 2:
-        return (
-            "Error: 'old_content' lacks sufficient context. You must include at least "
-            "3 lines of code (the target line plus preceding/following lines) to ensure a safe, "
-            "unambiguous match. Please try again with more context."
-        )
-
+    # Read + normalize BEFORE any check that needs to inspect file content
     raw = path.read_text(encoding="utf-8")
-
-    # Normalize line endings for matching so CRLF vs LF can't derail an otherwise
-    # correct match; restore the file's original convention on write.
     uses_crlf = "\r\n" in raw
     text = raw.replace("\r\n", "\n")
     old = old_content.replace("\r\n", "\n")
     new = new_content.replace("\r\n", "\n")
+
+    # --- STRICT CONTEXT VALIDATION ---
+    if old_content.count('\n') < 2:
+        line_count = old_content.count('\n') + 1
+        idx = text.find(old.strip())
+        context_hint = ""
+        if idx != -1:
+            start = text.rfind('\n', 0, idx)
+            end = text.find('\n', idx + len(old))
+            prev_line_start = text.rfind('\n', 0, start) if start != -1 else -1
+            next_line_end = text.find('\n', end + 1) if end != -1 else -1
+            if prev_line_start != -1 and next_line_end != -1:
+                suggested = text[prev_line_start+1:next_line_end]
+                context_hint = f"\nSuggested old_content:\n{suggested}"
+        return (
+            f"Error: 'old_content' has only {line_count} line(s); at least 3 lines are required."
+            f"{context_hint}"
+        )
 
     occurrences = text.count(old)
 

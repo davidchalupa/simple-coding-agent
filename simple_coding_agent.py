@@ -325,6 +325,9 @@ def main():
         consecutive_lint_failures = 0  # <-- Track repeated self-verification failures on the same turn
         last_verification_failure = None  # <-- Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
 
+        # Loop Guardrail: track recent signatures, not just the immediately previous one
+        recent_tool_signatures = []
+
         def check_context_guardrail(messages, llm, limit):
             """Calculates tokens and warns on memory overload."""
             try:
@@ -525,15 +528,21 @@ def main():
 
                 # Loop Guardrail
                 curr_sig = f"{tool_name}:{str(tool_args)}"
-                if curr_sig == last_tool_call_signature:
+                recent_tool_signatures.append(curr_sig)
+                recent_tool_signatures = recent_tool_signatures[-6:]  # keep a short rolling window
+
+                repeat_count = recent_tool_signatures.count(curr_sig)
+                if repeat_count >= 2:
                     consecutive_errors += 1
                     if consecutive_errors >= 3:
                         print("🛑 [Circuit Breaker] Agent loop. Forcing turn end.")
                         break
                     messages.append({"role": "user",
-                                     "content": "System Alert: Identical consecutive tool call blocked. Change arguments or stop."})
+                                     "content": f"System Alert: This exact tool call has been attempted {repeat_count} times "
+                                                f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
+                                                f"underlying issue (e.g. re-check content/context requirements) or try a "
+                                                f"different approach."})
                     continue
-                last_tool_call_signature = curr_sig
 
                 # --- EXECUTION ---
                 print(f"\n⚠️  AGENT REQUESTS EXECUTION: {tool_name}")
@@ -569,6 +578,13 @@ def main():
                     file_was_modified = file_was_modified or was_mod
                     print(f"⚙️  Tool execution finished.")
 
+                    # Auxiliary output of the tool_result, useful for debugging
+                    MAX_RESULT_PREVIEW = 400
+                    if len(tool_result) > MAX_RESULT_PREVIEW:
+                        preview = tool_result[:MAX_RESULT_PREVIEW]
+                        print(f"   Result ({len(tool_result)} chars, truncated): {preview}...")
+                    else:
+                        print(f"   Result: {tool_result}")
                     # Self-Verification
                     if SELF_VERIFY_PY_WRITES and was_mod and tool_name in ["write_file", "append_file",
                                                                            "patch_file"]:
