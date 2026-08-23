@@ -136,84 +136,73 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
     )
 
 
-# new integrated test: to be tuned properly
-# def test_agent_minesweeper_stats_modify_and_write_script():
-#     """
-#     1. Reads and modifies minesweeper.py to return a bool from run_game_loop.
-#     2. Writes a unittest file proving the boolean return type and executes it.
-#     3. Reads agent files and writes benchmark.py.
-#     4. Executes the benchmark script and validates stdout reporting (checking against empty board bug).
-#     """
-#     zip_target = "test_data/minesweeper-solve.zip"
-#     repo_name = "minesweeper-solve"
-#
-#     input_queue = [
-#         # --- Part 1: Modification & Unittest ---
-#         "Read the code in `minesweeper.py`. "
-#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
-#         "/send",
-#
-#         "Good. Now I will need you to change the run_game_loop function so that it has a return value. "
-#         "It should return True if the game was won and otherwise it should return False. ",
-#         "Use the `patch_file` tool to make targeted replacements. ",
-#         "CRITICAL RULES FOR PATCHING:\n"
-#         "1. Replace the existing `break` statements inside the win/loss/quit conditions with `return True` or `return False`.\n"
-#         "2. CONTEXT RULE: You MUST include at least 3 lines of surrounding code in your `old_content` to uniquely identify the location. DO NOT just put 'break'.\n"
-#         "3. You MUST preserve the exact leading spaces (indentation) in both `old_content` and `new_content` to prevent Python IndentationErrors.\n"
-#         "4. ANTI-LOOP RULE: If `patch_file` fails to find your `old_content`, DO NOT blindly add more lines of context. Instead, use the `read_file` tool again to verify the exact text, spaces, and newlines.",
-#         "/send",
-#
-#         "Great. Now write a test file named `test_run_game_loop.py` using the `unittest` framework "
-#         "that tests whether the run_game_loop function in `minesweeper.py` now returns a boolean value. "
-#         "CRITICAL: Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
-#         "properly escaped (use \\n for newlines). Do not use a `<payload>` block.",
-#         "/send",
-#
-#         "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
-#         "If they all passed, just reply 'All good'.",
-#         "/send",
-#
-#         # --- Part 2: Context gathering & Benchmark Script Generation ---
-#         "Use the `list_tree` (or equivalent) tool to view the files in this directory. "
-#         "Take note of all the `.py` files, especially the ones containing the agent implementations.",
-#         "/send",
-#
-#         "Now, use your `read_file` tool to inspect the agent implementation python file you just found. "
-#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire files. You can call the tool multiple times if needed.",
-#         "/send",
-#
-#         "Based on the code you read across those files, write the code for `benchmark.py`. "
-#         "CONSTRAINTS:\n"
-#         "1. Imports: import `run_game_loop`, `place_mines`, and `compute_counts` from `minesweeper.py`. Import the `get_action` callbacks (like ai_get_action and dfs_get_action) from `action_ai_agent.py`.\n"
-#         "2. Game Setup: You MUST properly initialize the board for each game by calling `place_mines` (e.g. 10 mines) and `compute_counts`. Do not run games on an empty board.\n"
-#         "3. Do not use command line arguments. The script MUST automatically run exactly 10 games for the Rule-based agent and 10 games for the DFS agent when executed directly.\n"
-#         "4. Calculate their success rates by keeping track of the new boolean return values from `run_game_loop`.\n"
-#         "5. Print the results to stdout showing the 'rate' or '%' and mentioning 'dfs'.\n\n"
-#         "CRITICAL: Just output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
-#         "/send",
-#
-#         "Perfect. Now use the `write_file` tool to save the code you just wrote into `benchmark.py`. "
-#         "You MUST use this exact raw format. Do not use markdown ```json blocks:\n\n"
-#         "<tool_call>{\"name\": \"write_file\", \"args\": {\"filepath\": \"benchmark.py\"}}</tool_call>\n"
-#         "<payload>\n[INSERT YOUR PYTHON CODE HERE]\n</payload>",
-#         "/send",
-#
-#         "Looks good, task complete.",
-#         "/send",
-#
-#         "/quit"
-#     ]
-#
-#     run_automated_coding_task_test(
-#         input_queue=input_queue,
-#         zip_file_path=zip_target,
-#         repo_name=repo_name,
-#         target_file_path="minesweeper.py",
-#         check_for_change=True,
-#         expected_new_files=["test_run_game_loop.py", "benchmark.py"],
-#         run_unittest_file="test_run_game_loop.py",
-#         run_script_file="benchmark.py",
-#         max_calls_limit=80,
-#         custom_output_validator=check_benchmark_success_rates
-#     )
+def test_agent_minesweeper_stats_modify_and_write_script():
+    """
+    Combined multi-phase test optimized for Qwen 2.5 8B:
+    Phase 1: Patches run_game_loop in minesweeper.py to return True/False.
+    Phase 2: Inspects agent implementations and writes benchmark.py.
+    """
+    zip_source = "test_data/minesweeper-solve.zip"
+    repo_name = ""
+    target_file = "minesweeper-solve/minesweeper.py"
+    new_script_file = "minesweeper-solve/benchmark.py"
+
+    input_queue = [
+        # --- PHASE 1: Modify run_game_loop ---
+        "Read the code in `minesweeper-solve/minesweeper.py`. "
+        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
+        "/send",
+
+        "Good. Now change the `run_game_loop` function in `minesweeper-solve/minesweeper.py` so that it returns a boolean.\n"
+        "Replace the `break` statements for each of the 3 conditions using `patch_file`:\n"
+        "1. Win condition (`revealed_count >= total_to_reveal`): replace `break` with `return True`\n"
+        "2. Loss condition (`BOOM — you clicked a mine`): replace `break` with `return False`\n"
+        "3. Quit condition (`action == 'q'`): replace `break` with `return False`\n\n"
+        "CRITICAL RULES FOR PATCHING:\n"
+        "- CONTEXT RULE: Include at least 3 surrounding lines in `old_content` to uniquely identify each spot.\n"
+        "- INDENTATION RULE: Preserve exact leading spaces in `old_content` and `new_content`.\n"
+        "- TERMINATION RULE: Once all 3 patches are applied, stop calling tools and reply 'Patches applied successfully'.",
+        "/send",
+
+        # --- PHASE 2: Inspect workspace and generate benchmark script ---
+        "Use the `list_tree` tool to view files in the `minesweeper-solve` directory. "
+        "Take note of all `.py` files containing agent implementations.",
+        "/send",
+
+        "Now use `read_file` to inspect `minesweeper-solve/minesweeper.py` and `minesweeper-solve/action_ai_agent.py`. "
+        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call.",
+        "/send",
+
+        "Based on the code read, write the code for `benchmark.py`.\n"
+        "CRITICAL CONSTRAINTS:\n"
+        "1. Be minimalistic and do NOT rewrite existing functions or classes.\n"
+        "2. Imports: You MUST import `place_mines`, `compute_counts`, `handle_click`, `run_game_loop` from `minesweeper.py` and `ai_get_action`, `dfs_get_action` from `action_ai_agent.py`.\n"
+        "3. Do NOT use `main_*` launcher functions. Pass actual `get_action` callbacks to `run_game_loop`.\n"
+        "4. Automatically run 10 games for Rule-based agent and 10 games for DFS agent when executed directly.\n"
+        "5. Calculate success rates and print results to standard output.\n\n"
+        "Just output the python code in a standard ```python markdown block. DO NOT use tools yet.",
+        "/send",
+
+        "Now use the `write_file` tool to save the python code into `minesweeper-solve/benchmark.py`.\n"
+        "CRITICAL JSON RULE: To avoid escaping issues, use SINGLE QUOTES (`'`) for all strings in your Python code (e.g., `if __name__ == '__main__':` and `print(f'{agent_name}...')`). Do not use literal backslashes (`\\`) to escape double quotes.\n"
+        "Pass `filepath: \"minesweeper-solve/benchmark.py\"` and put the full python code inside the `content` argument.",
+        "/send",
+        "Looks good, task complete.",
+        "/send",
+
+        "/quit"
+    ]
+
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        zip_file_path=zip_source,
+        repo_name=repo_name,
+        target_file_path=target_file,
+        check_for_change=True,
+        expected_new_files=[new_script_file],
+        run_script_file=new_script_file,
+        expected_keywords=["import", "10"],
+        custom_output_validator=check_benchmark_success_rates,
+        max_calls_limit=40
+    )
 
