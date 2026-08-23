@@ -4,7 +4,6 @@ import shutil
 import zipfile
 import subprocess
 import sys
-import re
 from unittest.mock import patch
 import pytest
 

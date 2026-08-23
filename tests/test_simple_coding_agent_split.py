@@ -1,5 +1,6 @@
 import os
 import shutil
+
 from tests.test_utils.test_runner import run_automated_coding_task_test
 
 

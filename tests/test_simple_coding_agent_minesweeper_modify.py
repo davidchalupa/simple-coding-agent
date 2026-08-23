@@ -1,7 +1,6 @@
 from tests.test_utils.test_runner import run_automated_coding_task_test
 
 
-
 def test_agent_minesweeper_modify_generate_only():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"

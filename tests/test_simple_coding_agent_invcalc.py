@@ -1,127 +1,28 @@
-import sys
 import os
-import tempfile
 import shutil
-import zipfile
-import subprocess
-from unittest.mock import patch
-import pytest
+import py_compile
 
-import simple_coding_agent
+from tests.test_utils.test_runner import run_automated_coding_task_test
 
 
-def run_automated_agent_test(
-        input_queue,
-        target_file_path,
-        max_calls_limit=30,
-        expected_new_files=None,
-):
-    print(f"🧪 Starting Automated Agent Flow Test for: {target_file_path}...", flush=True)
-
+def setup_invcalc_sandbox(sandbox_dir):
+    """Copies the test_data/invcalc.py file into the sandbox to protect the original."""
     original_cwd = os.getcwd()
-    test_sandbox = tempfile.mkdtemp(prefix="agent_split_sandbox_")
-    print(f"📁 Created temporary sandbox at: {test_sandbox}", flush=True)
+    source_path = os.path.join(original_cwd, "test_data", "invcalc.py")
+    sandbox_dest_path = os.path.join(sandbox_dir, "test_data", "invcalc.py")
 
-    # --- Copy the REAL file into the sandbox to protect the original ---
-    source_path = os.path.join(original_cwd, target_file_path)
-    if not os.path.exists(source_path):
-        shutil.rmtree(test_sandbox)
-        pytest.fail(f"Real target file not found at: {source_path}")
-
-    sandbox_dest_path = os.path.join(test_sandbox, target_file_path)
     os.makedirs(os.path.dirname(sandbox_dest_path), exist_ok=True)
     shutil.copy2(source_path, sandbox_dest_path)
-    print(f"🌱 Copied real test file to sandbox: {target_file_path}", flush=True)
 
-    # --- State Setup & Injection ---
-    orig_session_cwd = getattr(simple_coding_agent, "session_cwd", None)
-    orig_force_testing = getattr(simple_coding_agent, "FORCE_TESTING", False)
 
-    simple_coding_agent.messages = []
-    simple_coding_agent.is_split_mode = False
-    simple_coding_agent.is_execute_mode = False
-    simple_coding_agent.sandbox_directory = None
-    simple_coding_agent.automated_followup = None
-    simple_coding_agent.has_prompted_for_tests = False
-
-    simple_coding_agent.session_cwd = test_sandbox
-    simple_coding_agent.FORCE_TESTING = False
-
-    safety_counter = {"calls": 0, "max_calls": max_calls_limit}
-
-    def smart_input_mocker(prompt=""):
-        safety_counter["calls"] += 1
-        if safety_counter["calls"] > safety_counter["max_calls"]:
-            print("\n🛑 [Test Overload] Exceeded maximum input calls limit. Forcing exit.", flush=True)
-            return "/quit"
-
-        prompt_str = str(prompt).lower()
-
-        if "allow" in prompt_str or "y/n" in prompt_str or "edit" in prompt_str:
-            print("\n🤖 [Automated Test] Auto-approving tool execution: 'y'", flush=True)
-            return "y"
-
-        if input_queue:
-            next_input = input_queue.pop(0)
-            print(f"\n⌨️  [Automated Test] Typing: {next_input}", flush=True)
-            return next_input
-
-        return "/quit"
-
+def validate_python_syntax(file_path):
+    """Replicates the Phase 2 Linter & Syntax Verification from the old runner."""
+    print(f"🕵️ Verifying syntax for: {file_path}", flush=True)
     try:
-        os.chdir(test_sandbox)
-
-        with patch("builtins.input", side_effect=smart_input_mocker):
-            try:
-                simple_coding_agent.main()
-            except SystemExit as e:
-                print(f"\n🏁 Agent session terminated with code: {e.code}", flush=True)
-
-        # --- Phase 1b: Expected New File(s) Existence Check ---
-        if expected_new_files:
-            print("\n" + "=" * 60, flush=True)
-            print("📄 Phase 1b: New File Existence Verification", flush=True)
-
-            for rel_path in expected_new_files:
-                abs_path = os.path.join(test_sandbox, rel_path)
-                if not os.path.exists(abs_path):
-                    print(f"❌ Expected file not found: '{rel_path}'", flush=True)
-                    pytest.fail(f"Agent did not create expected file: '{rel_path}'")
-                else:
-                    print(f"✅ Expected file exists: '{rel_path}'", flush=True)
-
-        # --- Phase 2: Syntax Verification ---
-        print("\n" + "=" * 60, flush=True)
-        print("🕵️  Phase 2: Linter & Syntax Verification", flush=True)
-
-        current_env = os.environ.copy()
-        current_env["PYTHONPATH"] = os.path.pathsep.join([test_sandbox, current_env.get("PYTHONPATH", "")])
-
-        check_passed = True
-        for root, _, files in os.walk(test_sandbox):
-            for file in files:
-                if file.endswith(".py"):
-                    file_path = os.path.join(root, file)
-                    result = subprocess.run(
-                        [sys.executable, "-m", "py_compile", file_path],
-                        capture_output=True,
-                        text=True,
-                        env=current_env
-                    )
-                    if result.returncode != 0:
-                        print(f"❌ SYNTAX ERROR in {file}:\n{result.stderr}", flush=True)
-                        check_passed = False
-                    else:
-                        print(f"✅ Syntax valid: {file}", flush=True)
-
-        if not check_passed:
-            pytest.fail("Syntax verification failed on modified code!")
-
-    finally:
-        os.chdir(original_cwd)
-        simple_coding_agent.session_cwd = orig_session_cwd
-        simple_coding_agent.FORCE_TESTING = orig_force_testing
-        print(f"\n🧹 Cleaned up temporary sandbox.", flush=True)
+        py_compile.compile(file_path, doraise=True)
+        print(f"✅ Syntax valid: {file_path}", flush=True)
+    except py_compile.PyCompileError as e:
+        raise AssertionError(f"❌ SYNTAX ERROR in {file_path}:\n{e}")
 
 
 def test_agent_modify_invcalc():
@@ -154,9 +55,10 @@ def test_agent_modify_invcalc():
         "/quit"
     ]
 
-    run_automated_agent_test(
+    run_automated_coding_task_test(
         input_queue=input_queue,
-        target_file_path=target_file,
+        setup_sandbox_hook=setup_invcalc_sandbox,
+        expected_file=output_file,
         max_calls_limit=30,
-        expected_new_files=[output_file],
+        custom_file_validator=validate_python_syntax
     )
