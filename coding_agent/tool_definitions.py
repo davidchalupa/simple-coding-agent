@@ -183,6 +183,16 @@ def patch_file(filepath: str, old_content: str, new_content: str) -> str:
     if not old_content:
         return "Error: 'old_content' must not be empty. Provide the exact existing code to replace."
 
+    # --- STRICT CONTEXT VALIDATION ---
+    # Require at least 3 lines of context to prevent accidental replacement
+    # of single generic lines (like `break` or `return`).
+    if old_content.count('\n') < 2:
+        return (
+            "Error: 'old_content' lacks sufficient context. You must include at least "
+            "3 lines of code (the target line plus preceding/following lines) to ensure a safe, "
+            "unambiguous match. Please try again with more context."
+        )
+
     raw = path.read_text(encoding="utf-8")
 
     # Normalize line endings for matching so CRLF vs LF can't derail an otherwise
@@ -195,6 +205,7 @@ def patch_file(filepath: str, old_content: str, new_content: str) -> str:
     occurrences = text.count(old)
 
     if occurrences == 0:
+        # Assuming _closest_match_hint is defined elsewhere in your toolset
         hint = _closest_match_hint(text, old)
         return (
             f"Error: 'old_content' was not found VERBATIM in '{filepath}' (0 exact matches).\n"
