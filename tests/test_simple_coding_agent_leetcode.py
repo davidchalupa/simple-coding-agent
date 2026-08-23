@@ -1,106 +1,8 @@
-import sys
 import os
-import tempfile
-import shutil
-import subprocess
-from unittest.mock import patch
 import pytest
 
-import simple_coding_agent
+from tests.test_utils.test_runner import run_automated_coding_task_test
 
-
-def run_automated_test(input_queue, file_name, test_file_name, max_calls_limit=30):
-    print("🧪 Starting Automated Agent Flow Test...", flush=True)
-
-    original_cwd = os.getcwd()  # STORE THE ORIGINAL DIRECTORY
-    test_sandbox = tempfile.mkdtemp(prefix="agent_test_sandbox_")
-    print(f"📁 Created temporary sandbox at: {test_sandbox}", flush=True)
-
-    # --- Direct State Injection ---
-    simple_coding_agent.session_cwd = test_sandbox
-    simple_coding_agent.FORCE_TESTING = True
-
-    safety_counter = {"calls": 0, "max_calls": max_calls_limit}
-
-    def smart_input_mocker(prompt=""):
-        safety_counter["calls"] += 1
-        if safety_counter["calls"] > safety_counter["max_calls"]:
-            print("\n🛑 [Test Overload] Too many input calls. Forcing exit.", flush=True)
-            return "/quit"
-
-        prompt_str = str(prompt).lower()
-
-        # Catch tool approvals / confirmations first
-        if "allow" in prompt_str or "promote" in prompt_str or "y/n" in prompt_str:
-            print("\n🤖 [Automated Test] Auto-approving tool execution: 'y'", flush=True)
-            return "y"
-
-        # Otherwise, consume from the queue
-        if input_queue:
-            next_input = input_queue.pop(0)
-            print(f"\n⌨️  [Automated Test] Typing: {next_input}", flush=True)
-            return next_input
-
-        # Default fallback
-        return "/quit"
-
-    try:
-        # FIX: Change the actual OS current working directory to the sandbox.
-        # This ensures any 'run_cmd' subprocesses spawned by the agent run here.
-        os.chdir(test_sandbox)
-
-        with patch("builtins.input", side_effect=smart_input_mocker):
-            try:
-                simple_coding_agent.main()
-            except SystemExit as e:
-                print(f"\n🏁 Agent terminated with code: {e.code}", flush=True)
-
-        sandbox_files = os.listdir(test_sandbox)
-        print("\n" + "=" * 60, flush=True)
-        print("📊 Phase 1: Generation Results", flush=True)
-        print(f"Files generated in sandbox: {sandbox_files}", flush=True)
-
-        if file_name in sandbox_files and test_file_name in sandbox_files:
-            print("✅ SUCCESS: The expected files were generated.", flush=True)
-        else:
-            print("❌ FAILED: The expected files were not found in the sandbox.", flush=True)
-            pytest.fail("Files missing in the sandbox!")
-            return  # Exit early if files are missing
-
-        # --- Phase 2: Independent Verification ---
-        print("\n" + "=" * 60, flush=True)
-        print("🕵️  Phase 2: Independent Verification", flush=True)
-        print("Running tests externally to verify agent logic...", flush=True)
-
-        # Inject the sandbox directory into the PYTHONPATH for the subprocess
-        current_env = os.environ.copy()
-        current_env = os.environ.copy()
-        current_env["PYTHONPATH"] = os.path.pathsep.join([test_sandbox, current_env.get("PYTHONPATH", "")])
-
-        result = subprocess.run(
-            [sys.executable, "-m", "unittest", "discover", "-s", test_sandbox, "-p", "test_*.py"],
-            capture_output=True,
-            text=True,
-            env=current_env
-        )
-
-        if result.returncode == 0:
-            print("✅ VERIFICATION PASSED! The LLM wrote valid, functioning code.")
-            print("--- Test Output ---")
-            print(result.stderr.strip())
-        else:
-            print("❌ VERIFICATION FAILED! The generated tests failed.")
-            print("--- Error Output (stdout) ---")
-            print(result.stdout)
-            print("--- Error Output (stderr) ---")
-            print(result.stderr)
-            pytest.fail("Verification failed!")
-
-    finally:
-        # FIX: Always restore the original working directory before cleaning up
-        os.chdir(original_cwd)
-        shutil.rmtree(test_sandbox)
-        print(f"\n🧹 Cleaned up temporary sandbox.", flush=True)
 
 def test_agent_workflow_two_sum():
     input_queue = [
@@ -129,7 +31,12 @@ def test_agent_workflow_two_sum():
         "/quit"
     ]
 
-    run_automated_test(input_queue, file_name="two_sum.py", test_file_name="test_two_sum.py")
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        expected_file="two_sum.py",
+        expected_new_files=["test_two_sum.py"],
+        run_unittest_file="test_two_sum.py"
+    )
 
 
 def test_agent_workflow_lcs():
@@ -148,7 +55,6 @@ def test_agent_workflow_lcs():
         "2. Empty string (e.g., s1='abc', s2='', expected_length=0) "
         "3. Strict subset (e.g., s1='abc', s2='xaxbxcx', expected_length=3). "
         "For each, assert: 1. `is_subsequence(result, s1)`, 2. `is_subsequence(result, s2)`, and 3. `len(result) == expected_length`.",
-        # extra guardrail - sometimes in tries to write tests with array size 1, leading to flakiness
         "CRITICAL CONSTRAINT FOR TESTS: Do not write test cases that violate the problem's base preconditions. "
         "For example, do not test arrays with fewer than 2 elements for Two Sum, since a pair cannot be formed."
         "/send",
@@ -165,7 +71,12 @@ def test_agent_workflow_lcs():
         "/quit"
     ]
 
-    run_automated_test(input_queue, file_name="lcs.py", test_file_name="test_lcs.py")
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        expected_file="lcs.py",
+        expected_new_files=["test_lcs.py"],
+        run_unittest_file="test_lcs.py"
+    )
 
 
 def test_agent_workflow_knapsack_01():
@@ -197,7 +108,12 @@ def test_agent_workflow_knapsack_01():
         "/quit"
     ]
 
-    run_automated_test(input_queue, file_name="knapsack_01.py", test_file_name="test_knapsack_01.py")
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        expected_file="knapsack_01.py",
+        expected_new_files=["test_knapsack_01.py"],
+        run_unittest_file="test_knapsack_01.py"
+    )
 
 
 def test_agent_workflow_trap():
@@ -237,5 +153,9 @@ def test_agent_workflow_trap():
         "/quit"
     ]
 
-    run_automated_test(input_queue, file_name="trap.py", test_file_name="test_trap.py")
-
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        expected_file="trap.py",
+        expected_new_files=["test_trap.py"],
+        run_unittest_file="test_trap.py"
+    )

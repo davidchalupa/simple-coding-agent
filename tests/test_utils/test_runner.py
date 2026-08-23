@@ -13,8 +13,8 @@ import simple_coding_agent
 
 def run_automated_coding_task_test(
         input_queue,
-        zip_file_path,
-        repo_name,
+        zip_file_path=None,
+        repo_name=None,
         setup_sandbox_hook=None,
         expected_file=None,
         target_file_path=None,
@@ -48,11 +48,12 @@ def run_automated_coding_task_test(
                 zip_ref.extractall(test_sandbox)
         elif setup_sandbox_hook:
             setup_sandbox_hook(test_sandbox)
-        else:
-            pytest.fail("❌ FAILED: Must provide either zip_file_path or setup_sandbox_hook.")
 
-        # Target the repo directory
-        repo_sandbox = os.path.join(test_sandbox, repo_name)
+        # Target the repo directory OR default to the root sandbox
+        if repo_name:
+            repo_sandbox = os.path.join(test_sandbox, repo_name)
+        else:
+            repo_sandbox = test_sandbox
 
         # Snapshot pristine file if we are checking for modifications
         pristine_contents = {}
