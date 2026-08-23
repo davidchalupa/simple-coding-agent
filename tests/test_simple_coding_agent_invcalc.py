@@ -48,8 +48,11 @@ def test_agent_modify_invcalc():
 
         # --- Turn 3: Implementation Execution ---
         f"Great. Now apply this exact pattern to create a modified version of the app. "
-        f"Write the complete, syntax-valid updated script to `{output_file}`. "
-        "Ensure all required PyQt5 imports (such as `Qt` and `QApplication`) are properly included and formatting is preserved.",
+        f"Use the `write_file` tool to save the complete, syntax-valid updated script to "
+        f"`{output_file}`. Ensure all required PyQt5 imports (such as `Qt` and `QApplication`) "
+        f"are properly included and formatting is preserved. "
+        f"You MUST output a `write_file` tool call with the full file content in the JSON "
+        f"`content` field — do not just show the code in a markdown block.",
         "/send",
 
         "/quit"

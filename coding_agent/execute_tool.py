@@ -93,7 +93,6 @@ def execute_tool(tool_name, tool_args, is_split_mode):
             tool_reinforcement = "\n\n(System Rule: Patch successful. Do not summarize. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
 
     elif tool_name == "replace_lines":
-        file_was_modified = True
         content = tool_args.get("content", "")
 
         # Strip markdown fences if the LLM wraps the payload in them
@@ -131,11 +130,14 @@ def execute_tool(tool_name, tool_args, is_split_mode):
         # -----------------------------------
 
         tool_result = replace_lines(filepath, start_line, end_line, content)
+        file_was_modified = tool_result.startswith("Successfully")
 
-        # Run linter after line replacement to catch broken indentation or missing imports
-        linter_error = native_linter.check_python_syntax_and_imports(filepath)
-        if linter_error:
-            tool_result += f"\n\n⚠️ CRITICAL WARNING: The lines were replaced, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
+        linter_error = None
+        if file_was_modified:
+            # Run linter after line replacement to catch broken indentation or missing imports
+            linter_error = native_linter.check_python_syntax_and_imports(filepath)
+            if linter_error:
+                tool_result += f"\n\n⚠️ CRITICAL WARNING: The lines were replaced, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
 
         if is_split_mode:
             tool_reinforcement = "\n\n(System Rule: Line replacement successful. If your wiring is done, output 'Refactor Phase Complete'.)"

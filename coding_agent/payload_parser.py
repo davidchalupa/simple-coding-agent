@@ -24,6 +24,17 @@ def _normalize_double_escaped_content(text):
     )
 
 
+def _clean_over_escaped_quotes(text):
+    """
+    After json.loads() has already decoded standard JSON escapes once, any
+    remaining literal backslash-quote sequence is virtually always the model
+    double-escaping (e.g. \\\" instead of \"). Collapse it.
+    """
+    if not isinstance(text, str):
+        return text
+    return text.replace('\\"', '"')
+
+
 def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict | None:
     """
     Model-agnostic wrapper that isolates candidate tool JSON strings
@@ -100,6 +111,7 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
         for key in ("content", "old_content", "new_content"):
             if key in data["args"]:
                 data["args"][key] = _normalize_double_escaped_content(data["args"][key])
+                data["args"][key] = _clean_over_escaped_quotes(data["args"][key])
 
         return data
     except json.JSONDecodeError:
@@ -157,7 +169,23 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
         el_match = re.search(r'"end_line"\s*:\s*(\d+)', cleaned)
         if el_match: args["end_line"] = int(el_match.group(1))
 
-        if raw_payload is not None:
+        content_match = re.search(r'"content"\s*:\s*"', cleaned)
+        if content_match:
+            start_idx = content_match.end()
+            end_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
+            if end_match:
+                args["content"] = cleaned[start_idx:end_match.start()]
+            else:
+                raw_tail = cleaned[start_idx:].rstrip(' \n\t}')
+                if raw_tail.endswith('"'): raw_tail = raw_tail[:-1]
+                args["content"] = raw_tail
+            args["content"] = (
+                args["content"]
+                .replace('\\"', '"')
+                .replace('\\\\', '\\')
+            )
+            args["content"] = _normalize_double_escaped_content(args["content"])
+        elif raw_payload is not None:
             args["content"] = raw_payload
         else:
             args["content"] = ""

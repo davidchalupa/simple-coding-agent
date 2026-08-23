@@ -502,7 +502,7 @@ def main():
                 content_key = "new_content" if tool_name == "patch_file" else "content"
 
                 # Payload recovery & Empty file guard
-                if tool_name in ["write_file", "append_file", "patch_file"]:
+                if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"]:
                     content_clean = re.sub(r'```[a-zA-Z]*\s*```', '', tool_args.get(content_key, '')).strip()
 
                     if not content_clean:
@@ -549,7 +549,7 @@ def main():
 
                 target_code = tool_args.get(content_key, '')
 
-                if tool_name in ["write_file", "append_file", "patch_file"]:
+                if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"]:
                     if tool_name == "patch_file":
                         old_snip = tool_args.get('old_content', '')
                         print(
