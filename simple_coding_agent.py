@@ -357,10 +357,18 @@ def main():
                         content += new_text
 
                         # --- SAFE LOOP BREAKER ---
-                        if '\n' in new_text:
-                            # Only track lines longer than 10 chars (ignores brackets, short syntax)
+                        # Catch both real line breaks and JSON-escaped literal '\n'
+                        is_real_newline = '\n' in new_text
+                        # Handle token fragmentation where '\' and 'n' arrive separately
+                        is_escaped_newline = '\\n' in new_text or (
+                                    new_text == 'n' and len(content) >= 2 and content[-2:] == '\\n')
+
+                        if is_real_newline or is_escaped_newline:
+                            # Normalize JSON-escaped newlines to real newlines for the split
+                            normalized_content = content.replace('\\n', '\n')
+
                             significant_lines = [
-                                line.strip() for line in content.split('\n')
+                                line.strip() for line in normalized_content.split('\n')
                                 if len(line.strip()) > 10
                             ]
 
