@@ -40,6 +40,57 @@ def test_agent_minesweeper_modify_generate_only():
 #
 #         "Good. Now I will need you to change the run_game_loop function so that it has a return value. "
 #         "It should return True if the game was won and otherwise it should return False. ",
+#         "Use the `replace_lines` tool to make this change. "
+#         "CRITICAL RULES:\n"
+#         "1. Identify the exact start_line and end_line of the run_game_loop function as it currently appears "
+#         "in the file you just read (from the `def run_game_loop(...):` line down to the last line of the "
+#         "function body, right before the next `def`).\n"
+#         "2. Set `content` to the FULL rewritten function body, replacing the `break` statements in the "
+#         "win/loss/quit branches with `return True` or `return False` as appropriate. Keep every other line "
+#         "of logic unchanged.\n"
+#         "3. You do NOT need to retype the old code anywhere — only supply start_line, end_line, and the NEW content.\n"
+#         "4. Preserve the exact leading spaces (indentation) so the replaced code stays syntactically valid Python.\n"
+#         "5. Do NOT use `patch_file` for this change — it is too large for that tool. Use `replace_lines`.",
+#         "/send",
+#
+#         # --- PHASE 2: Testing ---
+#         "Great. Now write a test file named `minesweeper-solve/test_run_game_loop.py` using the `unittest` framework "
+#         "that tests whether the run_game_loop function in `minesweeper-solve/minesweeper.py` now returns a boolean value. "
+#         "CRITICAL: Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
+#         "properly escaped (use \\n for newlines). Do not use a `<payload>` block.",
+#         "/send",
+#
+#         "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
+#         "If they all passed, just reply 'All good'.",
+#         "/send",
+#
+#         "/quit"
+#     ]
+#
+#     run_automated_coding_task_test(
+#         input_queue=input_queue,
+#         zip_file_path=zip_source,
+#         repo_name="",
+#         target_file_path=target_file,
+#         check_for_change=True,
+#         expected_new_files=[new_test_file],
+#         run_unittest_file=new_test_file,
+#         max_calls_limit=30
+#     )
+
+
+# def test_agent_minesweeper_modify_with_patch_old():
+#     target_file = "minesweeper-solve/minesweeper.py"
+#     zip_source = "test_data/minesweeper-solve.zip"
+#     new_test_file = "minesweeper-solve/test_run_game_loop.py"
+#
+#     input_queue = [
+#         "Read the code in `minesweeper-solve/minesweeper.py`. "
+#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
+#         "/send",
+#
+#         "Good. Now I will need you to change the run_game_loop function so that it has a return value. "
+#         "It should return True if the game was won and otherwise it should return False. ",
 #         "Use the `patch_file` tool to make targeted replacements. ",
 #         "CRITICAL RULES FOR PATCHING:\n"
 #         "1. Replace the existing `break` statements inside the win/loss/quit conditions with `return True` or `return False`.\n"
@@ -72,57 +123,6 @@ def test_agent_minesweeper_modify_generate_only():
 #         run_unittest_file=new_test_file,
 #         max_calls_limit=30
 #     )
-
-
-# def test_agent_minesweeper_modify_with_patch_large_block():
-#     target_file = "minesweeper-solve/minesweeper.py"
-#     zip_source = "test_data/minesweeper-solve.zip"
-#     new_test_file = "minesweeper-solve/test_run_game_loop.py"
-#
-#     input_queue = [
-#         "Read the code in `minesweeper-solve/minesweeper.py`. "
-#         "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
-#         "/send",
-#
-#         "Good. Now I will need you to change the run_game_loop function so that it has a return value. "
-#         "It should return True if the game was won and otherwise it should return False. ",
-#         "Use the `patch_file` tool to make this change. "
-#         "CRITICAL RULES FOR PATCHING:\n"
-#         "1. Set `old_content` to the ENTIRE existing `run_game_loop` function, from the `def run_game_loop(...):` "
-#         "line down to (but not including) the next `def` line. Copy it EXACTLY as it appears in the file you just read, "
-#         "including all indentation, blank lines, comments, and docstrings.\n"
-#         "2. Set `new_content` to the FULL rewritten function with the same signature, replacing the `break` statements "
-#         "in the win/loss/quit branches with `return True` or `return False` as appropriate. Keep every other line unchanged.\n"
-#         "3. Do NOT patch individual lines or small snippets — replace the whole function body in a single `patch_file` call.\n"
-#         "4. Preserve the exact leading spaces (indentation) in both `old_content` and `new_content` to prevent "
-#         "Python IndentationErrors.",
-#         "/send",
-#
-#         # --- PHASE 2: Testing ---
-#         "Great. Now write a test file named `minesweeper-solve/test_run_game_loop.py` using the `unittest` framework "
-#         "that tests whether the run_game_loop function in `minesweeper-solve/minesweeper.py` now returns a boolean value. "
-#         "CRITICAL: Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
-#         "properly escaped (use \\n for newlines). Do not use a `<payload>` block.",
-#         "/send",
-#
-#         "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
-#         "If they all passed, just reply 'All good'.",
-#         "/send",
-#
-#         "/quit"
-#     ]
-#
-#     run_automated_coding_task_test(
-#         input_queue=input_queue,
-#         zip_file_path=zip_source,
-#         repo_name="",
-#         target_file_path=target_file,
-#         check_for_change=True,
-#         expected_new_files=[new_test_file],
-#         run_unittest_file=new_test_file,
-#         max_calls_limit=30
-#     )
-
 
 # def test_agent_minesweeper_modify_with_rewrite():
 #     target_file = "minesweeper-solve/minesweeper.py"
