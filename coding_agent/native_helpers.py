@@ -140,6 +140,25 @@ def generate_requirements_native(target_dir, no_version=False):
         return f"Error executing native requirements handler: {e}"
 
 
+def _gather_project_metadata(startpath):
+    """
+    Reads real packaging/dependency metadata so the README prompt has grounded
+    facts to work with instead of being forced to invent install instructions
+    (e.g. hallucinating a fake git remote URL).
+    """
+    metadata = ""
+    for fname in ("requirements.txt", "pyproject.toml", "setup.py", "setup.cfg"):
+        fpath = os.path.join(startpath, fname)
+        if os.path.isfile(fpath):
+            try:
+                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()[:2000]  # cap length -- this is metadata, not code
+                metadata += f"\n--- FILE: {fname} ---\n{content}\n"
+            except Exception:
+                pass
+    return metadata
+
+
 def gather_deep_context(startpath):
     """
     Gathers repository context using a dynamic fair-share character budget.
@@ -164,7 +183,9 @@ def gather_deep_context(startpath):
             if f.endswith('.py') and not f.startswith('.') and not is_ignored(f, f_rel):
                 py_files.append(os.path.join(root, f))
 
-    code_summary = ""
+    # Ground the prompt with real packaging metadata before any code extraction,
+    # so installation/usage sections don't have to be invented.
+    code_summary = _gather_project_metadata(startpath)
     candidates = []
 
     # ~5000 tokens budget. Leaves ~3000 tokens for system prompt & generation headroom
@@ -342,6 +363,9 @@ def gather_deep_context_ast(startpath):
 
         command_header += "=================================\n\n"
 
+    # Ground the prompt with real packaging metadata, same as gather_deep_context.
+    metadata_summary = _gather_project_metadata(startpath)
+
     # 3. Smart Dispatcher (Threshold: ~20,000 chars / ~5,000 tokens)
     MAX_TOTAL_CHARS = 20000
     if total_repo_chars <= MAX_TOTAL_CHARS:
@@ -351,7 +375,7 @@ def gather_deep_context_ast(startpath):
         # Use AST signature compression to save the context window
         code_summary = _extract_ast_signatures_internal(py_files, startpath, MAX_TOTAL_CHARS)
 
-    full_context = command_header + code_summary
+    full_context = command_header + metadata_summary + code_summary
 
     # 4. CLI Help Extraction
     cli_help = _extract_cli_help_internal(py_files, startpath)

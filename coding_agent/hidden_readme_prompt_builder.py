@@ -10,6 +10,9 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
     deep_section = ""
     deep_guardrail = ""
     if code_summary and cli_help:
+        # NOTE: code_summary already includes any real packaging/dependency metadata
+        # (requirements.txt, pyproject.toml, etc.) prepended by gather_deep_context /
+        # gather_deep_context_ast, so it doesn't need to be threaded separately here.
         deep_section = (
             f"--- REAL FILE CONTENTS (DEEP SCAN) ---\n{code_summary}\n--------------------------\n\n"
             f"--- RUNTIME CLI HELP OUTPUT ---\n{cli_help}\n--------------------------\n\n"
@@ -26,6 +29,16 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
             "and output a valid `<tool_call>` using the `write_file` tool to save it to disk.\n\n"
         )
 
+    installation_guardrail = (
+        "\n\nINSTALLATION SECTION RULES (CRITICAL):\n"
+        "- Do NOT invent a git remote URL (e.g. 'https://github.com/your-repo/...'). You do not know the real repository URL.\n"
+        "- If a 'REAL FILE CONTENTS' section above includes a requirements.txt, pyproject.toml, setup.py, or setup.cfg, "
+        "base your installation instructions on its ACTUAL contents.\n"
+        "- If no packaging metadata is present, describe installation simply as: copy this directory and ensure the "
+        "required Python version is installed. Do NOT fabricate a `git clone` command or package name.\n"
+        "- Write each instruction line ONCE. Do not repeat similar lines multiple times."
+    )
+
     return (
         f"The user wants to evaluate and maintain a clean, high-quality documentation README file.\n\n"
         f"--- CONTEXT ---\n"
@@ -36,6 +49,7 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
         f"--- ENTIRE EXISTING README CONTENT ---\n{existing_readme}\n--------------------------\n\n"
         f"STRATEGY:\n{strategy_steps}\n\n"
         f"{deep_guardrail}"
+        f"{installation_guardrail}\n\n"
         f"CRITICAL: Do not call tools with empty arguments or empty payloads."
     )
 
@@ -71,7 +85,9 @@ def build_strategy_steps(readme_path, allow_patch, deep_focus=False):
     else:
         return (
             f"1. Evaluate {grounding_source} to extract the precise concept, underlying logic, and factual CLI execution methods of the project.\n"
-            f"2. Use `write_file` along with the `<payload>` block to initialize the README file from scratch incorporating explicit usage documentation.\n"
+            f"2. Use the `write_file` tool, embedding the full README content directly inside the JSON `content` field "
+            f"(properly escaped, e.g. \\n for newlines), to initialize the README file from scratch incorporating "
+            f"explicit usage documentation. Do NOT use a `<payload>` block.\n"
             f"3. COMPLETION (CRITICAL): After the file is written, output a final conversational message announcing completion and DO NOT invoke any further tools."
             f"{focus_rule}"
         )

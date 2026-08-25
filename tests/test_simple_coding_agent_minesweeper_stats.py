@@ -7,7 +7,8 @@ from tests.test_utils.test_runner import run_automated_coding_task_test
 def check_benchmark_success_rates(stdout: str):
     """
     Validation function for the benchmark script output.
-    Ensures benchmark text is printed and win rates are parsed and non-zero.
+    Ensures benchmark text is printed, win rates are parsed and non-zero,
+    and confirms games were actually run against a denominator of 10.
     """
     stdout_lower = stdout.lower()
 
@@ -33,7 +34,15 @@ def check_benchmark_success_rates(stdout: str):
             f"❌ FAILED: Success rates are all 0.0. The agent likely broke the game loop or ran on an empty board.\nSTDOUT:\n{stdout}"
         )
 
-    print(f"✅ Success rate validation passed! Parsed rates: {all_parsed}")
+    # Behavioral check that games were actually run against a denominator of 10,
+    # replacing the old brittle static source-text "10" keyword check.
+    denominator_matches = re.findall(r'\b(\d+)\s*/\s*10\b', stdout)
+    if not denominator_matches:
+        pytest.fail(
+            f"❌ FAILED: Could not confirm 10 games were run per agent (expected an 'X/10' style count in output).\nSTDOUT:\n{stdout}"
+        )
+
+    print(f"✅ Success rate validation passed! Parsed rates: {all_parsed}, game counts: {denominator_matches}")
 
 
 def test_agent_minesweeper_stats_write_script_read_main_only_premade():
@@ -56,7 +65,8 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade():
 
         "Based on the code you read across those files, write the code for `benchmark.py`. "
         "The script should do the necessary imports, instantiate the game, run 10 games for the Rule-based agent "
-        "and the same number for the DFS agent, calculate their success rates, and print the results. \n\n"
+        "and the same number for the DFS agent, calculate their success rates, and print the results, including "
+        "how many games out of the total were won for each agent in an 'X/10' style format (e.g. '7/10 games won'). \n\n"
         "CRITICAL: Just output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
         "/send",
 
@@ -78,7 +88,7 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade():
         repo_name=repo_name,
         expected_file="benchmark.py",
         run_script_file="benchmark.py",
-        expected_keywords=["import", "10"],
+        expected_keywords=["import"],
         custom_output_validator=check_benchmark_success_rates,
         max_calls_limit=60
     )
@@ -109,7 +119,8 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
         "3. Imports: You MUST import the game engine functions (like `place_mines`, `compute_counts`, `handle_click`, `run_game_loop`) from `minesweeper.py`. You MUST import the agent callback functions (`ai_get_action` and `dfs_get_action`) from `action_ai_agent.py`.\n"
         "4. DO NOT use the `main_*` launcher functions as agent callbacks. Pass the actual `get_action` callbacks to your game loop.\n"
         "5. DO NOT use `argparse` or require command line arguments. The script MUST automatically run exactly 10 games for the Rule-based agent and the same number for the DFS agent sequentially when executed directly.\n"
-        "6. Calculate their success rates and print the results to standard output.\n"
+        "6. Calculate their success rates and print the results to standard output, including how many games out of "
+        "the total were won for each agent in an 'X/10' style format (e.g. '7/10 games won').\n"
         "\nJust output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
         "/send",
 
@@ -131,7 +142,7 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
         repo_name=repo_name,
         expected_file="benchmark.py",
         run_script_file="benchmark.py",
-        expected_keywords=["import", "10"],
+        expected_keywords=["import"],
         custom_output_validator=check_benchmark_success_rates,
         max_calls_limit=60
     )
