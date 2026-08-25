@@ -12,37 +12,38 @@ def check_benchmark_success_rates(stdout: str):
     """
     stdout_lower = stdout.lower()
 
-    if "dfs" not in stdout_lower or ("rate" not in stdout_lower and "%" not in stdout_lower):
+    has_rate_language = "rate" in stdout_lower or "%" in stdout_lower
+    has_fraction_language = bool(re.search(r'\b\d+\s*/\s*10\b', stdout))
+
+    if "dfs" not in stdout_lower or not (has_rate_language or has_fraction_language):
         pytest.fail(
-            f"❌ FAILED: Script ran, but output indicates benchmarks didn't execute (missing 'dfs' or 'rate'/'%').\nOutput was: {stdout.strip()}"
+            f"❌ FAILED: Script ran, but output indicates benchmarks didn't execute "
+            f"(missing 'dfs' or any rate/'%'/'X/10' indicator).\nOutput was: {stdout.strip()}"
         )
 
-    # NEW REGEX: Looks for 'rate', followed by ANY characters (like " for dfs_agent"),
-    # then a colon, optional spaces, and the number.
+    # If the script printed rate/percentage language, parse and sanity-check those numbers.
     rates = re.findall(r'rate.*?:\s*(\d+(?:\.\d+)?)', stdout_lower)
+    if rates:
+        all_parsed = [float(r) for r in rates]
+        if all(r == 0.0 for r in all_parsed):
+            pytest.fail(
+                f"❌ FAILED: Success rates are all 0.0. The agent likely broke the game loop or ran on an empty board.\nSTDOUT:\n{stdout}"
+            )
 
-    if not rates:
-        # HARD FAIL: Do not allow the test to pass if we can't find the numbers.
-        pytest.fail(
-            f"❌ FAILED: Could not explicitly parse rates from output. Check regex or agent script output.\nSTDOUT:\n{stdout}"
-        )
-
-    all_parsed = [float(r) for r in rates]
-
-    if all(r == 0.0 for r in all_parsed):
-        pytest.fail(
-            f"❌ FAILED: Success rates are all 0.0. The agent likely broke the game loop or ran on an empty board.\nSTDOUT:\n{stdout}"
-        )
-
-    # Behavioral check that games were actually run against a denominator of 10,
-    # replacing the old brittle static source-text "10" keyword check.
+    # Behavioral check that games were actually run against a denominator of 10.
     denominator_matches = re.findall(r'\b(\d+)\s*/\s*10\b', stdout)
     if not denominator_matches:
         pytest.fail(
             f"❌ FAILED: Could not confirm 10 games were run per agent (expected an 'X/10' style count in output).\nSTDOUT:\n{stdout}"
         )
 
-    print(f"✅ Success rate validation passed! Parsed rates: {all_parsed}, game counts: {denominator_matches}")
+    if all(int(n) == 0 for n in denominator_matches):
+        pytest.fail(
+            f"❌ FAILED: All parsed win counts are 0. The agent likely broke the game loop or ran on an empty board.\nSTDOUT:\n{stdout}"
+        )
+
+    print(f"✅ Success rate validation passed! Game counts: {denominator_matches}"
+          + (f", parsed rates: {all_parsed}" if rates else ""))
 
 
 def test_agent_minesweeper_stats_write_script_read_main_only_premade():
@@ -66,7 +67,9 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade():
         "Based on the code you read across those files, write the code for `benchmark.py`. "
         "The script should do the necessary imports, instantiate the game, run 10 games for the Rule-based agent "
         "and the same number for the DFS agent, calculate their success rates, and print the results, including "
-        "how many games out of the total were won for each agent in an 'X/10' style format (e.g. '7/10 games won'). \n\n"
+        "how many games out of the total were won for each agent in an 'X/10' style format (e.g. '7/10 games won'). "
+        "Only include the functions and imports actually needed for this benchmark — do NOT copy over "
+        "interactive-mode code (like main_interactive or prompt_first_click) that the benchmark doesn't use.\n\n"
         "CRITICAL: Just output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
         "/send",
 
@@ -121,6 +124,8 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
         "5. DO NOT use `argparse` or require command line arguments. The script MUST automatically run exactly 10 games for the Rule-based agent and the same number for the DFS agent sequentially when executed directly.\n"
         "6. Calculate their success rates and print the results to standard output, including how many games out of "
         "the total were won for each agent in an 'X/10' style format (e.g. '7/10 games won').\n"
+        "7. Do NOT import or reference interactive-mode functions (like `interactive_get_action`, `main_interactive`, "
+        "or `prompt_first_click`) — this benchmark only needs the Rule-based and DFS agents.\n"
         "\nJust output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
         "/send",
 

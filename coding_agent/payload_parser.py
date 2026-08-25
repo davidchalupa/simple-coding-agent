@@ -35,6 +35,45 @@ def _clean_over_escaped_quotes(text):
     return text.replace('\\"', '"')
 
 
+def _extract_balanced_json_object(text, start_idx=0):
+    """
+    Finds the first top-level JSON object substring starting at or after start_idx,
+    correctly skipping over any { or } characters that appear INSIDE JSON string
+    values (e.g. Python code with dict/set literals embedded in a "content" field).
+    Returns the substring including the outer braces, or None if unbalanced/truncated.
+    """
+    start = text.find('{', start_idx)
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for i in range(start, len(text)):
+        ch = text[i]
+
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+
+    return None
+
+
 def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict | None:
     """
     Model-agnostic wrapper that isolates candidate tool JSON strings
@@ -56,10 +95,12 @@ def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict |
                 break
 
     if not tool_json_str:
-        naked_match = re.search(r'\{\s*"name"\s*:\s*"[^"]+".*?\}', response_content, re.DOTALL)
-        if naked_match:
-            tool_json_str = naked_match.group(0).strip()
-            search_start = naked_match.end()
+        naked_start_match = re.search(r'\{\s*"name"\s*:\s*"[^"]+"', response_content, re.DOTALL)
+        if naked_start_match:
+            balanced = _extract_balanced_json_object(response_content, naked_start_match.start())
+            if balanced:
+                tool_json_str = balanced.strip()
+                search_start = naked_start_match.start() + len(balanced)
 
     if not tool_json_str:
         return None

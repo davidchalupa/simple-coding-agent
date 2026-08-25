@@ -85,20 +85,23 @@ def test_agent_workflow_knapsack_01():
         "/send",
 
         # --- PHASE 2: Invariant-Driven Testing ---
-        "Excellent. Now write unittests for knapsack_01.py and save them to test_knapsack_01.py using the unittest framework. "
-        "CRITICAL INSTRUCTION: Instead of only checking exact expected answers, use Metamorphic property-based testing. "
-        "For a given list of weights and values, assert the following structural invariants: "
+        "Excellent. Now write unittests for knapsack_01.py and save them to test_knapsack_01.py using the unittest "
+        "framework. CRITICAL INSTRUCTION: Instead of only checking exact expected answers, use Metamorphic "
+        "property-based testing. For a given list of weights and values, assert the following structural invariants: "
         "1. `self.assertEqual(knapsack(0, weights, values), 0)` (Zero capacity always yields 0) "
         "2. `self.assertEqual(knapsack(capacity, [], []), 0)` (No items always yields 0) "
-        "3. `self.assertLessEqual(knapsack(capacity, weights, values), sum(values))` (Max value cannot exceed the sum of all item values) "
-        "4. `self.assertGreaterEqual(knapsack(capacity + 1, weights, values), knapsack(capacity, weights, values))` (Increasing capacity never decreases the result). "
-        "Strictly avoid hardcoded deterministic test cases or magic numbers."
+        "3. `self.assertLessEqual(knapsack(capacity, weights, values), sum(values))` (Max value cannot exceed the sum "
+        "of all item values) "
+        "4. `self.assertGreaterEqual(knapsack(capacity + 1, weights, values), knapsack(capacity, weights, values))` "
+        "(Increasing capacity never decreases the result). Strictly avoid hardcoded deterministic test cases or magic "
+        "numbers. Use the `write_file` tool with the full test file content in the JSON `content` field.",
         "/send",
 
         # --- PHASE 2.5: Hardened Active Verification ---
-        "Run the test suite one final time using your `run_cmd` tool to verify your changes. "
-        "If you see ANY failures or AssertionErrors in the terminal output, you must immediately patch the source code or the test file to correct the expected values. "
-        "Do NOT say 'All good' until you have executed the tool and the console explicitly shows that all tests passed.",
+        "Run the test suite one final time using your `run_cmd` tool to verify your changes. If you see ANY failures "
+        "or AssertionErrors in the terminal output, you must immediately patch the source code or the test file to "
+        "correct the expected values. Do NOT say 'All good' until you have executed the tool and the console "
+        "explicitly shows that all tests passed.",
         "/send",
 
         # --- PHASE 3: Graceful Exit ---
