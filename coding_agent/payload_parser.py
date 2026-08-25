@@ -237,12 +237,12 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
             try:
                 args["content"] = json.loads(f'"{raw_content_slice}"')
             except json.JSONDecodeError:
-                # Fallback if the slice isn't valid JSON-string content on its own
-                args["content"] = (
-                    raw_content_slice
-                    .replace('\\"', '"')
-                    .replace('\\\\', '\\')
-                )
+                import codecs
+                # Safely decode the raw slice exactly as Python parses string escapes
+                try:
+                    args["content"] = codecs.decode(raw_content_slice, 'unicode_escape')
+                except Exception:
+                    args["content"] = raw_content_slice
             args["content"] = _normalize_double_escaped_content(args["content"])
             args["content"] = _clean_over_escaped_quotes(args["content"])
         elif raw_payload is not None:
