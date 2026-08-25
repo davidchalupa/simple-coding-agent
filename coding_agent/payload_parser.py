@@ -129,6 +129,8 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
 
     json_clean = re.sub(r"<payload>.*?(?:</payload>|$)", "", tool_json_str, flags=re.DOTALL).strip()
 
+    # print(f"\n🔬 [DEBUG] json_clean repr (first 500 chars):\n{json_clean[:500]!r}\n")
+
     try:
         data = json.loads(json_clean, strict=False)
         if "name" not in data or data.get("name") is None:
@@ -156,6 +158,7 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
 
         return data
     except json.JSONDecodeError:
+        # print("🔬 [DEBUG] json.loads FAILED, falling through to regex parser")
         pass
 
     cleaned = json_clean.strip()
@@ -179,25 +182,32 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
             start_idx = content_match.end()
             end_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
             if end_match:
-                args["content"] = cleaned[start_idx:end_match.start()]
+                raw_content_slice = cleaned[start_idx:end_match.start()]
             else:
                 raw_tail = cleaned[start_idx:].rstrip(' \n\t}')
                 if raw_tail.endswith('"'): raw_tail = raw_tail[:-1]
-                args["content"] = raw_tail
-            args["content"] = (
-                args["content"]
-                .replace('\\"', '"')
-                .replace('\\\\', '\\')
-            )
-            args["content"] = _normalize_double_escaped_content(args["content"])
+                raw_content_slice = raw_tail
+
+            try:
+                # json.loads does the ONE correct decode pass. Do NOT run
+                # _normalize_double_escaped_content or _clean_over_escaped_quotes
+                # after this -- they would re-process already-correct content and
+                # corrupt legitimate \n escapes meant to stay literal in the source.
+                args["content"] = json.loads(f'"{raw_content_slice}"')
+            except json.JSONDecodeError:
+                # Only use the manual replace + normalization path if the slice
+                # wasn't valid standalone JSON-string content.
+                args["content"] = (
+                    raw_content_slice
+                    .replace('\\"', '"')
+                    .replace('\\\\', '\\')
+                )
+                args["content"] = _normalize_double_escaped_content(args["content"])
+                args["content"] = _clean_over_escaped_quotes(args["content"])
         elif raw_payload is not None:
             args["content"] = raw_payload
         else:
-            raise json.JSONDecodeError(
-                "CRITICAL: You forgot to provide the file content! "
-                "Include a \"content\" field with the full file text (properly escaped) directly inside the JSON tool call.",
-                cleaned, 0
-            )
+            args["content"] = ""
 
         if "filepath" in args:
             return {"name": tool_name, "args": args}
@@ -215,17 +225,26 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
             start_idx = content_match.end()
             end_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
             if end_match:
-                args["content"] = cleaned[start_idx:end_match.start()]
+                raw_content_slice = cleaned[start_idx:end_match.start()]
             else:
                 raw_tail = cleaned[start_idx:].rstrip(' \n\t}')
                 if raw_tail.endswith('"'): raw_tail = raw_tail[:-1]
-                args["content"] = raw_tail
-            args["content"] = (
-                args["content"]
-                .replace('\\"', '"')
-                .replace('\\\\', '\\')
-            )
+                raw_content_slice = raw_tail
+
+            # raw_content_slice is still-encoded JSON string content (never passed
+            # through json.loads). Decode it properly as a JSON string instead of
+            # hand-rolled sequential replaces, which mishandle multi-level escaping.
+            try:
+                args["content"] = json.loads(f'"{raw_content_slice}"')
+            except json.JSONDecodeError:
+                # Fallback if the slice isn't valid JSON-string content on its own
+                args["content"] = (
+                    raw_content_slice
+                    .replace('\\"', '"')
+                    .replace('\\\\', '\\')
+                )
             args["content"] = _normalize_double_escaped_content(args["content"])
+            args["content"] = _clean_over_escaped_quotes(args["content"])
         elif raw_payload is not None:
             args["content"] = raw_payload
         else:
