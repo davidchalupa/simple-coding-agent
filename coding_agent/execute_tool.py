@@ -102,6 +102,7 @@ def execute_tool(tool_name, tool_args, is_split_mode):
         filepath = tool_args.get("filepath")
         start_line = tool_args.get("start_line")
         end_line = tool_args.get("end_line")
+        expected_start_snippet = tool_args.get("expected_start_snippet")
 
         # --- SMART AUTO-INDENTATION FIX ---
         if filepath and start_line is not None:
@@ -129,7 +130,7 @@ def execute_tool(tool_name, tool_args, is_split_mode):
                 pass  # Fallback gracefully if any read error occurs
         # -----------------------------------
 
-        tool_result = replace_lines(filepath, start_line, end_line, content)
+        tool_result = replace_lines(filepath, start_line, end_line, content, expected_start_snippet)
         file_was_modified = tool_result.startswith("Successfully")
 
         linter_error = None
@@ -139,7 +140,9 @@ def execute_tool(tool_name, tool_args, is_split_mode):
             if linter_error:
                 tool_result += f"\n\n⚠️ CRITICAL WARNING: The lines were replaced, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
 
-        if is_split_mode:
+        if not file_was_modified:
+            tool_reinforcement = "\n\n(System Rule: Line replacement FAILED. Read the error above carefully, re-check start_line/end_line/expected_start_snippet against the file, and retry.)"
+        elif is_split_mode:
             tool_reinforcement = "\n\n(System Rule: Line replacement successful. If your wiring is done, output 'Refactor Phase Complete'.)"
         else:
             tool_reinforcement = "\n\n(System Rule: Line replacement successful. Do not summarize. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"

@@ -219,6 +219,9 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
         if sl_match: args["start_line"] = int(sl_match.group(1))
         el_match = re.search(r'"end_line"\s*:\s*(\d+)', cleaned)
         if el_match: args["end_line"] = int(el_match.group(1))
+        snip_match = re.search(r'"expected_start_snippet"\s*:\s*"(.*?)"', cleaned)
+        if snip_match:
+            args["expected_start_snippet"] = snip_match.group(1).replace('\\"', '"').replace('\\\\', '\\')
 
         content_match = re.search(r'"content"\s*:\s*"', cleaned)
         if content_match:

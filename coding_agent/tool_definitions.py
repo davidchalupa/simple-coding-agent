@@ -9,7 +9,9 @@ from pathlib import Path
 
 # 2. Tool Definitions
 def read_file(filepath, start_line=1, max_lines=100):
-    """Reads a file with strict pagination to prevent context window exhaustion."""
+    """Reads a file with strict pagination to prevent context window exhaustion.
+    Output includes 1-indexed line numbers so the model can accurately reference
+    exact line ranges later (e.g. for replace_lines)."""
     try:
         if not os.path.isfile(filepath):
             return f"Error: '{filepath}' is not a file."
@@ -22,7 +24,11 @@ def read_file(filepath, start_line=1, max_lines=100):
         end_idx = start_idx + max(1, int(max_lines))
 
         selected_lines = lines[start_idx:end_idx]
-        content = "".join(selected_lines)
+        numbered_lines = [
+            f"{start_idx + i + 1:5d}\t{line.rstrip(chr(10))}"
+            for i, line in enumerate(selected_lines)
+        ]
+        content = "\n".join(numbered_lines)
 
         if total_lines > end_idx:
             content += f"\n\n... [TRUNCATED: Lines {end_idx + 1} to {total_lines} remain. Use read_file with start_line={end_idx + 1} if needed] ..."
@@ -154,7 +160,7 @@ def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_c
         return f"Extraction Error: {e}"
 
 
-def replace_lines(filepath: str, start_line: int, end_line: int, content: str) -> str:
+def replace_lines(filepath: str, start_line: int, end_line: int, content: str, expected_start_snippet: str = None) -> str:
     path = Path(filepath)
     if not path.exists():
         return f"Error: File '{filepath}' does not exist."
@@ -163,6 +169,16 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str) -
 
     if start_line < 1 or end_line > len(lines) or start_line > end_line:
         return f"Error: Invalid line range [{start_line}, {end_line}] for file with {len(lines)} lines."
+
+    actual_start_line = lines[start_line - 1].strip()
+    if expected_start_snippet and expected_start_snippet.strip() not in actual_start_line:
+        return (
+            f"Error: Line {start_line} does not contain what you expected.\n"
+            f"You expected something like: {expected_start_snippet.strip()!r}\n"
+            f"Line {start_line} actually contains: {actual_start_line!r}\n"
+            f"Your start_line is likely wrong. Re-read the file (line numbers are shown in read_file output) "
+            f"and retry with the correct start_line/end_line."
+        )
 
     old_slice = "".join(lines[start_line - 1:end_line])
 
