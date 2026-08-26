@@ -160,7 +160,8 @@ def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_c
         return f"Extraction Error: {e}"
 
 
-def replace_lines(filepath: str, start_line: int, end_line: int, content: str, expected_start_snippet: str = None) -> str:
+def replace_lines(filepath: str, start_line: int, end_line: int, content: str,
+                   expected_start_snippet: str = None, expected_end_snippet: str = None) -> str:
     path = Path(filepath)
     if not path.exists():
         return f"Error: File '{filepath}' does not exist."
@@ -170,15 +171,71 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str, e
     if start_line < 1 or end_line > len(lines) or start_line > end_line:
         return f"Error: Invalid line range [{start_line}, {end_line}] for file with {len(lines)} lines."
 
+    def _find_unique_hint(snippet, anchor_label):
+        matches = [i + 1 for i, line in enumerate(lines) if snippet in line.strip()]
+        if len(matches) == 1:
+            return matches[0], f"\nThat exact text was found at line {matches[0]} instead."
+        elif len(matches) > 1:
+            return None, (
+                f"\nThat text appears at {len(matches)} different lines: {matches}. "
+                f"Pick the correct one based on the surrounding function you intend to replace."
+            )
+        else:
+            return None, (
+                f"\nThat exact text was not found anywhere else in the file either. "
+                f"Re-read the file with read_file and copy the {anchor_label} exactly "
+                f"as it appears, including whitespace."
+            )
+
+    # --- START ANCHOR CHECK ---
     actual_start_line = lines[start_line - 1].strip()
     if expected_start_snippet and expected_start_snippet.strip() not in actual_start_line:
+        snippet = expected_start_snippet.strip()
+        found_line, hint = _find_unique_hint(snippet, "expected_start_snippet")
+        if found_line is not None:
+            offset = found_line - start_line
+            corrected_end = end_line + offset
+            hint += (
+                f" Retry with start_line={found_line} and end_line={corrected_end} "
+                f"(same range length, shifted by {offset:+d}). Keep expected_start_snippet "
+                f"and expected_end_snippet the same as this attempt."
+            )
         return (
             f"Error: Line {start_line} does not contain what you expected.\n"
-            f"You expected something like: {expected_start_snippet.strip()!r}\n"
-            f"Line {start_line} actually contains: {actual_start_line!r}\n"
-            f"Your start_line is likely wrong. Re-read the file (line numbers are shown in read_file output) "
-            f"and retry with the correct start_line/end_line."
+            f"You expected something like: {snippet!r}\n"
+            f"Line {start_line} actually contains: {actual_start_line!r}"
+            f"{hint}"
         )
+
+    # --- END ANCHOR CHECK ---
+    # expected_end_snippet describes the line immediately AFTER the replaced range
+    # (e.g. the next function's signature) -- NOT the last replaced line itself.
+    if expected_end_snippet:
+        snippet = expected_end_snippet.strip()
+        # Allow up to a few blank/whitespace-only lines between end_line and the next
+        # real content, so the model doesn't need to count trailing blank lines exactly.
+        next_content_idx = None
+        for i in range(end_line, min(end_line + 5, len(lines))):
+            if lines[i].strip():
+                next_content_idx = i
+                break
+
+        actual_next_line = lines[next_content_idx].strip() if next_content_idx is not None else ""
+        if snippet not in actual_next_line:
+            found_line, hint = _find_unique_hint(snippet, "expected_end_snippet")
+            if found_line is not None:
+                corrected_end = found_line - 1
+                hint += (
+                    f" Retry with end_line={corrected_end} (keep start_line={start_line} as-is). "
+                    f"Keep expected_start_snippet and expected_end_snippet the same as this attempt."
+                )
+            return (
+                f"Error: The line after end_line ({end_line}) does not contain what you expected.\n"
+                f"You expected the NEXT block after your replacement to start with: {snippet!r}\n"
+                f"The next non-blank line actually contains: {actual_next_line!r}\n"
+                f"This usually means end_line is wrong -- expected_end_snippet should be the signature "
+                f"of the NEXT function/block, not the last line inside the one you're replacing.{hint}"
+            )
 
     old_slice = "".join(lines[start_line - 1:end_line])
 

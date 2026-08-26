@@ -4,7 +4,7 @@ def build_system_prompt(allow_patch=False):
     """
     tools_section = (
         '6. `patch_file`: {"filepath": "<str>", "old_content": "<str>", "new_content": "<str>"} - Anchor-based replace for SMALL edits only (1-3 lines). `old_content` must match the file EXACTLY (including indentation). Pass code inside the JSON (properly escaped), no <payload> block.\n    '
-        '7. `replace_lines`: {"filepath": "<str>", "start_line": <int>, "end_line": <int>, "expected_start_snippet": "<str>", "content": "<str>"} - Replaces a full range of existing lines with NEW content. Use this for LARGER edits (a whole function or more than 3 lines). Get start_line/end_line from the line numbers shown in the most recent `read_file` output. `expected_start_snippet` MUST be the exact text of the line at start_line (e.g. "def run_game_loop(mines, counts, revealed, flags, get_action):") - this is checked before the edit is applied, so if your start_line is wrong the call will fail loudly instead of silently corrupting the wrong part of the file. You do NOT need to retype the old code, only the new code plus the one-line snippet.\n    '
+        '7. `replace_lines`: {"filepath": "<str>", "start_line": <int>, "end_line": <int>, "expected_start_snippet": "<str>", "expected_end_snippet": "<str>", "content": "<str>"} - Replaces a full range of existing lines with NEW content. Use this for LARGER edits (a whole function or more than 3 lines). Get start_line/end_line from the line numbers shown in the most recent `read_file` output. `expected_start_snippet` MUST be the exact text of the line AT start_line (prefer the function/class signature line, e.g. "def run_game_loop(...):"). `expected_end_snippet` MUST be the exact text of the signature line of the NEXT function/block that comes immediately AFTER your replacement (e.g. "def main_interactive():") - NOT the last line inside the function you are replacing. Both anchors are checked before the edit is applied, so wrong line numbers fail loudly instead of silently corrupting the file. Never use a generic line like "while True:", "else:", or "continue" as either anchor - they repeat throughout the file and cannot disambiguate your intended location.\n    '
         '8. `run_cmd`: {"command": "<str>"}'
         if allow_patch else
         '6. `run_cmd`: {"command": "<str>"}'
@@ -14,6 +14,10 @@ def build_system_prompt(allow_patch=False):
         "       - Changing 1-3 lines: use `patch_file`.\n"
         "       - Changing a whole function or more than 3 lines: use `replace_lines`. Do NOT retype the old code - only give the new code plus start_line/end_line/expected_start_snippet.\n"
         "       - Always double check start_line/end_line against the line numbers shown in `read_file`'s output before calling `replace_lines` - do not guess or count lines from memory.\n"
+        "       - `expected_start_snippet` = the exact signature line AT start_line (e.g. `def run_game_loop(...):`).\n"
+        "       - `expected_end_snippet` = the exact signature line of the NEXT function/block that comes immediately AFTER end_line (e.g. `def main_interactive():`) - NOT the last line inside the function you're replacing.\n"
+        "       - NEVER use a generic line like `while True:`, `else:`, `continue`, or a bare `if` condition as an anchor - they repeat throughout the file.\n"
+        "       - If a `replace_lines` call fails, retry with EXACTLY the corrected line numbers given in the error, keeping the same snippets and content — do not re-derive a new snippet from scratch.\n"
         "       - Never retype an entire file with `write_file` just to change a few lines."
         if allow_patch else
         "\n    6. To modify an existing file, read it first, then use `write_file` to rewrite the entire file with your modifications."

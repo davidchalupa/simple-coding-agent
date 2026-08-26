@@ -103,6 +103,7 @@ def execute_tool(tool_name, tool_args, is_split_mode):
         start_line = tool_args.get("start_line")
         end_line = tool_args.get("end_line")
         expected_start_snippet = tool_args.get("expected_start_snippet")
+        expected_end_snippet = tool_args.get("expected_end_snippet")
 
         # --- SMART AUTO-INDENTATION FIX ---
         if filepath and start_line is not None:
@@ -113,35 +114,46 @@ def execute_tool(tool_name, tool_args, is_split_mode):
                 start_idx = start_line - 1
                 if 0 <= start_idx < len(file_lines):
                     original_line = file_lines[start_idx]
-                    # Extract the leading whitespace (spaces/tabs) from the target line
                     original_indent = original_line[:len(original_line) - len(original_line.lstrip(' \t'))]
 
                     new_lines = content.splitlines()
-                    # If the LLM sent code flush-left, but the original file line was indented:
-                    if original_indent and new_lines and not new_lines[0].startswith((' ', '\t')):
-                        indented_lines = []
-                        for line in new_lines:
-                            if line.strip():  # Don't add spaces to empty lines
-                                indented_lines.append(original_indent + line)
-                            else:
-                                indented_lines.append(line)
-                        content = '\n'.join(indented_lines)
+                    if new_lines:
+                        # Find the first non-blank line's actual indent in the model's content
+                        first_nonblank = next((l for l in new_lines if l.strip()), "")
+                        content_indent = first_nonblank[:len(first_nonblank) - len(first_nonblank.lstrip(' \t'))]
+
+                        if content_indent != original_indent:
+                            # Re-base every line: strip the model's own leading indent, apply the correct one
+                            rebased_lines = []
+                            for line in new_lines:
+                                if line.strip():
+                                    stripped = line[len(content_indent):] if line.startswith(
+                                        content_indent) else line.lstrip(' \t')
+                                    rebased_lines.append(original_indent + stripped)
+                                else:
+                                    rebased_lines.append(line)
+                            content = '\n'.join(rebased_lines)
             except Exception:
-                pass  # Fallback gracefully if any read error occurs
+                pass
         # -----------------------------------
 
-        tool_result = replace_lines(filepath, start_line, end_line, content, expected_start_snippet)
+        tool_result = replace_lines(filepath, start_line, end_line, content, expected_start_snippet,
+                                    expected_end_snippet)
         file_was_modified = tool_result.startswith("Successfully")
 
         linter_error = None
         if file_was_modified:
-            # Run linter after line replacement to catch broken indentation or missing imports
             linter_error = native_linter.check_python_syntax_and_imports(filepath)
             if linter_error:
                 tool_result += f"\n\n⚠️ CRITICAL WARNING: The lines were replaced, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
 
         if not file_was_modified:
-            tool_reinforcement = "\n\n(System Rule: Line replacement FAILED. Read the error above carefully, re-check start_line/end_line/expected_start_snippet against the file, and retry.)"
+            tool_reinforcement = (
+                "\n\n(System Rule: Line replacement FAILED. The error message above tells you the exact "
+                "corrected line number(s) to use, or explains what expected_end_snippet should actually be "
+                "(the signature of the NEXT function, not the last line of this one). Retry accordingly, "
+                "keeping the same content unless the anchors themselves were wrong.)"
+            )
         elif is_split_mode:
             tool_reinforcement = "\n\n(System Rule: Line replacement successful. If your wiring is done, output 'Refactor Phase Complete'.)"
         else:
