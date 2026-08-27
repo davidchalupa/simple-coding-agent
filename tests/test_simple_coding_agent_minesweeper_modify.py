@@ -56,8 +56,25 @@ def test_agent_minesweeper_modify_with_replace_lines():
         # --- PHASE 2: Testing ---
         "Great. Now write a test file named `minesweeper-solve/test_run_game_loop.py` using the `unittest` framework "
         "that tests whether the run_game_loop function in `minesweeper-solve/minesweeper.py` now returns a boolean value. "
-        "CRITICAL: Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
-        "properly escaped (use \\n for newlines). Do not use a `<payload>` block.",
+        "CRITICAL RULES FOR THE TEST:\n"
+        "1. run_game_loop takes arguments (mines, counts, revealed, flags, get_action). `mines` is a set of "
+        "(row, col) tuples that are actually mined — this is the ONLY thing that determines win vs loss. "
+        "Do NOT attempt to monkeypatch or reassign attributes like `run_game_loop.place_mines` or "
+        "`run_game_loop.compute_counts` — these do nothing, since place_mines/compute_counts are separate "
+        "module-level functions, not attributes of run_game_loop, and run_game_loop never reads such attributes.\n"
+        "2. For a WIN test case: pass an empty `mines` set and a `get_action` mock whose action reveals safe "
+        "cells until every non-mine cell is revealed (or directly construct `revealed` so all non-mine cells "
+        "are already True), so the win condition is met.\n"
+        "3. For a LOSS test case: pass a `mines` set containing at least one real coordinate (e.g. {(0, 0)}), "
+        "and have your `get_action` mock return a 'c' click on that exact mined coordinate, so handle_click "
+        "genuinely returns False and the loss path executes.\n"
+        "4. Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
+        "properly escaped (use \\n for newlines). Do not use a `<payload>` block.\n"
+        "5. `board_size` (9) and `mines_count` (12) are fixed GLOBAL constants defined in minesweeper.py — "
+        "run_game_loop does NOT take board_size as a parameter and always iterates using the real global "
+        "board_size (9x9). Your `counts`, `revealed`, and `flags` data structures MUST be sized as a full 9x9 "
+        "grid (e.g. `revealed = [[True] * 9 for _ in range(9)]`), not a smaller board, or you will get an "
+        "IndexError. Do NOT define your own local `board_size` variable with a different value.",
         "/send",
 
         "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "

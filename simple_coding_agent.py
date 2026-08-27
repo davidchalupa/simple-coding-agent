@@ -341,6 +341,22 @@ def main():
             except Exception:
                 pass
 
+        from collections import Counter
+
+        def _detect_repetition(significant_lines, window=24, threshold=6):
+            """
+            Detects degenerate repetition: the same significant line appearing
+            `threshold`+ times within the trailing `window`. Matches on the full
+            stripped line (not a truncated prefix), so legitimately similar-but-
+            distinct lines (e.g. assertions differing only in a trailing argument)
+            are not falsely flagged.
+            """
+            recent = significant_lines[-window:]
+            if len(recent) < threshold:
+                return False
+            _, count = Counter(recent).most_common(1)[0]
+            return count >= threshold
+
         def stream_agent_response(llm, messages):
             print(f"\n[Agent]: ", end="", flush=True)
             content, finish_reason = "", None
@@ -364,10 +380,13 @@ def main():
                         is_real_newline = '\n' in new_text
                         # Handle token fragmentation where '\' and 'n' arrive separately
                         is_escaped_newline = '\\n' in new_text or (
-                                    new_text == 'n' and len(content) >= 2 and content[-2:] == '\\n')
+                                new_text == 'n' and len(content) >= 2 and content[-2:] == '\\n')
 
                         if is_real_newline or is_escaped_newline:
-                            # Normalize JSON-escaped newlines to real newlines for the split
+                            # Normalize JSON-escaped newlines to real newlines for the split.
+                            # This is what lets the detector see repetition happening INSIDE
+                            # an in-progress "content": "..." JSON string value, not just in
+                            # plain streamed markdown/prose.
                             normalized_content = content.replace('\\n', '\n')
 
                             significant_lines = [
@@ -375,12 +394,10 @@ def main():
                                 if len(line.strip()) > 10
                             ]
 
-                            # Trigger only if 8 consecutive significant lines are identical
-                            if len(significant_lines) >= 8:
-                                if len(set(significant_lines[-8:])) == 1:
-                                    print("\n\n🛑 [System]: Repetition loop detected. Forcing halt.")
-                                    finish_reason = "repetition_loop"
-                                    break
+                            if _detect_repetition(significant_lines):
+                                print("\n\n🛑 [System]: Repetition loop detected. Forcing halt.")
+                                finish_reason = "repetition_loop"
+                                break
 
             except KeyboardInterrupt:
                 print("\n\n🛑 [Generation Interrupted by User]")
