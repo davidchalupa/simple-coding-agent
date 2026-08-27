@@ -10,21 +10,38 @@ class DependencyChecker(ast.NodeVisitor):
         self.scopes = [self.global_names]  # Stack of scope sets. Index 0 is global.
 
     def visit_Module(self, node):
-        # PASS 1: Gather all top-level global definitions
-        for stmt in node.body:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                self.global_names.add(stmt.name)
-            elif isinstance(stmt, ast.Assign):
-                for target in stmt.targets:
-                    self._add_to_scope(target, self.global_names)
-            elif isinstance(stmt, ast.Import):
-                for alias in stmt.names:
+        # PASS 1: Gather all global definitions (including those inside if/try/with blocks)
+        class GlobalVisitor(ast.NodeVisitor):
+            def __init__(self, global_names):
+                self.global_names = global_names
+
+            def visit_Name(self, n):
+                if isinstance(n.ctx, ast.Store):
+                    self.global_names.add(n.id)
+
+            def visit_FunctionDef(self, n):
+                self.global_names.add(n.name)
+                # Stop traversal: Do not bleed into function body
+
+            def visit_AsyncFunctionDef(self, n):
+                self.global_names.add(n.name)
+                # Stop traversal
+
+            def visit_ClassDef(self, n):
+                self.global_names.add(n.name)
+                # Stop traversal
+
+            def visit_Import(self, n):
+                for alias in n.names:
                     name = alias.asname or alias.name
                     self.global_names.add(name.split('.')[0])
-            elif isinstance(stmt, ast.ImportFrom):
-                for alias in stmt.names:
+
+            def visit_ImportFrom(self, n):
+                for alias in n.names:
                     name = alias.asname or alias.name
                     self.global_names.add(name)
+
+        GlobalVisitor(self.global_names).visit(node)
 
         # PASS 2: Traverse code to check for scope violations and usage
         self.generic_visit(node)
