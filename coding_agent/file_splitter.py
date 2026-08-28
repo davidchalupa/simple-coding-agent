@@ -187,17 +187,29 @@ def verify_refactor_integrity(original_filepath, generated_files_dir, expected_f
     """
     Defensive Guardrail: Compares the AST components to ensure no logic is lost,
     and verifies all planned files from the blueprint exist.
+
+    NOTE:
+    The original root filename is intentionally INCLUDED in verification because
+    AST extraction may replace that file inside the sandbox with the refactored
+    version. Skipping it would incorrectly report root methods as missing.
     """
     original_filename = os.path.basename(original_filepath)
 
     # 1. ENFORCE BLUEPRINT PLAN: Prevent premature completion
     if expected_files:
-        missing_files = [f for f in expected_files if not os.path.exists(os.path.join(generated_files_dir, f))]
+        missing_files = [
+            f for f in expected_files
+            if not os.path.exists(os.path.join(generated_files_dir, f))
+        ]
+
         if missing_files:
             return False, (
-                f"INCOMPLETE REFACTOR: You proposed creating these files in your <blueprint>, but they are missing: {missing_files}\n"
-                f"You must scaffold ALL of them using `write_file` before outputting 'Refactor Phase Complete'.\n\n"
-                f"CRITICAL REMINDER: You MUST use the exact XML format below. Do NOT use markdown (```) blocks.\n\n"
+                f"INCOMPLETE REFACTOR: You proposed creating these files in your "
+                f"<blueprint>, but they are missing: {missing_files}\n"
+                f"You must scaffold ALL of them using `write_file` before outputting "
+                f"'Refactor Phase Complete'.\n\n"
+                f"CRITICAL REMINDER: You MUST use the exact XML format below. "
+                f"Do NOT use markdown (```) blocks.\n\n"
                 f"MANDATORY FORMAT:\n"
                 f"<tool_call>\n"
                 f"{{\n"
@@ -217,6 +229,7 @@ def verify_refactor_integrity(original_filepath, generated_files_dir, expected_f
         return False, f"Failed to parse original file AST: {e}"
 
     original_methods = set()
+
     for node in ast.walk(orig_tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             original_methods.add(node.name)
@@ -225,12 +238,9 @@ def verify_refactor_integrity(original_filepath, generated_files_dir, expected_f
 
     for root, _, files in os.walk(generated_files_dir):
         for file in files:
-            # 🚨 CRITICAL FIX: Skip the original un-split file!
-            if file == original_filename:
-                continue
-
             if file.endswith('.py') and not file.startswith('.'):
                 filepath = os.path.join(root, file)
+
                 try:
                     with open(filepath, 'r', encoding='utf-8') as f:
                         tree = ast.parse(f.read())
@@ -238,16 +248,30 @@ def verify_refactor_integrity(original_filepath, generated_files_dir, expected_f
                     for node in ast.walk(tree):
                         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                             all_sandbox_methods.add(node.name)
+
                 except SyntaxError as e:
                     return False, f"Syntax Error in generated file '{file}': {e}"
 
     # 2. Check for dropped logic
     missing = original_methods - all_sandbox_methods
+
     if missing:
-        return False, f"CRITICAL ERROR: The following functions/methods were lost during refactoring: {missing}"
+        return False, (
+            f"CRITICAL ERROR: The following functions/methods were lost "
+            f"during refactoring: {missing}"
+        )
 
     # 3. Guard against zero action
-    if len(all_sandbox_methods) == len(original_methods) and len(os.listdir(generated_files_dir)) <= 1:
-        return False, "INCOMPLETE REFACTOR: No new files were generated. Follow your blueprint."
+    if (
+        len(all_sandbox_methods) == len(original_methods)
+        and len(os.listdir(generated_files_dir)) <= 1
+    ):
+        return False, (
+            "INCOMPLETE REFACTOR: No new files were generated. "
+            "Follow your blueprint."
+        )
 
-    return True, "Integrity check passed. All planned components accounted for and syntactically valid."
+    return True, (
+        "Integrity check passed. All planned components accounted for "
+        "and syntactically valid."
+    )

@@ -415,20 +415,39 @@ def main():
             return content, (finish_reason == "length"), False
 
         def handle_ast_extraction(content, split_file, sandbox_dir):
-            """Intercepts JSON routing plan and extracts blocks. Returns (was_handled, alert_message)."""
+            """Intercepts JSON routing plan and extracts blocks deterministically."""
             match = re.search(r"```json\s*\n(.*?)\n```", content, re.DOTALL)
-            if not match: return False, None
+            if not match:
+                return False, None
+
             try:
                 plan = json.loads(match.group(1))
+
                 print("\n⚙️  [System] Intercepted JSON routing plan. Executing AST extraction natively...")
-                results = [f"[{fn}]: {extract_code_blocks(split_file, os.path.join(sandbox_dir, fn), blocks)}"
-                           for fn, blocks in plan.items() if isinstance(blocks, list)]
+
+                results = [
+                    f"[{fn}]: {extract_code_blocks(split_file, os.path.join(sandbox_dir, fn), blocks)}"
+                    for fn, blocks in plan.items()
+                    if isinstance(blocks, list)
+                ]
+
                 report = "\n".join(results)
                 print(report)
-                return True, f"System Alert: AST Extraction successfully executed.\nResults:\n{report}\n\nNext Step: Add missing imports with patch_file/write_file, then output 'Refactor Phase Complete'."
+
+                return True, (
+                    "System Alert: AST Extraction successfully executed.\n"
+                    f"Results:\n{report}\n\n"
+                    "Next Step: Review the extracted files with the available tools if needed. "
+                    "Do not attempt to recreate the extracted methods. "
+                    "When the refactor is complete, output 'Refactor Phase Complete'."
+                )
+
             except json.JSONDecodeError:
                 print("\n❌ [System] Failed to parse JSON plan.")
-                return True, "System Alert: Your JSON block was invalid. Please output ONLY valid JSON in the ```json block."
+                return True, (
+                    "System Alert: Your JSON block was invalid. "
+                    "Please output ONLY valid JSON in the ```json block."
+                )
 
         def verify_sandbox_health(split_file, sandbox_dir):
             """Checks structural integrity and lints sandbox files."""
