@@ -10,6 +10,59 @@ import pytest
 import simple_coding_agent
 
 
+def validate_all_python_files_importable(repo_sandbox, exclude_files=None):
+    """
+    Walks the sandbox and attempts to import every top-level .py module found
+    (excluding __init__.py, test_*.py, and any explicitly excluded files),
+    failing the test if any file is not syntactically valid or has unresolved
+    names -- catching cases where a refactor leaves a generated file broken
+    even though some other check in the suite happens to still pass.
+    """
+    exclude_files = set(exclude_files or [])
+    failures = []
+
+    for root, dirs, files in os.walk(repo_sandbox):
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ('venv', '__pycache__', 'env')]
+        for fname in files:
+            if not fname.endswith('.py'):
+                continue
+            if fname in exclude_files or fname.startswith('test_') or fname == '__init__.py':
+                continue
+
+            fpath = os.path.join(root, fname)
+            rel_path = os.path.relpath(fpath, repo_sandbox)
+
+            # 1. Syntax check via compile
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    source = f.read()
+                compile(source, fpath, 'exec')
+            except SyntaxError as e:
+                failures.append(f"{rel_path}: SyntaxError: {e}")
+                continue
+
+            # 2. Actual import check (catches undefined names, bad imports,
+            #    circular imports back to a file that no longer defines them)
+            module_dir = os.path.dirname(fpath)
+            module_name = fname[:-3]
+            env = os.environ.copy()
+            env["PYTHONPATH"] = module_dir + os.pathsep + env.get("PYTHONPATH", "")
+            result = subprocess.run(
+                [sys.executable, "-c", f"import {module_name}"],
+                capture_output=True, text=True, timeout=15, cwd=module_dir, env=env
+            )
+            if result.returncode != 0:
+                failures.append(f"{rel_path}: ImportError:\n{result.stderr.strip()}")
+
+    if failures:
+        pytest.fail(
+            "❌ FAILED: One or more generated Python files are not cleanly importable:\n\n"
+            + "\n\n".join(failures)
+        )
+
+    print(f"✅ All generated .py files import cleanly.", flush=True)
+
+
 def run_automated_coding_task_test(
         input_queue,
         zip_file_path=None,
@@ -24,7 +77,8 @@ def run_automated_coding_task_test(
         max_calls_limit=50,
         expected_keywords=None,
         custom_output_validator=None,
-        custom_file_validator=None
+        custom_file_validator=None,
+        post_run_validator=None
 ):
     """
     Custom unified runner for agent tasks. Extracts a repo or runs a setup hook,
@@ -207,6 +261,12 @@ def run_automated_coding_task_test(
                     custom_output_validator(result.stdout)
             except subprocess.TimeoutExpired:
                 pytest.fail("❌ FAILED: Script execution timed out.")
+
+        # --- Phase 4: Whole-Sandbox Structural Validation ---
+        if post_run_validator:
+            print("\n" + "=" * 60, flush=True)
+            print("🩺 Phase 4: Post-Run Sandbox Validation", flush=True)
+            post_run_validator(repo_sandbox)
 
     finally:
         os.chdir(original_cwd)

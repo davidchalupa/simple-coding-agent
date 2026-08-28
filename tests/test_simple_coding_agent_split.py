@@ -1,7 +1,7 @@
 import os
 import shutil
 
-from tests.test_utils.test_runner import run_automated_coding_task_test
+from tests.test_utils.test_runner import run_automated_coding_task_test, validate_all_python_files_importable
 
 
 def setup_split_fixture(target_file, validation_test=None):
@@ -59,5 +59,11 @@ def test_agent_split_execute_mode():
         input_queue=input_queue,
         setup_sandbox_hook=setup_split_fixture(target_file, validation_test),
         run_unittest_file=validation_test,
-        max_calls_limit=45
+        target_file_path=target_file,
+        check_for_change=True,
+        max_calls_limit=45,
+        post_run_validator=lambda repo_sandbox: validate_all_python_files_importable(
+            repo_sandbox,
+            exclude_files={os.path.basename(target_file)}
+        ),
     )
