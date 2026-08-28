@@ -343,7 +343,7 @@ def main():
 
         from collections import Counter
 
-        def _detect_repetition_detect_repetition(significant_lines, window=24, threshold=6):
+        def _detect_repetition(significant_lines, window=24, threshold=6):
             """
             Detects degenerate repetition: the same significant line appearing
             `threshold`+ times within the trailing `window`. Matches on the full
