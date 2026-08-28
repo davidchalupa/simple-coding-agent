@@ -105,13 +105,13 @@ def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_c
     """
     import os
     import ast
+    import textwrap
 
     try:
         with open(source_filepath, 'r', encoding='utf-8') as f:
             source = f.read()
 
         tree = ast.parse(source)
-        extracted_code = []
 
         # 1. Grab all global imports from the original file
         imports = []
@@ -121,40 +121,53 @@ def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_c
                 if segment:
                     imports.append(segment)
 
-        # 2. Extract the requested blocks
-        if wrap_in_class:
-            extracted_code.append(f"class {wrap_in_class}:")
-            indent_prefix = "    "
-        else:
-            indent_prefix = ""
-
+        # 2. Extract and dedent requested blocks
+        extracted_blocks = []
         found_blocks = 0
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 if node.name in block_names:
                     segment = ast.get_source_segment(source, node)
                     if segment:
+                        # Strip original class/nested indentation
+                        dedented_segment = textwrap.dedent(segment)
+
                         if wrap_in_class and not isinstance(node, ast.ClassDef):
-                            segment = "\n".join(indent_prefix + line if line.strip() else line
-                                                for line in segment.splitlines())
-                        extracted_code.append(segment)
+                            # Indent 4 spaces under the new class header
+                            indented_lines = ["    " + line if line.strip() else line
+                                              for line in dedented_segment.splitlines()]
+                            dedented_segment = "\n".join(indented_lines)
+
+                        extracted_blocks.append(dedented_segment)
                         found_blocks += 1
 
         if found_blocks == 0:
             return f"Error: None of the requested blocks ({block_names}) were found."
 
-        # 3. Write to the new file safely
-        is_new_file = not os.path.exists(target_filepath)
+        # 3. Format target file content
+        content_parts = []
+        is_same_file = os.path.abspath(source_filepath) == os.path.abspath(target_filepath)
+        is_new_file = not os.path.exists(target_filepath) or is_same_file
+
+        if is_new_file and imports:
+            content_parts.append("\n".join(imports))
+
+        if wrap_in_class:
+            class_body = "\n\n".join(extracted_blocks)
+            content_parts.append(f"class {wrap_in_class}:\n{class_body}")
+        else:
+            content_parts.append("\n\n".join(extracted_blocks))
+
+        final_code = "\n\n".join(content_parts) + "\n"
+
+        # 4. Write safely (overwrite if target is source or new file)
         os.makedirs(os.path.dirname(target_filepath), exist_ok=True)
+        write_mode = 'w' if is_same_file else ('a' if os.path.exists(target_filepath) else 'w')
 
-        with open(target_filepath, 'a', encoding='utf-8') as f:
-            # If creating the file for the first time, inject the original imports at the top
-            if is_new_file and imports:
-                f.write("\n".join(imports) + "\n\n")
+        with open(target_filepath, write_mode, encoding='utf-8') as f:
+            f.write(final_code)
 
-            f.write("\n\n".join(extracted_code) + "\n\n")
-
-        return f"Success: Extracted {found_blocks} blocks and appended to {os.path.basename(target_filepath)}"
+        return f"Success: Extracted {found_blocks} blocks and written to {os.path.basename(target_filepath)}"
 
     except Exception as e:
         return f"Extraction Error: {e}"

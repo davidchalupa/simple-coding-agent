@@ -63,7 +63,6 @@ def analyze_file_metrics(filepath):
 def build_split_prompt(filepath, target_dir, execute_mode=False):
     """
     Dynamically generates a framework-agnostic prompt.
-    Guarantees exact original prompt matching for Advisor mode to prevent LLM regressions.
     """
     filename = os.path.basename(filepath)
     analysis = analyze_file_metrics(filepath)
@@ -94,8 +93,6 @@ def build_split_prompt(filepath, target_dir, execute_mode=False):
         )
 
     if execute_mode:
-        # --- AST-ASSISTED EXECUTION PROMPT ---
-        # The prompt asks purely for JSON. No code generation is requested.
         prompt = f"""You are a senior Software Architect. Your task is to design a refactoring split blueprint.
 
 [Context]
@@ -112,20 +109,13 @@ Layout Footprint:
 
 [Required Output Layout Format]
 1. EXPLANATION: Write out your structural design reasoning out loud first. Justify your module division choices.
-2. JSON PLAN: Provide exactly one markdown json block mapping recommended filenames to lists of their respective target classes or methods from the AST Map.
-
-Example JSON mapping format:
-{{
-    "extracted_service.py": ["DataCalculator", "helper_function"],
-    "models.py": ["UserClass", "SessionClass"]
-}}
+2. BLUEPRINT: Provide your file mapping inside a <blueprint> XML tag as a JSON dictionary (mapping recommended filenames to lists of their respective target classes/methods). DO NOT use markdown blocks.
 
 CRITICAL INSTRUCTION: 
-STOP after writing the JSON block. Do NOT use tools. Do NOT write any file contents. 
-The system will use deterministic AST extraction to safely move the code blocks based on your JSON map automatically.
+STOP after writing the <blueprint> tag. Do NOT use tools. Do NOT write any file contents. 
+The system will use deterministic AST extraction to safely move the code blocks based on your blueprint automatically.
 """
     else:
-        # --- VERBATIM ORIGINAL ADVISOR PROMPT (NO REGRESSIONS) ---
         prompt = f"""You are a senior Software Architect. Your task is to design a refactoring split blueprint.
 
 [Context]
@@ -142,34 +132,36 @@ Layout Footprint:
 
 [Required Output Layout Format]
 1. EXPLANATION: Write out your structural design reasoning out loud first. Justify your module division choices using generic domain terms.
-2. JSON PLAN: Provide exactly one markdown json block mapping recommended filenames to lists of their respective target methods.
-3. IMMEDIATE EXECUTION: You must immediately begin executing your plan. Use your `write_file` tool to create the FIRST file from your plan. 
+2. BLUEPRINT: Provide your file mapping inside a <blueprint> XML tag as a JSON dictionary (mapping filenames to target methods). DO NOT use markdown (```) blocks.
+3. IMMEDIATE EXECUTION: You must immediately begin executing your plan. Use your `write_file` tool to create the FIRST file from your blueprint. 
    - CRITICAL: Write ONLY the structural boilerplate skeleton. 
    - You MUST use `pass` for every single method body to ensure perfectly valid Python syntax. 
    - Do NOT attempt to write the actual implementation logic yet.
-   - You MUST use the strict XML tag format for your tool call.
+4. ITERATIVE COMPLETION: You MUST continue using your `write_file` tool to scaffold EVERY remaining file listed in your blueprint.
+   - Do NOT output "Refactor Phase Complete" until all planned files are successfully created.
+   - DO NOT delete or modify the original `{filename}` file.
 
-Example Tool Call Format:
+MANDATORY TOOL CALL FORMAT:
 <tool_call>
 {{
     "name": "write_file", 
-    "args": {{"filepath": "separate_logic_service.py"}}
+    "args": {{"filepath": "filename_from_blueprint.py"}}
 }}
 </tool_call>
 <payload>
 import sys
 
-class SubLogicService:
-    def process_data(self):
+class YourClassName:
+    # YOU MUST INCLUDE ALL METHODS ASSIGNED TO THIS FILE IN THE BLUEPRINT
+    def method_assigned_in_blueprint_1(self):
         pass
-
-    def calculate_metrics(self):
+        
+    def method_assigned_in_blueprint_2(self):
         pass
 </payload>
 
-Start executing the skeleton generation for the first file immediately after your JSON plan.
+Start executing the skeleton generation for the first file immediately after closing your <blueprint> tag.
 """
-
     return prompt
 
 
@@ -191,12 +183,33 @@ def setup_refactor_sandbox(source_filepath):
     return sandbox_target, sandbox_dir
 
 
-def verify_refactor_integrity(original_filepath, generated_files_dir):
+def verify_refactor_integrity(original_filepath, generated_files_dir, expected_files=None):
     """
-    Defensive Guardrail: Compares the AST components of the original file
-    against all newly created files to ensure zero logic was lost or corrupted.
+    Defensive Guardrail: Compares the AST components to ensure no logic is lost,
+    and verifies all planned files from the blueprint exist.
     """
-    # 1. Gather all expected components from the original file
+    original_filename = os.path.basename(original_filepath)
+
+    # 1. ENFORCE BLUEPRINT PLAN: Prevent premature completion
+    if expected_files:
+        missing_files = [f for f in expected_files if not os.path.exists(os.path.join(generated_files_dir, f))]
+        if missing_files:
+            return False, (
+                f"INCOMPLETE REFACTOR: You proposed creating these files in your <blueprint>, but they are missing: {missing_files}\n"
+                f"You must scaffold ALL of them using `write_file` before outputting 'Refactor Phase Complete'.\n\n"
+                f"CRITICAL REMINDER: You MUST use the exact XML format below. Do NOT use markdown (```) blocks.\n\n"
+                f"MANDATORY FORMAT:\n"
+                f"<tool_call>\n"
+                f"{{\n"
+                f"    \"name\": \"write_file\",\n"
+                f"    \"args\": {{\"filepath\": \"filename.py\"}}\n"
+                f"}}\n"
+                f"</tool_call>\n"
+                f"<payload>\n"
+                f"import sys\n\nclass Skeleton:\n    pass\n"
+                f"</payload>"
+            )
+
     try:
         with open(original_filepath, 'r', encoding='utf-8') as f:
             orig_tree = ast.parse(f.read())
@@ -208,23 +221,33 @@ def verify_refactor_integrity(original_filepath, generated_files_dir):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             original_methods.add(node.name)
 
-    # 2. Gather all components from the new sandbox files
-    generated_methods = set()
+    all_sandbox_methods = set()
+
     for root, _, files in os.walk(generated_files_dir):
         for file in files:
+            # 🚨 CRITICAL FIX: Skip the original un-split file!
+            if file == original_filename:
+                continue
+
             if file.endswith('.py') and not file.startswith('.'):
+                filepath = os.path.join(root, file)
                 try:
-                    with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
+                    with open(filepath, 'r', encoding='utf-8') as f:
                         tree = ast.parse(f.read())
+
                     for node in ast.walk(tree):
                         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                            generated_methods.add(node.name)
+                            all_sandbox_methods.add(node.name)
                 except SyntaxError as e:
                     return False, f"Syntax Error in generated file '{file}': {e}"
 
-    # 3. Check for dropped logic
-    missing = original_methods - generated_methods
+    # 2. Check for dropped logic
+    missing = original_methods - all_sandbox_methods
     if missing:
         return False, f"CRITICAL ERROR: The following functions/methods were lost during refactoring: {missing}"
 
-    return True, "Integrity check passed. All components accounted for and syntactically valid."
+    # 3. Guard against zero action
+    if len(all_sandbox_methods) == len(original_methods) and len(os.listdir(generated_files_dir)) <= 1:
+        return False, "INCOMPLETE REFACTOR: No new files were generated. Follow your blueprint."
+
+    return True, "Integrity check passed. All planned components accounted for and syntactically valid."

@@ -343,7 +343,7 @@ def main():
 
         from collections import Counter
 
-        def _detect_repetition(significant_lines, window=24, threshold=6):
+        def _detect_repetition_detect_repetition(significant_lines, window=24, threshold=6):
             """
             Detects degenerate repetition: the same significant line appearing
             `threshold`+ times within the trailing `window`. Matches on the full
@@ -431,9 +431,33 @@ def main():
                 return True, "System Alert: Your JSON block was invalid. Please output ONLY valid JSON in the ```json block."
 
         def verify_sandbox_health(split_file, sandbox_dir):
-            """Checks structural integrity and lints sandbox files. Returns (passed, report)."""
+            """Checks structural integrity and lints sandbox files."""
             print("\n⚙️  [System Guardrail] Analyzing sandbox refactoring health...")
-            passed, report = file_splitter.verify_refactor_integrity(split_file, sandbox_dir)
+
+            expected_files = []
+            for msg in reversed(messages):
+                content = msg.get("content", "")
+
+                # 1. Try to find the XML tag first
+                match = re.search(r"<blueprint>\s*(.*?)\s*</blueprint>", content, re.DOTALL)
+
+                # 2. Fallback: If agent stubbornly used Markdown headers instead
+                if not match:
+                    match = re.search(r"(?:###)?\s*BLUEPRINT\s*.*?```(?:json)?\s*\n(.*?)\n\s*```", content,
+                                      re.DOTALL | re.IGNORECASE)
+
+                if match:
+                    try:
+                        # Clean up any residual markdown if it was wrapped inside the tags
+                        clean_json = re.sub(r'```json\s*|\s*```', '', match.group(1)).strip()
+                        plan = json.loads(clean_json)
+                        expected_files = list(plan.keys())
+                    except json.JSONDecodeError:
+                        pass
+                    break
+
+            # Pass expected_files into the verifier
+            passed, report = file_splitter.verify_refactor_integrity(split_file, sandbox_dir, expected_files)
 
             if passed:
                 for root, _, files in os.walk(sandbox_dir):
@@ -458,31 +482,33 @@ def main():
                         is_execute_mode = False if "successfully executed" in alert else is_execute_mode
                         continue
 
-                # --- SANDBOX GUARDRAIL ---
-                if is_split_mode and any(
-                        x in response_content.lower() for x in ["refactor phase complete", "task complete"]):
-                    passed, report = verify_sandbox_health(original_split_file, sandbox_directory)
-                    if passed:
-                        print(f"✅ Sandbox passed! Staged in: {sandbox_directory}")
-                        if input("Promote to production? (y/n): ").strip().lower() == 'y':
-                            target_dir = os.path.dirname(original_split_file)
-                            for item in os.listdir(sandbox_directory):
-                                if not item.startswith('.'):
-                                    shutil.copy2(os.path.join(sandbox_directory, item), os.path.join(target_dir, item))
-                            print("🚀 Files successfully promoted.")
-                        is_split_mode = is_execute_mode = False
-                        session_cwd = os.path.dirname(original_split_file)
-                        break
-
-                    print(f"❌ Verification Failed:\n{report}")
-                    messages.append({"role": "user",
-                                     "content": f"System Verification Failed:\n{report}\n\nCorrect this error and output 'Refactor Phase Complete'."})
-                    continue
-
-                # --- TOOL PARSING ---
+                # 🚨 FIX: Check for tool calls FIRST. Never let "Refactor Phase Complete"
+                # short-circuit a turn that also contains a tool call.
                 tool_request = payload_parser.extract_tool_call(response_content, allow_patch=ALLOW_PATCH)
 
                 if not tool_request:
+                    # --- SANDBOX GUARDRAIL (Only runs if NO tool was called) ---
+                    if is_split_mode and any(
+                            x in response_content.lower() for x in ["refactor phase complete", "task complete"]):
+                        passed, report = verify_sandbox_health(original_split_file, sandbox_directory)
+                        if passed:
+                            print(f"✅ Sandbox passed! Staged in: {sandbox_directory}")
+                            if input("Promote to production? (y/n): ").strip().lower() == 'y':
+                                target_dir = os.path.dirname(original_split_file)
+                                for item in os.listdir(sandbox_directory):
+                                    if not item.startswith('.'):
+                                        shutil.copy2(os.path.join(sandbox_directory, item),
+                                                     os.path.join(target_dir, item))
+                                print("🚀 Files successfully promoted.")
+                            is_split_mode = is_execute_mode = False
+                            session_cwd = os.path.dirname(original_split_file)
+                            break
+
+                        print(f"❌ Verification Failed:\n{report}")
+                        messages.append({"role": "user",
+                                         "content": f"System Verification Failed:\n{report}\n\nCorrect this error and output 'Refactor Phase Complete'."})
+                        continue
+
                     # AUTOMATED FOLLOW-UP TRIGGER
                     if FORCE_TESTING and file_was_modified and not is_split_mode:
                         raw_path = tool_args.get("filepath", "") if 'tool_args' in locals() else ""
