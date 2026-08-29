@@ -488,3 +488,22 @@ def search_codebase(dir_path=".", query="", is_regex=False, max_matches=50):
 
     except Exception as e:
         return f"Error searching codebase: {e}"
+
+
+def read_symbol(filepath: str, symbol_name: str) -> str:
+    """Extracts a specific function or class from a Python file."""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            source = f.read()
+
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name == symbol_name:
+                    # Returns just the function code, complete with docstrings and comments
+                    snippet = ast.get_source_segment(source, node)
+                    return f"--- {symbol_name} in {filepath} ---\n{snippet}"
+
+        return f"Error: Symbol '{symbol_name}' not found in {filepath}."
+    except Exception as e:
+        return f"Error parsing {filepath}: {str(e)}"

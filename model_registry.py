@@ -13,6 +13,13 @@ MODEL_REGISTRY = {
         "max_context": 32768,
         "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
+    "qwen2.5-7b-q6k": {
+        "filename": "Qwen2.5-Coder-7B-Instruct-Q6_K.gguf",
+        "display_name": "Qwen 2.5 Coder 7B (Q6_K)",
+        "chat_format": "chatml",
+        "max_context": 16384,
+        "gpu_layers": -1
+    },
     "hermes3": {
         "filename": "Hermes-3-Llama-3.1-8B.Q4_K_M.gguf",
         "display_name": "Hermes 3 (Llama 3.1 8B)",
