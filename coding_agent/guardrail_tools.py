@@ -9,14 +9,8 @@ from coding_agent import native_linter
 from collections import Counter
 
 
-def _detect_repetition(significant_lines, window=24, threshold=6):
-    """
-    Detects degenerate repetition: the same significant line appearing
-    `threshold`+ times within the trailing `window`. Matches on the full
-    stripped line (not a truncated prefix), so legitimately similar-but-
-    distinct lines (e.g. assertions differing only in a trailing argument)
-    are not falsely flagged.
-    """
+def _detect_repetition(significant_lines, window=80, threshold=6):
+    """Line-level fallback: catches degenerate single-line spam loops."""
     recent = significant_lines[-window:]
     if len(recent) < threshold:
         return False
@@ -24,16 +18,31 @@ def _detect_repetition(significant_lines, window=24, threshold=6):
     return count >= threshold
 
 
-def stream_agent_response(llm, messages):
+import hashlib
+
+def _extract_completed_payloads(normalized_content):
+    """Yields the string content of each fully-closed ```json {...} ``` block."""
+    for match in re.finditer(r"```json\s*\n(.*?)\n```", normalized_content, re.DOTALL):
+        try:
+            payload = json.loads(match.group(1))
+            if "args" in payload and "content" in payload.get("args", {}):
+                yield payload["args"]["content"]
+        except json.JSONDecodeError:
+            continue
+
+
+def stream_agent_response(llm, messages, stop=None, temperature=0.1):
     print(f"\n[Agent]: ", end="", flush=True)
     content, finish_reason = "", None
+    seen_payload_hashes = set()
 
     try:
         for chunk in llm.create_chat_completion(
                 messages=messages,
                 stream=True,
-                temperature=0.1,
-                max_tokens=4096
+                temperature=temperature,
+                max_tokens=4096,
+                stop=stop or []
         ):
             choice = chunk['choices'][0]
             finish_reason = choice.get('finish_reason') or finish_reason
@@ -42,18 +51,11 @@ def stream_agent_response(llm, messages):
                 print(new_text, end="", flush=True)
                 content += new_text
 
-                # --- SAFE LOOP BREAKER ---
-                # Catch both real line breaks and JSON-escaped literal '\n'
                 is_real_newline = '\n' in new_text
-                # Handle token fragmentation where '\' and 'n' arrive separately
                 is_escaped_newline = '\\n' in new_text or (
                         new_text == 'n' and len(content) >= 2 and content[-2:] == '\\n')
 
                 if is_real_newline or is_escaped_newline:
-                    # Normalize JSON-escaped newlines to real newlines for the split.
-                    # This is what lets the detector see repetition happening INSIDE
-                    # an in-progress "content": "..." JSON string value, not just in
-                    # plain streamed markdown/prose.
                     normalized_content = content.replace('\\n', '\n')
 
                     significant_lines = [
@@ -64,6 +66,22 @@ def stream_agent_response(llm, messages):
                     if _detect_repetition(significant_lines):
                         print("\n\n🛑 [System]: Repetition loop detected. Forcing halt.")
                         finish_reason = "repetition_loop"
+                        break
+
+                # --- BLOCK-LEVEL DUPLICATE PAYLOAD CHECK ---
+                # Catches "same code, different narration" retries that the
+                # line-frequency detector structurally can't see, since each
+                # retry's internal lines are individually unique even though
+                # the whole payload is an exact repeat.
+                if "```json" in content and content.rstrip().endswith("```"):
+                    for payload_content in _extract_completed_payloads(content):
+                        h = hashlib.sha256(payload_content.encode('utf-8')).hexdigest()
+                        if h in seen_payload_hashes:
+                            print("\n\n🛑 [System]: Duplicate payload detected. Forcing halt.")
+                            finish_reason = "repetition_loop"
+                            break
+                        seen_payload_hashes.add(h)
+                    if finish_reason == "repetition_loop":
                         break
 
     except KeyboardInterrupt:
