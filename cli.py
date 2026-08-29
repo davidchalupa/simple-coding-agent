@@ -5,7 +5,7 @@ def parse_cli_arguments(model_registry_keys):
     Parses CLI arguments for the Coding Agent and returns the configuration variables.
     """
     parser = argparse.ArgumentParser(description="Coding Agent CLI")
-    parser.add_argument("--model", type=str, default="qwen2.5", choices=model_registry_keys,
+    parser.add_argument("--model", type=str, default="qwen2.5-7b", choices=model_registry_keys,
                         help="Select the model to run from the registry.")
     parser.add_argument("--disable-replace", action="store_true",
                         help="Disable the patch_file tool (forces full file rewrites).")

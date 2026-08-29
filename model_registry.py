@@ -1,5 +1,5 @@
 MODEL_REGISTRY = {
-    "qwen2.5": {
+    "qwen2.5-7b": {
         "filename": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
         "display_name": "Qwen 2.5 Coder 7B",
         "chat_format": "chatml",
@@ -14,5 +14,12 @@ MODEL_REGISTRY = {
         "max_context": 32768,
         "gpu_layers": -1,  # -1 or 99 offloads all layers to your RTX 5050 GPU
         "chat_format": "chatml"  # Hermes 3 uses standard ChatML formatting
-    }
+    },
+    "qwen2.5-14b": {
+        "filename": "Qwen2.5-Coder-14B-Instruct-Q3_K_M.gguf",
+        "display_name": "Qwen 2.5 Coder 14B (Q3_K_M)",
+        "chat_format": "chatml",
+        "max_context": 16384,
+        "gpu_layers": [-1, 32, 24, 16],  # try full, then progressively more CPU spillover
+    },
 }

@@ -72,12 +72,10 @@ def initialize_agent():
 
     total_ram = get_system_ram_gb()
 
-    # Cap the context sizes so we don't request more than the model supports
     max_ctx = active_config["max_context"]
     base_gpu_contexts = [32768, 16384, 8192]
     gpu_contexts = sorted(list(set([min(ctx, max_ctx) for ctx in base_gpu_contexts])), reverse=True)
 
-    # Simple CPU fallback contexts based on RAM
     if total_ram >= 24:
         cpu_contexts = gpu_contexts
     elif total_ram >= 12:
@@ -87,26 +85,41 @@ def initialize_agent():
 
     has_gpu = getattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)()
 
-    # --- 1. ATTEMPT GPU LOAD ---
+    # --- GPU LAYER FALLBACK LADDER ---
+    # A model's registry entry can specify a single int (old behavior, kept for
+    # backward compat with qwen2.5/hermes3) or a list of layer counts to try in
+    # order, e.g. [-1, 28, 20, 12]. -1 = full offload. Each subsequent value is
+    # a partial offload attempt — remaining layers spill to system RAM instead
+    # of abandoning GPU entirely. This matters once weights no longer fit
+    # alongside KV cache in 8GB: full offload legitimately fails, but partial
+    # offload can still beat pure CPU.
+    configured_layers = active_config["gpu_layers"]
+    gpu_layer_attempts = configured_layers if isinstance(configured_layers, list) else [configured_layers]
+
+    # --- 1. ATTEMPT GPU LOAD (full then partial offload) ---
     if has_gpu:
-        for ctx_size in gpu_contexts:
-            try:
-                print(f"🔄 Attempting GPU load with {ctx_size} context...")
-                llm = Llama(
-                    model_path=str(target_path),
-                    n_ctx=ctx_size,
-                    n_threads=6,
-                    n_batch=512,
-                    n_gpu_layers=active_config["gpu_layers"],
-                    chat_format=active_config["chat_format"],  # <-- CRITICAL FOR MULTI-MODEL
-                    flash_attn=True,
-                    verbose=False
-                )
-                CONTEXT_WINDOW = ctx_size
-                print(f"🚀 Loaded on GPU (Context: {CONTEXT_WINDOW}).")
+        for n_layers in gpu_layer_attempts:
+            for ctx_size in gpu_contexts:
+                try:
+                    label = "full" if n_layers == -1 else f"partial ({n_layers} layers)"
+                    print(f"🔄 Attempting GPU load [{label}] with {ctx_size} context...")
+                    llm = Llama(
+                        model_path=str(target_path),
+                        n_ctx=ctx_size,
+                        n_threads=6,
+                        n_batch=512,
+                        n_gpu_layers=n_layers,
+                        chat_format=active_config["chat_format"],
+                        flash_attn=True,
+                        verbose=False
+                    )
+                    CONTEXT_WINDOW = ctx_size
+                    print(f"🚀 Loaded on GPU [{label}] (Context: {CONTEXT_WINDOW}).")
+                    break
+                except Exception as e:
+                    print(f"⚠️ GPU load failed [{label}] at {ctx_size} context: {e}")
+            if llm is not None:
                 break
-            except Exception as e:
-                print(f"⚠️ GPU load failed at {ctx_size} context: {e}")
 
     # --- 2. CPU FALLBACK ---
     if llm is None:
@@ -120,7 +133,7 @@ def initialize_agent():
                     n_threads=6,
                     n_batch=512,
                     n_gpu_layers=0,
-                    chat_format=active_config["chat_format"],  # <-- CRITICAL FOR MULTI-MODEL
+                    chat_format=active_config["chat_format"],
                     verbose=False
                 )
                 CONTEXT_WINDOW = ctx_size
@@ -133,7 +146,6 @@ def initialize_agent():
         print("❌ Critical Error: Unable to initialize model on GPU or CPU.")
         sys.exit(1)
 
-    # State Setup
     SYSTEM_PROMPT = build_system_prompt(ALLOW_PATCH)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 

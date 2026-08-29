@@ -15,7 +15,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--model",
         action="store",
-        default="qwen2.5",
+        default="qwen2.5-7b",
         help="Specify model key from MODEL_REGISTRY (e.g. qwen2.5, hermes3)."
     )
 
