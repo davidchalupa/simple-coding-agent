@@ -490,8 +490,14 @@ def search_codebase(dir_path=".", query="", is_regex=False, max_matches=50):
         return f"Error searching codebase: {e}"
 
 
+import ast
+
+
 def read_symbol(filepath: str, symbol_name: str) -> str:
-    """Extracts a specific function or class from a Python file."""
+    """
+    Extracts a specific function or class from a Python file
+    along with its exact start and end line numbers.
+    """
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             source = f.read()
@@ -500,9 +506,14 @@ def read_symbol(filepath: str, symbol_name: str) -> str:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 if node.name == symbol_name:
-                    # Returns just the function code, complete with docstrings and comments
+                    start_line = node.lineno
+                    # getattr safety check for older Python versions, though 3.8+ has end_lineno natively
+                    end_line = getattr(node, 'end_lineno', start_line)
+
                     snippet = ast.get_source_segment(source, node)
-                    return f"--- {symbol_name} in {filepath} ---\n{snippet}"
+
+                    header = f"--- Symbol: '{symbol_name}' | File: {filepath} | Lines: {start_line}-{end_line} ---"
+                    return f"{header}\n{snippet}"
 
         return f"Error: Symbol '{symbol_name}' not found in {filepath}."
     except Exception as e:

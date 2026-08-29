@@ -163,7 +163,8 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
 
     cleaned = json_clean.strip()
 
-    allowed_tools = "write_file|append_file|replace_lines|read_file|run_cmd|patch_file|extract_code_blocks|list_tree|search_codebase" if allow_patch else "write_file|append_file|read_file|run_cmd|extract_code_blocks|list_tree|search_codebase"
+    allowed_tools = "write_file|append_file|replace_lines|read_file|run_cmd|patch_file|extract_code_blocks|list_tree|search_codebase|read_symbol" if allow_patch else "write_file|append_file|read_file|run_cmd|extract_code_blocks|list_tree|search_codebase|read_symbol"
+
     name_match = re.search(fr'"name"\s*:\s*"({allowed_tools})"', cleaned)
 
     if not name_match:
@@ -334,5 +335,16 @@ def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, se
             return {"name": tool_name, "args": json.loads(cleaned).get("args", {})}
         except json.JSONDecodeError:
             raise json.JSONDecodeError("Failed to parse extract_code_blocks arguments.", cleaned, 0)
+
+    elif tool_name == "read_symbol":
+        fp_match = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
+        if fp_match:
+            args["filepath"] = fp_match.group(1)
+
+        sym_match = re.search(r'"symbol_name"\s*:\s*"(.*?)"', cleaned)
+        if sym_match:
+            args["symbol_name"] = sym_match.group(1).replace('\\"', '"').replace('\\\\', '\\')
+
+        return {"name": tool_name, "args": args}
 
     raise json.JSONDecodeError("Fallback pattern parser extraction failed.", json_clean, 0)

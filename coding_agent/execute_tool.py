@@ -7,7 +7,8 @@ from coding_agent.tool_definitions import (
     patch_file,
     run_cmd,
     list_tree,
-    search_codebase
+    search_codebase,
+    read_symbol
 )
 from coding_agent import native_linter
 
@@ -25,6 +26,11 @@ def execute_tool(tool_name, tool_args, is_split_mode):
         s_line = tool_args.get("start_line", 1)
         m_lines = tool_args.get("max_lines", 75)
         tool_result = read_file(tool_args.get("filepath"), start_line=s_line, max_lines=m_lines)
+
+    elif tool_name == "read_symbol":
+        fp = tool_args.get("filepath")
+        sym = tool_args.get("symbol_name")
+        tool_result = read_symbol(fp, sym)
 
     elif tool_name == "list_tree":
         d_path = tool_args.get("dir_path", ".")
