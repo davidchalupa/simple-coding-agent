@@ -51,6 +51,8 @@ def write_file(filepath, content):
         return f"Error writing file: {e}"
 
 
+import re
+
 def append_file(filepath, content):
     """Appends content to the end of an existing file. Perfect for building large files safely."""
     try:
@@ -58,6 +60,16 @@ def append_file(filepath, content):
             return "Error: Refused to append empty whitespace. If the file is complete, announce completion and stop."
         if not os.path.exists(filepath):
             return f"Error: File '{filepath}' does not exist. Use write_file to initialize it first."
+
+        first_real_line = next((l for l in content.splitlines() if l.strip()), "")
+        if re.match(r'^\s+(return|break|continue|yield)\b', first_real_line):
+            return (
+                "Error: Refused to append. This content starts with an indented "
+                f"'{first_real_line.strip().split()[0]}' statement, which would be invalid outside a "
+                "function body at the end of the file. If you need to modify an existing function, use "
+                "replace_lines (with read_symbol to get exact line numbers) instead of append_file."
+            )
+
         with open(filepath, 'a', encoding='utf-8') as f:
             f.write(content)
         return f"Successfully appended content to {filepath}"
@@ -494,26 +506,34 @@ import ast
 
 
 def read_symbol(filepath: str, symbol_name: str) -> str:
-    """
-    Extracts a specific function or class from a Python file
-    along with its exact start and end line numbers.
-    """
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             source = f.read()
 
         tree = ast.parse(source)
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                if node.name == symbol_name:
-                    start_line = node.lineno
-                    # getattr safety check for older Python versions, though 3.8+ has end_lineno natively
-                    end_line = getattr(node, 'end_lineno', start_line)
+        top_level_defs = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
 
-                    snippet = ast.get_source_segment(source, node)
+        for i, node in enumerate(top_level_defs):
+            if node.name == symbol_name:
+                start_line = node.lineno
+                end_line = getattr(node, 'end_lineno', start_line)
+                snippet = ast.get_source_segment(source, node)
 
-                    header = f"--- Symbol: '{symbol_name}' | File: {filepath} | Lines: {start_line}-{end_line} ---"
-                    return f"{header}\n{snippet}"
+                next_symbol_hint = ""
+                if i + 1 < len(top_level_defs):
+                    next_node = top_level_defs[i + 1]
+                    next_line = next_node.lineno
+                    kind = "class" if isinstance(next_node, ast.ClassDef) else "def"
+                    next_symbol_hint = (
+                        f"\nNext symbol after this one: '{next_node.name}' starts at line {next_line}. "
+                        f"If replacing this whole symbol via replace_lines, use end_line={end_line}, "
+                        f"expected_end_snippet matching the line at {next_line}."
+                    )
+                else:
+                    next_symbol_hint = "\nThis is the LAST top-level symbol in the file."
+
+                header = f"--- Symbol: '{symbol_name}' | File: {filepath} | Lines: {start_line}-{end_line} ---"
+                return f"{header}\n{snippet}{next_symbol_hint}"
 
         return f"Error: Symbol '{symbol_name}' not found in {filepath}."
     except Exception as e:

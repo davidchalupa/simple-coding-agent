@@ -326,6 +326,34 @@ def main():
                 {"role": "user", "content": split_prompt}
             ]
 
+        # --- MACRO: /consult ---
+        elif user_input.startswith("/consult"):
+            target_log = user_input.replace("/consult", "").strip()
+
+            consult_prompt = (
+                "You are an elite Python debugging consultant operating in READ-ONLY mode. "
+                "You are forbidden from using write_file, append_file, patch_file, or replace_lines.\n\n"
+                "Your workflow:\n"
+                "1. Read the provided error log or traceback.\n"
+                "2. Identify the failing functions.\n"
+                "3. Use `read_symbol` to fetch ONLY those specific functions (do not use `read_file` for whole files unless absolutely necessary).\n"
+                "4. Analyze the root cause and output a corrected, drop-in replacement version of the function in a markdown block."
+            )
+
+            # If the user passed a log file path (e.g. /consult error.log)
+            if target_log and os.path.isfile(target_log):
+                with open(target_log, 'r') as f:
+                    log_content = f.read()
+                consult_prompt += f"\n\nHere is the target log to diagnose:\n```text\n{log_content}\n```"
+
+            print(f"\n🔍 [Consultant Mode Activated] Write tools disabled. Context optimized.")
+
+            # Reset agent memory and inject the specialized system prompt
+            messages = [
+                {"role": "system", "content": consult_prompt}
+            ]
+            continue
+
         else:
             # Standard execution or continuation of sandbox mode
             messages.append({"role": "user", "content": user_input})
@@ -509,6 +537,7 @@ def main():
 
                     # Auxiliary output of the tool_result, useful for debugging
                     MAX_RESULT_PREVIEW = 400
+                    # MAX_RESULT_PREVIEW = 2000
                     if len(tool_result) > MAX_RESULT_PREVIEW:
                         preview = tool_result[:MAX_RESULT_PREVIEW]
                         print(f"   Result ({len(tool_result)} chars, truncated): {preview}...")
@@ -516,7 +545,7 @@ def main():
                         print(f"   Result: {tool_result}")
                     # Self-Verification
                     if SELF_VERIFY_PY_WRITES and was_mod and tool_name in ["write_file", "append_file",
-                                                                           "patch_file"]:
+                                                                           "patch_file", "replace_lines"]:
                         fp = tool_args.get("filepath", "")
                         if linter_error := run_self_verification(fp):
                             consecutive_lint_failures += 1
