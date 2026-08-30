@@ -42,15 +42,21 @@ def test_agent_minesweeper_modify_with_replace_lines():
         "It should return True if the game was won and otherwise it should return False. ",
         "Use the `replace_lines` tool to make this change. "
         "CRITICAL RULES:\n"
-        "1. Identify the exact start_line and end_line of the run_game_loop function as it currently appears "
-        "in the file you just read (from the `def run_game_loop(...):` line down to the last line of the "
-        "function body, right before the next `def`).\n"
+        "0. FIRST use the `read_symbol` tool with symbol_name='run_game_loop' to get its exact start_line, "
+        "end_line, and the name of the next symbol in the file. Use those exact values for `replace_lines` "
+        "afterward — do not count lines yourself or guess them.\n"
+        "1. Identify the exact start_line and end_line of the run_game_loop function as reported by "
+        "`read_symbol` (from the `def run_game_loop(...):` line down to the last line of the function body, "
+        "right before the next `def`).\n"
         "2. Set `content` to the FULL rewritten function body, replacing the `break` statements in the "
         "win/loss/quit branches with `return True` or `return False` as appropriate. Keep every other line "
         "of logic unchanged.\n"
         "3. You do NOT need to retype the old code anywhere — only supply start_line, end_line, and the NEW content.\n"
         "4. Preserve the exact leading spaces (indentation) so the replaced code stays syntactically valid Python.\n"
-        "5. Do NOT use `patch_file` for this change — it is too large for that tool. Use `replace_lines`.",
+        "5. `expected_start_snippet` MUST be the exact `def run_game_loop(...):` signature line. "
+        "`expected_end_snippet` MUST be the exact signature line of the NEXT function reported by `read_symbol`. "
+        "NEVER use a generic line like `while True:`, `else:`, `continue`, or a bare `if` as an anchor.\n"
+        "6. Do NOT use `patch_file` for this change — it is too large for that tool. Use `replace_lines`.",
         "/send",
 
         # --- PHASE 2: Testing ---
@@ -62,23 +68,27 @@ def test_agent_minesweeper_modify_with_replace_lines():
         "Do NOT attempt to monkeypatch or reassign attributes like `run_game_loop.place_mines` or "
         "`run_game_loop.compute_counts` — these do nothing, since place_mines/compute_counts are separate "
         "module-level functions, not attributes of run_game_loop, and run_game_loop never reads such attributes.\n"
-        "2. For a WIN test case: pass an empty `mines` set and a `get_action` mock whose action reveals safe "
-        "cells until every non-mine cell is revealed (or directly construct `revealed` so all non-mine cells "
-        "are already True), so the win condition is met.\n"
-        "3. For a LOSS test case: pass a `mines` set containing at least one real coordinate (e.g. {(0, 0)}), "
+        "2. For a LOSS test case: pass a `mines` set containing at least one real coordinate (e.g. {(0, 0)}), "
         "and have your `get_action` mock return a 'c' click on that exact mined coordinate, so handle_click "
         "genuinely returns False and the loss path executes.\n"
+        "3. For a WIN test case: pass an empty `mines` set. Do NOT pre-fill `revealed` with all True values "
+        "before calling run_game_loop — that would let the function detect a win on its very first check, "
+        "without ever calling get_action or exercising handle_click, which is not a real test. Instead, start "
+        "with `revealed` all False, and give `get_action` a `side_effect` list (or callable) that clicks "
+        "through enough distinct safe cells for the loop to genuinely reach the win condition through actual "
+        "gameplay.\n"
         "4. Use the `write_file` tool and put the full file content directly inside the JSON `content` field, "
         "properly escaped (use \\n for newlines). Do not use a `<payload>` block.\n"
         "5. `board_size` (9) and `mines_count` (12) are fixed GLOBAL constants defined in minesweeper.py — "
         "run_game_loop does NOT take board_size as a parameter and always iterates using the real global "
         "board_size (9x9). Your `counts`, `revealed`, and `flags` data structures MUST be sized as a full 9x9 "
-        "grid (e.g. `revealed = [[True] * 9 for _ in range(9)]`), not a smaller board, or you will get an "
-        "IndexError. Do NOT define your own local `board_size` variable with a different value.",
+        "grid, not a smaller board, or you will get an IndexError. Do NOT define your own local `board_size` "
+        "variable with a different value.",
         "/send",
 
-        "Run the test suite using your `run_cmd` tool. CRITICAL: You must cd minesweeper-solve first so the imports resolve correctly (e.g., cd minesweeper-solve && python -m unittest test_run_game_loop.py). If any tests fail, use your patching tools to fix the logic. "
-        "If they all passed, just reply 'All good'.",
+        "Run the test suite using your `run_cmd` tool. CRITICAL: You must cd minesweeper-solve first so the "
+        "imports resolve correctly (e.g., cd minesweeper-solve && python -m unittest test_run_game_loop.py). "
+        "If any tests fail, use your patching tools to fix the logic. If they all passed, just reply 'All good'.",
         "/send",
 
         "/quit"
