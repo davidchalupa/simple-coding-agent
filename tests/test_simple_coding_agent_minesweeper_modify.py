@@ -77,7 +77,7 @@ def test_agent_minesweeper_modify_with_replace_lines():
         "IndexError. Do NOT define your own local `board_size` variable with a different value.",
         "/send",
 
-        "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
+        "Run the test suite using your `run_cmd` tool. CRITICAL: You must cd minesweeper-solve first so the imports resolve correctly (e.g., cd minesweeper-solve && python -m unittest test_run_game_loop.py). If any tests fail, use your patching tools to fix the logic. "
         "If they all passed, just reply 'All good'.",
         "/send",
 
