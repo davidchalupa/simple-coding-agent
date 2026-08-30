@@ -326,34 +326,6 @@ def main():
                 {"role": "user", "content": split_prompt}
             ]
 
-        # --- MACRO: /consult ---
-        elif user_input.startswith("/consult"):
-            target_log = user_input.replace("/consult", "").strip()
-
-            consult_prompt = (
-                "You are an elite Python debugging consultant operating in READ-ONLY mode. "
-                "You are forbidden from using write_file, append_file, patch_file, or replace_lines.\n\n"
-                "Your workflow:\n"
-                "1. Read the provided error log or traceback.\n"
-                "2. Identify the failing functions.\n"
-                "3. Use `read_symbol` to fetch ONLY those specific functions (do not use `read_file` for whole files unless absolutely necessary).\n"
-                "4. Analyze the root cause and output a corrected, drop-in replacement version of the function in a markdown block."
-            )
-
-            # If the user passed a log file path (e.g. /consult error.log)
-            if target_log and os.path.isfile(target_log):
-                with open(target_log, 'r') as f:
-                    log_content = f.read()
-                consult_prompt += f"\n\nHere is the target log to diagnose:\n```text\n{log_content}\n```"
-
-            print(f"\n🔍 [Consultant Mode Activated] Write tools disabled. Context optimized.")
-
-            # Reset agent memory and inject the specialized system prompt
-            messages = [
-                {"role": "system", "content": consult_prompt}
-            ]
-            continue
-
         else:
             # Standard execution or continuation of sandbox mode
             messages.append({"role": "user", "content": user_input})
