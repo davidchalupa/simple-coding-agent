@@ -1,6 +1,69 @@
 import os
 import ast
 import builtins
+import re
+
+
+def attempt_quote_delimiter_fix(filepath, error_line_no):
+    """
+    Narrow, deterministic repair for a specific recurring failure: a line uses
+    single-quote string delimiters but the string's own content contains an
+    unescaped literal single quote (e.g. print('Use 'c' to click')). If the
+    line contains no double quotes at all, it's almost always safe to swap
+    the outer delimiters to double quotes instead of trying to escape the
+    inner ones.
+
+    Returns True if a fix was applied and the file was rewritten, else False.
+    """
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        if error_line_no < 1 or error_line_no > len(lines):
+            return False
+
+        idx = error_line_no - 1
+        line = lines[idx]
+
+        # Bail out if the line contains any double quote already -- ambiguous,
+        # don't guess.
+        if '"' in line:
+            return False
+
+        # Heuristic: only proceed if there are enough single-quote characters
+        # to indicate a genuinely broken multi-quote string, not ordinary code.
+        if line.count("'") < 4:
+            return False
+
+        first = line.find("'")
+        last = line.rfind("'")
+        if first == -1 or first == last:
+            return False
+
+        inner = line[first + 1:last]
+        # Un-escape any already-escaped single quotes the model may have
+        # inserted, since they're no longer needed once we swap to double
+        # quotes as the delimiter.
+        inner = inner.replace("\\'", "'")
+
+        new_line = line[:first] + '"' + inner + '"' + line[last + 1:]
+
+        candidate_lines = lines[:]
+        candidate_lines[idx] = new_line
+        candidate_source = ''.join(candidate_lines)
+
+        try:
+            ast.parse(candidate_source)
+        except SyntaxError:
+            return False  # Fix didn't actually resolve it; don't apply.
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.writelines(candidate_lines)
+
+        return True
+
+    except Exception:
+        return False
 
 
 class DependencyChecker(ast.NodeVisitor):
