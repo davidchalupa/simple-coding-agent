@@ -93,11 +93,19 @@ def build_split_prompt(filepath, target_dir, execute_mode=False):
         )
 
     if execute_mode:
-        prompt = f"""You are a senior Software Architect. Your task is to design a refactoring split blueprint.
+        prompt = f"""You are a senior Software Architect. Your task is to design a conservative refactoring split blueprint.
 
 [Context]
 File Target: `{filename}`
-Layout Footprint:
+
+IMPORTANT:
+- `{filename}` is the ORIGINAL ROOT FILE.
+- The original root filename is FIXED and MUST NOT be renamed.
+- If any functions or methods remain in the root file, they MUST be assigned to the EXACT filename `{filename}`.
+- NEVER invent a replacement root filename such as `main.py`, `processor.py`, `order_processor.py`, or similar.
+- You may create additional module filenames, but `{filename}` itself must remain the root output file.
+
+[Layout Footprint]
 {context_framing}
 
 [AST Map Output]
@@ -105,15 +113,37 @@ Layout Footprint:
 
 [Architectural Rules]
 {architectural_guidance}
-- Ensure that core entry execution setups or initialization points remain clearly in the root file.
+- Preserve all existing functions and methods by assigning each one to exactly one output file.
+- Keep the core entry/orchestration methods in `{filename}` where appropriate.
+- Use the existing filename `{filename}` exactly as the root-file key in the blueprint.
+- Do not rename the original file as part of the refactoring.
 
 [Required Output Layout Format]
-1. EXPLANATION: Write out your structural design reasoning out loud first. Justify your module division choices.
-2. BLUEPRINT: Provide your file mapping inside a <blueprint> XML tag as a JSON dictionary (mapping recommended filenames to lists of their respective target classes/methods). DO NOT use markdown blocks.
+1. EXPLANATION: Briefly explain the proposed structural division.
+2. BLUEPRINT: Immediately after the explanation, provide ONE valid JSON object.
 
-CRITICAL INSTRUCTION: 
-STOP after writing the <blueprint> tag. Do NOT use tools. Do NOT write any file contents. 
-The system will use deterministic AST extraction to safely move the code blocks based on your blueprint automatically.
+CRITICAL BLUEPRINT RULES:
+- The JSON object MUST be inside exactly one fenced JSON code block.
+- The opening line MUST be exactly: ```json
+- The closing line MUST be exactly: ```
+- The JSON object maps output filenames to lists of function/method names.
+- The key `{filename}` MUST appear in the JSON if any functions or methods remain in the root file.
+- The root filename MUST be exactly `{filename}`.
+- Do NOT rename the root file.
+- Do NOT use a <blueprint> XML tag.
+- Do NOT output inline JSON.
+- Do NOT output multiple JSON blocks.
+- Do NOT call any tools.
+- STOP immediately after the closing JSON code fence.
+
+Example structure:
+
+{{
+  "{filename}": ["__init__", "process_order"],
+  "some_specialized_module.py": ["validate_order"]
+}}
+
+The system will parse this JSON blueprint and perform the AST extraction deterministically.
 """
     else:
         prompt = f"""You are a senior Software Architect. Your task is to design a refactoring split blueprint.
@@ -131,11 +161,11 @@ Layout Footprint:
 - Ensure that core entry execution setups or initialization points remain clearly in the root file.
 
 [Required Output Layout Format]
-1. EXPLANATION: Write out your structural design reasoning out loud first. Justify your module division choices using generic domain terms.
+1. EXPLANATION: Write out your structural design reasoning out loud. Justify your module division choices using generic domain terms.
 2. BLUEPRINT: Provide your file mapping inside a <blueprint> XML tag as a JSON dictionary (mapping filenames to target methods). DO NOT use markdown (```) blocks.
-3. IMMEDIATE EXECUTION: You must immediately begin executing your plan. Use your `write_file` tool to create the FIRST file from your blueprint. 
-   - CRITICAL: Write ONLY the structural boilerplate skeleton. 
-   - You MUST use `pass` for every single method body to ensure perfectly valid Python syntax. 
+3. IMMEDIATE EXECUTION: You must immediately begin executing your plan. Use your `write_file` tool to create the FIRST file from your blueprint.
+   - CRITICAL: Write ONLY the structural boilerplate skeleton.
+   - You MUST use `pass` for every single method body to ensure perfectly valid Python syntax.
    - Do NOT attempt to write the actual implementation logic yet.
 4. ITERATIVE COMPLETION: You MUST continue using your `write_file` tool to scaffold EVERY remaining file listed in your blueprint.
    - Do NOT output "Refactor Phase Complete" until all planned files are successfully created.
@@ -144,7 +174,7 @@ Layout Footprint:
 MANDATORY TOOL CALL FORMAT:
 <tool_call>
 {{
-    "name": "write_file", 
+    "name": "write_file",
     "args": {{"filepath": "filename_from_blueprint.py"}}
 }}
 </tool_call>
@@ -155,13 +185,14 @@ class YourClassName:
     # YOU MUST INCLUDE ALL METHODS ASSIGNED TO THIS FILE IN THE BLUEPRINT
     def method_assigned_in_blueprint_1(self):
         pass
-        
+
     def method_assigned_in_blueprint_2(self):
         pass
 </payload>
 
 Start executing the skeleton generation for the first file immediately after closing your <blueprint> tag.
 """
+
     return prompt
 
 
