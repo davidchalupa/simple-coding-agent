@@ -50,4 +50,11 @@ MODEL_REGISTRY = {
         "max_context": 32768,
         "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
+    "codellama-13b": {
+        "filename": "codellama-13b-instruct.Q4_K_M.gguf",
+        "display_name": "CodeLlama 13B Instruct (Q4_K_M)",
+        "chat_format": "llama-2",  # CodeLlama uses Llama-2 prompt template syntax ([INST])
+        "max_context": 16384,
+        "gpu_layers": -1
+    },
 }
