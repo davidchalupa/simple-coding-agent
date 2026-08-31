@@ -20,19 +20,40 @@ MODEL_REGISTRY = {
         "max_context": 16384,
         "gpu_layers": -1
     },
+    "qwen2.5-14b": {
+        "filename": "Qwen2.5-Coder-14B-Instruct-Q3_K_S.gguf",
+        "display_name": "Qwen 2.5 Coder 14B (Q3_K_S)",
+        "chat_format": "chatml",
+        "max_context": 16384,
+        "gpu_layers": [-1, 32, 24, 16]
+    },
+    "qwen2.5-14b-q2k": {
+        "filename": "Qwen2.5-Coder-14B-Instruct-Q2_K.gguf",
+        "display_name": "Qwen 2.5 Coder 14B (Q2_K)",
+        "chat_format": "chatml",
+        "max_context": 16384,
+        "gpu_layers": [-1, 32, 24, 16]
+    },
+    "phi-4-14b": {
+        "filename": "phi-4-Q3_K_S.gguf",
+        "display_name": "Microsoft Phi-4 14B (Q3_K_S)",
+        "chat_format": "chatml",  # Phi-4 maps well to ChatML in most agent UI frameworks
+        "max_context": 16384,
+        "gpu_layers": [-1, 32, 24, 16]
+    },
     "hermes3": {
         "filename": "Hermes-3-Llama-3.1-8B.Q4_K_M.gguf",
         "display_name": "Hermes 3 (Llama 3.1 8B)",
         "stop": ["<|im_end|>", "<|eot_id|>", "<|endoftext|>"],
         "temperature": 0.2,
         "max_context": 32768,
-        "gpu_layers": -1,  # -1 or 99 offloads all layers to your RTX 5050 GPU
+        "gpu_layers": -1,
         "chat_format": "chatml"  # Hermes 3 uses standard ChatML formatting
     },
-    "qwen2.5-14b": {
-        "filename": "Qwen2.5-Coder-14B-Instruct-Q3_K_M.gguf",
-        "display_name": "Qwen 2.5 Coder 14B (Q3_K_M)",
-        "chat_format": "chatml",
+    "codellama-13b": {
+        "filename": "codellama-13b-instruct.Q3_K_S.gguf",
+        "display_name": "CodeLlama 13B Instruct (Q3_K_S)",
+        "chat_format": "llama-2",  # CodeLlama uses Llama-2 [INST] prompt formatting
         "max_context": 16384,
         "gpu_layers": [-1, 32, 24, 16],  # try full, then progressively more CPU spillover
     },
@@ -49,12 +70,5 @@ MODEL_REGISTRY = {
         "chat_format": "chatml",
         "max_context": 32768,
         "gpu_layers": -1  # -1 attempts to offload entirely to GPU
-    },
-    "codellama-13b": {
-        "filename": "codellama-13b-instruct.Q4_K_M.gguf",
-        "display_name": "CodeLlama 13B Instruct (Q4_K_M)",
-        "chat_format": "llama-2",  # CodeLlama uses Llama-2 prompt template syntax ([INST])
-        "max_context": 16384,
-        "gpu_layers": -1
     },
 }

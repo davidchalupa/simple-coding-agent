@@ -3,20 +3,19 @@ import requests
 from tqdm import tqdm
 from pathlib import Path
 
-# Configured for CodeLlama 13B Instruct (GGUF)
+# CodeLlama 13B Instruct - Q3_K_M (Fits within 8GB VRAM)
 repo_id = "TheBloke/CodeLlama-13B-Instruct-GGUF"
-filename = "codellama-13b-instruct.Q4_K_M.gguf"
+filename = "codellama-13b-instruct.Q3_K_S.gguf"
 dest_dir = Path(__file__).resolve().parent.parent / "models"
 
 os.makedirs(dest_dir, exist_ok=True)
 
-# Hugging Face resolve URL
 url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
 tmp_path = os.path.join(dest_dir, filename + ".part")
 out_path = os.path.join(dest_dir, filename)
 
 print(f"Starting download: {filename}...")
-print("This is approximately 7.87 GB.")
+print("File size is approximately 5.66 GB.")
 
 try:
     with requests.get(url, stream=True, timeout=30) as r:

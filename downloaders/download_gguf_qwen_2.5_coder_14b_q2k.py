@@ -3,9 +3,9 @@ import requests
 from tqdm import tqdm
 from pathlib import Path
 
-# Qwen 2.5 Coder 14B - Q3_K_S (~6.66 GB / ~6.20 GiB)
+# Qwen 2.5 Coder 14B - Q2_K
 repo_id = "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF"
-filename = "Qwen2.5-Coder-14B-Instruct-Q3_K_S.gguf"
+filename = "Qwen2.5-Coder-14B-Instruct-Q2_K.gguf"
 dest_dir = Path(__file__).resolve().parent.parent / "models"
 
 os.makedirs(dest_dir, exist_ok=True)
@@ -15,7 +15,7 @@ tmp_path = os.path.join(dest_dir, filename + ".part")
 out_path = os.path.join(dest_dir, filename)
 
 print(f"Starting download: {filename}...")
-print("File size is approximately 6.66 GB.")
+print("File size is approximately 5.77 GB.")
 
 try:
     with requests.get(url, stream=True, timeout=30) as r:

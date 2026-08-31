@@ -3,9 +3,10 @@ import requests
 from tqdm import tqdm
 from pathlib import Path
 
-# Qwen 2.5 Coder 14B - Q3_K_S (~6.66 GB / ~6.20 GiB)
-repo_id = "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF"
-filename = "Qwen2.5-Coder-14B-Instruct-Q3_K_S.gguf"
+# Microsoft Phi-4 14B - Q3_K_S (~6.50 GB)
+# Fits 100% in 8GB VRAM with context headroom
+repo_id = "bartowski/phi-4-GGUF"
+filename = "phi-4-Q3_K_S.gguf"
 dest_dir = Path(__file__).resolve().parent.parent / "models"
 
 os.makedirs(dest_dir, exist_ok=True)
@@ -15,7 +16,7 @@ tmp_path = os.path.join(dest_dir, filename + ".part")
 out_path = os.path.join(dest_dir, filename)
 
 print(f"Starting download: {filename}...")
-print("File size is approximately 6.66 GB.")
+print("File size is approximately 6.50 GB.")
 
 try:
     with requests.get(url, stream=True, timeout=30) as r:
