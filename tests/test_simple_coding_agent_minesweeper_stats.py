@@ -73,10 +73,10 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade():
         "CRITICAL: Just output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
         "/send",
 
-        "Perfect. Now use the `write_file` tool to save the code you just wrote into `benchmark.py`. "
-        "You MUST use this exact raw format. Do not use markdown ```json blocks:\n\n"
-        "<tool_call>{\"name\": \"write_file\", \"args\": {\"filepath\": \"benchmark.py\"}}</tool_call>\n"
-        "<payload>\n[INSERT YOUR PYTHON CODE HERE]\n</payload>",
+        "Now save the code you just generated into `benchmark.py` using the `write_file` tool. "
+        "Do not output the code again. "
+        "Do not use a <payload> block. "
+        "Use the normal write_file JSON format with the complete code in the `content` field.",
         "/send",
 
         "Looks good, task complete.",
@@ -101,7 +101,7 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
     """
     Works on minesweeper-solve-with-changes.zip that already has required changes in minesweeper.py.
     Intentionally reads only the main file.
-    Keeps the agent free in choice of solution, but strictly forces minimal code and imports.
+    Keeps the agent free in choice of solution, but explicitly requires minimal code and imports.
     """
     zip_target = "test_data/minesweeper-solve-with-changes.zip"
     repo_name = "minesweeper-solve"
@@ -112,27 +112,36 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
         "/send",
 
         "Now, use your `read_file` tool to inspect the main python file you just found (the main game file). "
-        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire files. You can call the tool multiple times if needed.",
+        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file. "
+        "You can call the tool multiple times if needed.",
         "/send",
 
         "Based on the code you read, write the code for `benchmark.py`. "
         "CRITICAL CONSTRAINTS:\n"
         "1. Be extremely minimalistic.\n"
         "2. DO NOT redefine or rewrite any classes or functions from the existing files.\n"
-        "3. Imports: You MUST import the game engine functions (like `place_mines`, `compute_counts`, `handle_click`, `run_game_loop`) from `minesweeper.py`. You MUST import the agent callback functions (`ai_get_action` and `dfs_get_action`) from `action_ai_agent.py`.\n"
-        "4. DO NOT use the `main_*` launcher functions as agent callbacks. Pass the actual `get_action` callbacks to your game loop.\n"
-        "5. DO NOT use `argparse` or require command line arguments. The script MUST automatically run exactly 10 games for the Rule-based agent and the same number for the DFS agent sequentially when executed directly.\n"
-        "6. Calculate their success rates and print the results to standard output, including how many games out of "
-        "the total were won for each agent in an 'X/10' style format (e.g. '7/10 games won').\n"
-        "7. Do NOT import or reference interactive-mode functions (like `interactive_get_action`, `main_interactive`, "
-        "or `prompt_first_click`) — this benchmark only needs the Rule-based and DFS agents.\n"
-        "\nJust output the python code in a standard ```python markdown block. DO NOT use the `write_file` tool yet.",
+        "3. Import every module and function actually used by the generated benchmark.\n"
+        "4. You MUST import the game engine functions needed from `minesweeper.py`, including "
+        "`place_mines`, `compute_counts`, `handle_click`, and `run_game_loop` as applicable.\n"
+        "5. You MUST import `ai_get_action` and `dfs_get_action` from `action_ai_agent.py`.\n"
+        "6. DO NOT use the `main_*` launcher functions as agent callbacks. Pass the actual `get_action` callbacks "
+        "to the game loop.\n"
+        "7. DO NOT use `argparse` or require command line arguments.\n"
+        "8. When executed directly, automatically run exactly 10 games for the Rule-based agent and exactly 10 "
+        "games for the DFS agent sequentially.\n"
+        "9. Calculate and print their success rates, including result for each agent STRICTLY in format 'X/10 games won' (e.g. '7/10 games won').\n"
+        "10. DO NOT import or reference interactive-mode functions such as `interactive_get_action`, "
+        "`main_interactive`, or `prompt_first_click`.\n"
+        "11. Every name used by the generated script must either be defined in the script or explicitly imported.\n"
+        "\n"
+        "Just output the python code in a standard ```python markdown block. "
+        "DO NOT use the `write_file` tool yet.",
         "/send",
 
-        "Perfect. Now use the `write_file` tool to save the code you just wrote into `benchmark.py`. "
-        "You MUST use this exact raw format. Do not use markdown ```json blocks:\n\n"
-        "<tool_call>{\"name\": \"write_file\", \"args\": {\"filepath\": \"benchmark.py\"}}</tool_call>\n"
-        "<payload>\n[INSERT YOUR PYTHON CODE HERE]\n</payload>",
+        "Now save the code you just generated into `benchmark.py` using the `write_file` tool. "
+        "Do not output the code again. "
+        "Do not use a <payload> block. "
+        "Use the normal write_file JSON format with the complete code in the `content` field.",
         "/send",
 
         "Looks good, task complete.",
