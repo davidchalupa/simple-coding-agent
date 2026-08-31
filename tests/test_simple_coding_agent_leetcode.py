@@ -16,12 +16,15 @@ def test_agent_workflow_two_sum():
         "1. `len(result) == 2` "
         "2. `result[0] != result[1]` "
         "3. `nums[result[0]] + nums[result[1]] == target`. "
-        "Include at least 3 diverse edge cases (including negative numbers) using this exact property-checking pattern.",
+        "Include at least 3 diverse edge cases (including negative numbers) using this exact property-checking pattern. "
+        "CRITICAL: For each test case, choose your nums/target so that a valid pair is GUARANTEED to exist - "
+        "e.g. pick two arbitrary numbers first (like -3 and -4), compute their sum yourself, and set target to "
+        "exactly that sum. Do NOT invent nums and target independently and assume they happen to sum correctly."
+        "If they all passed, just reply 'All good'.",
         "/send",
 
         # --- PHASE 2.5: Enforcing fixes to reduce flakiness ---
         "Run the test suite using your `run_cmd` tool. If any tests fail, use your patching tools to fix the logic. "
-        "If they all passed, just reply 'All good'.",
         "/send",
 
         # --- PHASE 3: Graceful Exit ---
@@ -147,9 +150,6 @@ def test_agent_workflow_trap():
         "Run the test suite one final time using your `run_cmd` tool to verify your changes. "
         "If you see ANY failures or AssertionErrors in the terminal output, you must immediately patch the source code or the test file to correct the expected values. "
         "Do NOT say 'All good' until you have executed the tool and the console explicitly shows that all tests passed.",
-        "CRITICAL: For each test case, choose your nums/target so that a valid pair is GUARANTEED to exist - "
-        "e.g. pick two arbitrary numbers first (like -3 and -4), compute their sum yourself, and set target to "
-        "exactly that sum. Do NOT invent nums and target independently and assume they happen to sum correctly."
         "/send",
 
         # --- PHASE 3: Graceful Exit ---
