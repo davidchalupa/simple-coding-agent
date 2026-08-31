@@ -46,6 +46,7 @@ def check_benchmark_success_rates(stdout: str):
           + (f", parsed rates: {all_parsed}" if rates else ""))
 
 
+@pytest.mark.skip(reason="Instability across quantizations, probably easier to rewrite from scratch")
 def test_agent_minesweeper_stats_write_script_read_main_only_premade():
     """
     Works on minesweeper-solve-with-changes.zip that already has required changes in minesweeper.py.

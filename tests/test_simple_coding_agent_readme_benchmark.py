@@ -2,6 +2,7 @@ import os
 import tempfile
 import shutil
 import zipfile
+import pytest
 
 from tests.test_utils.test_runner import run_automated_coding_task_test
 from tests.test_utils.grounding_verifier import GroundingVerifier
@@ -92,6 +93,7 @@ def run_self_readme_and_capture(repo_name, mode_flag):
     return captured.get("content", "")
 
 
+@pytest.mark.skip(reason="Run only on-demand if benchmarking needed")
 def test_minesweeper_macro_benchmark():
     """
     Pilots the benchmark comparison between --deep and --deep-ast
@@ -149,6 +151,7 @@ def test_minesweeper_macro_benchmark():
         shutil.rmtree(ground_truth_sandbox)
 
 
+@pytest.mark.skip(reason="Run only on-demand if benchmarking needed")
 def test_self_macro_benchmark():
     """
     Pilots the benchmark comparison between --deep and --deep-ast
