@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import psutil
+import re
 
 import llama_cpp
 from llama_cpp import Llama
@@ -42,7 +43,8 @@ WRITE_TOOLS = frozenset({"write_file", "append_file", "patch_file", "replace_lin
 # forcing a text-only answer from whatever context already exists. Cache hits don't
 # count against this (they're free), but they do feed the loop-detection signature list
 # below so a model that ignores cached content still gets cut off deterministically.
-MAX_TOOL_CALLS_PER_TURN = 1
+# ToDo: make this tunable
+MAX_TOOL_CALLS_PER_TURN = 20
 
 
 def get_system_ram_gb():
@@ -80,7 +82,7 @@ def build_consultant_system_prompt():
     1. If the user's request requires reading or inspecting something you do NOT already have in this conversation, you MUST use the appropriate tool. Never guess or answer from memory.
     2. If the content was already retrieved earlier in this conversation, use it directly. Do NOT call the tool again for the same file or symbol.
     3. You are in READ-ONLY mode. Write and modification tools do not exist and must never be called.
-    4. If the task is complete or you only need to talk to the user, DO NOT output a tool call. Reply in plain text.
+    4. If the task is complete, reply in plain text. You MAY output multiple `<tool_call>` blocks in a single response to fetch information in parallel (e.g., reading multiple files).
     5. The JSON tool call MUST be minified on a SINGLE LINE.
     6. NEVER print, repeat, or summarize file contents in standard conversational text outside of a direct answer to the user's question.
     7. Only propose a corrected or modified version of code if the user has described a bug or explicitly asked for a change. Do not invent problems or rewrite code that wasn't reported as broken.
@@ -132,10 +134,10 @@ def initialize_agent():
                         model_path=str(target_path),
                         n_ctx=ctx_size,
                         n_threads=6,
-                        n_batch=512,
+                        n_batch=256,
                         n_gpu_layers=n_layers,
                         chat_format=active_config["chat_format"],
-                        flash_attn=True,
+                        flash_attn=False,
                         verbose=False
                     )
                     CONTEXT_WINDOW = ctx_size
@@ -189,6 +191,50 @@ def check_context_guardrail(current_messages, model, limit):
         pass
 
 
+def fuzzy_extract_tool_calls(text):
+    """
+    Hunts for any valid JSON object containing 'name' and 'args',
+    regardless of how the LLM wrapped, separated, or formatted them.
+    """
+    tools = []
+    # Find every starting position of what looks like a tool call
+    start_indices = [m.start() for m in re.finditer(r'\{\s*"name"\s*:', text)]
+
+    for start_idx in start_indices:
+        brace_count = 0
+        in_string = False
+        escape = False
+
+        for i in range(start_idx, len(text)):
+            char = text[i]
+
+            if escape:
+                escape = False
+                continue
+
+            if char == '\\':
+                escape = True
+            elif char == '"':
+                in_string = not in_string
+            elif not in_string:
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+
+                    if brace_count == 0:
+                        # Reached the end of this specific JSON object
+                        json_str = text[start_idx:i + 1]
+                        try:
+                            parsed = json.loads(json_str)
+                            if "name" in parsed:
+                                tools.append(parsed)
+                        except json.JSONDecodeError:
+                            pass
+                        break
+    return tools
+
+
 def main():
     global messages, session_cwd, consult_read_cache
 
@@ -221,8 +267,6 @@ def main():
         messages.append({"role": "user", "content": user_input})
 
         # --- Per-turn state ---
-        consecutive_errors = 0
-        recent_tool_signatures = []
         real_tool_calls_this_turn = 0
 
         # Internal Consultant Execution Loop
@@ -234,136 +278,128 @@ def main():
                 if interrupted:
                     break
 
-                tool_request = payload_parser.extract_tool_call(response_content, allow_patch=False)
+                # --- 1. Regex extraction for <tool_call> tags ---
+                raw_calls = re.findall(r'<tool_call>(.*?)</tool_call>', response_content, re.DOTALL)
+                tool_requests = []
 
-                if not tool_request:
+                if raw_calls:
+                    for call in raw_calls:
+                        try:
+                            parsed = json.loads(call)
+                            if "name" in parsed:
+                                tool_requests.append(parsed)
+                        except json.JSONDecodeError:
+                            continue
+                else:
+                    # --- 2. Fallback: Check if the model output a JSON array instead ---
+                    try:
+                        clean_content = response_content
+                        if "```json" in clean_content:
+                            clean_content = clean_content.split("```json")[1].split("```")[0]
+                        elif "```" in clean_content:
+                            clean_content = clean_content.split("```")[1].split("```")[0]
+
+                        clean_content = clean_content.strip()
+                        if clean_content.startswith("[") and clean_content.endswith("]"):
+                            parsed_array = json.loads(clean_content)
+                            if isinstance(parsed_array, list):
+                                for item in parsed_array:
+                                    if isinstance(item, dict) and "name" in item:
+                                        tool_requests.append(item)
+                    except Exception:
+                        pass
+
+                    # --- 3. Ultimate Fallback: Fuzzy brace-counting extraction ---
+                    if not tool_requests:
+                        tool_requests = fuzzy_extract_tool_calls(response_content)
+
+                if not tool_requests:
                     # Plain text reply — nothing left to do this turn.
+                    print("\n💬 [Consult] Agent finished. Awaiting your next question.")
                     break
 
-                tool_name = tool_request.get("name")
-                tool_args = tool_request.get("args", {})
+                combined_results = ""
 
-                # --- GUARDRAIL: write tools must never be reachable here ---
-                if tool_name in WRITE_TOOLS:
-                    print(f"🛑 [Consult Guardrail] Blocked disallowed tool `{tool_name}` in read-only mode.")
-                    messages.append({
-                        "role": "user",
-                        "content": f"System Alert: Tool `{tool_name}` is strictly disabled in Consult Mode. "
-                                   f"Do NOT attempt to execute it. Please output your suggested code fix "
-                                   f"directly in a standard Markdown block instead."
-                    })
-                    continue
+                # --- PROCESS all extracted tools sequentially ---
+                for tool_request in tool_requests:
+                    tool_name = tool_request.get("name")
+                    tool_args = tool_request.get("args", {})
 
-                if tool_name in ("read_file", "run_cmd") and "<payload>" in response_content:
-                    messages.append({"role": "user",
-                                     "content": f"System Alert: Tool `{tool_name}` does NOT accept <payload> blocks. Retry with ONLY the JSON block."})
-                    continue
-
-                # Path resolution
-                for key in ["filepath", "dir_path"]:
-                    if key in tool_args and not os.path.isabs(tool_args[key]):
-                        tool_args[key] = os.path.abspath(os.path.join(session_cwd, tool_args[key]))
-
-                # --- CACHE INTERCEPT for read_file / read_symbol ---
-                if tool_name in ("read_file", "read_symbol"):
-                    cache_key = (
-                        tool_name,
-                        tool_args.get("filepath"),
-                        tool_args.get("symbol_name"),
-                        tool_args.get("start_line"),
-                        tool_args.get("max_lines"),
-                    )
-                    if cache_key in consult_read_cache:
-                        print(f"📎 [Consult Cache] Already fetched this in-session — reusing cached result, no re-execution needed.")
-                        cached_result = consult_read_cache[cache_key]
-
-                        # Fed back in EXACTLY the same shape as a real tool execution result —
-                        # not a special "note" — so the model treats it the same way it treats
-                        # every other successful tool call it has seen this session.
-                        messages.append(
-                            {"role": "user", "content": f"Tool Execution Result:\n{cached_result}"})
-
-                        curr_sig = f"{tool_name}:{str(tool_args)}"
-                        recent_tool_signatures.append(curr_sig)
-                        recent_tool_signatures = recent_tool_signatures[-6:]
-                        if recent_tool_signatures.count(curr_sig) >= 3:
-                            print("🛑 [Circuit Breaker] Repeated cache hits without progress. Forcing a text-only final answer.")
-                            messages.append({
-                                "role": "user",
-                                "content": "Tool calls are disabled for this response. You already have "
-                                           "the full content you need above. Answer the user's original "
-                                           "question now, in plain text only — do not attempt a tool call."
-                            })
-                            response_content, _, _ = stream_agent_response(llm, messages)
-                            break
+                    if tool_name in WRITE_TOOLS:
+                        print(f"🛑 [Consult Guardrail] Blocked disallowed tool `{tool_name}`.")
+                        combined_results += f"System Alert: Tool `{tool_name}` is strictly disabled.\n\n"
                         continue
 
-                # Loop guardrail (repeated, non-cached calls that aren't converging)
-                curr_sig = f"{tool_name}:{str(tool_args)}"
-                recent_tool_signatures.append(curr_sig)
-                recent_tool_signatures = recent_tool_signatures[-6:]
-                repeat_count = recent_tool_signatures.count(curr_sig)
-                if repeat_count >= 2:
-                    consecutive_errors += 1
-                    if consecutive_errors >= 3:
-                        print("🛑 [Circuit Breaker] Consultant loop. Forcing turn end.")
-                        break
-                    messages.append({"role": "user",
-                                     "content": f"System Alert: This exact tool call has been attempted {repeat_count} times "
-                                                f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
-                                                f"underlying issue or try a different approach."})
-                    continue
+                    if tool_name in ("read_file", "run_cmd") and "<payload>" in response_content:
+                        combined_results += f"System Alert: `{tool_name}` does NOT accept <payload> blocks.\n\n"
+                        continue
 
-                # --- ONE REAL TOOL CALL PER USER TURN ---
-                # Consult mode is for targeted, single-lookup investigation with a human
-                # approving every step — not open-ended agentic chaining. Capping this stops
-                # the model from proactively fetching unrequested context (e.g. adjacent
-                # symbols) once it has already satisfied the question actually asked.
-                if real_tool_calls_this_turn >= MAX_TOOL_CALLS_PER_TURN:
-                    print("\n💬 [Consult] Tool call budget for this turn reached. Awaiting your next question.")
-                    break
+                    for key in ["filepath", "dir_path"]:
+                        if key in tool_args and not os.path.isabs(tool_args[key]):
+                            tool_args[key] = os.path.abspath(os.path.join(session_cwd, tool_args[key]))
 
-                # --- EXECUTION ---
-                print(f"\n⚠️  CONSULTANT REQUESTS EXECUTION: {tool_name}")
-                print(f"Arguments: {tool_args}")
-
-                approval = input("Allow this action? (y/n/edit): ").strip().lower()
-                tool_result, tool_reinforcement = "", ""
-
-                if approval == 'y':
-                    tool_result, tool_reinforcement, _was_mod = execute_tool(tool_name, tool_args, is_split_mode=False)
-                    real_tool_calls_this_turn += 1
-                    print(f"⚙️  Tool execution finished.")
-
-                    MAX_RESULT_PREVIEW = 400
-                    if len(tool_result) > MAX_RESULT_PREVIEW:
-                        preview = tool_result[:MAX_RESULT_PREVIEW]
-                        print(f"   Result ({len(tool_result)} chars, truncated): {preview}...")
-                    else:
-                        print(f"   Result: {tool_result}")
-
+                    # --- CACHE INTERCEPT ---
+                    cache_key = None
                     if tool_name in ("read_file", "read_symbol"):
                         cache_key = (
-                            tool_name,
-                            tool_args.get("filepath"),
-                            tool_args.get("symbol_name"),
-                            tool_args.get("start_line"),
-                            tool_args.get("max_lines"),
+                            tool_name, tool_args.get("filepath"), tool_args.get("symbol_name"),
+                            tool_args.get("start_line"), tool_args.get("max_lines")
                         )
-                        consult_read_cache[cache_key] = tool_result
+                        if cache_key in consult_read_cache:
+                            print(
+                                f"📎 [Consult Cache] Reusing cached result for {tool_name} on {tool_args.get('filepath')}.")
+                            combined_results += f"Result for {tool_name}:\n{consult_read_cache[cache_key]}\n\n"
+                            continue
 
-                elif approval == 'edit':
-                    tool_result = f"User denied and provided feedback: {input('Feedback: ')}"
-                else:
-                    tool_result = "User denied permission."
-                    print("🛑 Action blocked.")
+                    # --- MAX CALLS CHECK ---
+                    if real_tool_calls_this_turn >= MAX_TOOL_CALLS_PER_TURN:
+                        print("\n💬 [Consult] Tool call budget reached. Skipping remaining queued tools.")
+                        break
 
-                messages.append(
-                    {"role": "user", "content": f"Tool Execution Result:\n{tool_result}{tool_reinforcement}"})
+                    # --- EXECUTION ---
+                    print(f"\n⚠️  CONSULTANT REQUESTS EXECUTION: {tool_name}")
+                    print(f"Arguments: {tool_args}")
 
-                if approval == 'y':
-                    print("\n💬 [Consult] Tool call complete. Awaiting your next question (mode stays read-only).")
-                    break
+                    approval = input("Allow this action? (y/n/edit): ").strip().lower()
+
+                    if approval == 'y':
+                        tool_result, tool_reinforcement, _ = execute_tool(tool_name, tool_args, is_split_mode=False)
+                        real_tool_calls_this_turn += 1
+                        print(f"⚙️  Tool execution finished.")
+
+                        MAX_RESULT_PREVIEW = 400
+                        if len(tool_result) > MAX_RESULT_PREVIEW:
+                            print(
+                                f"   Result ({len(tool_result)} chars, truncated): {tool_result[:MAX_RESULT_PREVIEW]}...")
+                        else:
+                            print(f"   Result: {tool_result}")
+
+                        if cache_key:
+                            consult_read_cache[cache_key] = tool_result
+
+                        combined_results += f"Result for {tool_name}:\n{tool_result}{tool_reinforcement}\n\n"
+
+                    elif approval == 'edit':
+                        feedback = input('Feedback: ')
+                        combined_results += f"User denied {tool_name}. Feedback: {feedback}\n\n"
+                    else:
+                        print("🛑 Action blocked.")
+                        combined_results += f"User denied permission for {tool_name}.\n\n"
+
+                # --- FEEDBACK & LOOP CONTINUATION ---
+                if combined_results.strip():
+                    messages.append(
+                        {"role": "user", "content": f"Tool Execution Results:\n{combined_results.strip()}"})
+
+                # If we hit the budget, add a forceful prompt to make the model stop tooling and answer
+                if real_tool_calls_this_turn >= MAX_TOOL_CALLS_PER_TURN:
+                    messages.append({
+                        "role": "user",
+                        "content": "Tool limit reached for this turn. Provide your final answer in plain text based on the retrieved context."
+                    })
+
+                # The loop cycles back up to stream_agent_response() here
+                # so the LLM can generate text (or more tool calls) based on the combined_results!
 
             except json.JSONDecodeError as e:
                 print(f"\n❌ [Parser Interceptor] Halted syntax loop.")

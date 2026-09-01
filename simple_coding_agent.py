@@ -107,10 +107,10 @@ def initialize_agent():
                         model_path=str(target_path),
                         n_ctx=ctx_size,
                         n_threads=6,
-                        n_batch=512,
+                        n_batch=256,
                         n_gpu_layers=n_layers,
                         chat_format=active_config["chat_format"],
-                        flash_attn=True,
+                        flash_attn=False,
                         verbose=False
                     )
                     CONTEXT_WINDOW = ctx_size

@@ -2,8 +2,9 @@ import os
 import requests
 from tqdm import tqdm
 from pathlib import Path
+import argparse
 
-# Global variable for models
+
 models = {
     "codellama-13b": {
         "repo_id": "TheBloke/CodeLlama-13B-Instruct-GGUF",
@@ -13,7 +14,46 @@ models = {
         "repo_id": "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
         "filename": "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf"
     },
-    # Add more models as needed
+    "hermes3": {
+        "repo_id": "NousResearch/Hermes-3-Llama-3.1-8B-GGUF",
+        "filename": "Hermes-3-Llama-3.1-8B.Q4_K_M.gguf"
+    },
+    "phi-4-14b": {
+        "repo_id": "bartowski/phi-4-GGUF",
+        "filename": "phi-4-Q3_K_S.gguf"
+    },
+    "qwen-2.5-coder-14b": {
+        "repo_id": "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF",
+        "filename": "Qwen2.5-Coder-14B-Instruct-Q3_K_S.gguf"
+    },
+    "qwen-2.5-coder-14b-q2k": {
+        "repo_id": "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF",
+        "filename": "Qwen2.5-Coder-14B-Instruct-Q2_K.gguf"
+    },
+    "qwen-2.5-coder-7b": {
+        "repo_id": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
+        "filename": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+    },
+    "qwen-2.5-coder-7b-q5-k-m": {
+        "repo_id": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
+        "filename": "Qwen2.5-Coder-7B-Instruct-Q5_K_M.gguf"
+    },
+    "qwen-2.5-coder-7b-q6-k": {
+        "repo_id": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
+        "filename": "Qwen2.5-Coder-7B-Instruct-Q6_K.gguf"
+    },
+    "qwen-3.5-9b": {
+        "repo_id": "bartowski/Qwen3.5-9B-Instruct-GGUF",
+        "filename": "Qwen3.5-9B-Instruct-Q4_K_M.gguf"
+    },
+    "qwen-3-8b": {
+        "repo_id": "bartowski/Qwen3-8B-Instruct-GGUF",
+        "filename": "Qwen3-8B-Instruct-Q4_K_M.gguf"
+    },
+    "starcoder": {
+        "repo_id": "QuantFactory/starcoder2-7b-instruct-GGUF",
+        "filename": "starcoder2-7b-instruct.Q4_K_M.gguf"
+    }
 }
 
 def download_model(model_id):
@@ -56,5 +96,7 @@ def download_model(model_id):
         print(f"Error downloading {filename}: {e}")
 
 if __name__ == "__main__":
-    model_id = input("Enter the model ID to download: ")
-    download_model(model_id)
+    parser = argparse.ArgumentParser(description="Download a model by ID.")
+    parser.add_argument("--model", type=str, required=True, help="Model ID to download")
+    args = parser.parse_args()
+    download_model(args.model)
