@@ -73,7 +73,8 @@ def initialize_agent():
     total_ram = get_system_ram_gb()
 
     max_ctx = active_config["max_context"]
-    base_gpu_contexts = [32768, 16384, 8192]
+    # base_gpu_contexts = [32768, 16384, 8192]
+    base_gpu_contexts = [32768, 16384, 12288, 10240]
     gpu_contexts = sorted(list(set([min(ctx, max_ctx) for ctx in base_gpu_contexts])), reverse=True)
 
     if total_ram >= 24:
@@ -107,10 +108,14 @@ def initialize_agent():
                         model_path=str(target_path),
                         n_ctx=ctx_size,
                         n_threads=6,
-                        n_batch=256,
+                        n_batch=512,
+                        # n_ubatch=128,
+                        # 8-bit KV cache for saving VRAM
+                        type_k=llama_cpp.GGML_TYPE_Q8_0,  # 8-bit Key Cache (halves VRAM size)
+                        type_v=llama_cpp.GGML_TYPE_Q8_0,  # 8-bit Value Cache
                         n_gpu_layers=n_layers,
                         chat_format=active_config["chat_format"],
-                        flash_attn=False,
+                        flash_attn=True,
                         verbose=False
                     )
                     CONTEXT_WINDOW = ctx_size
