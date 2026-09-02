@@ -34,9 +34,23 @@ MODEL_REGISTRY = {
         "max_context": 16384,
         "gpu_layers": [-1, 32, 24, 16]
     },
+    "mistral-nemo-12b-q2k": {
+        "filename": "Mistral-Nemo-Instruct-2407-Q2_K.gguf",
+        "display_name": "Mistral Nemo 12B Instruct (Q2_K)",
+        "chat_format": "chatml",
+        "max_context": 16384,
+        "gpu_layers": -1  # Fits fully in 8GB VRAM with Q8_0 KV cache
+    },
+    "mistral-nemo-12b-q3ks": {
+        "filename": "Mistral-Nemo-Instruct-2407-Q3_K_S.gguf",
+        "display_name": "Mistral Nemo 12B Instruct (Q3_K_S)",
+        "chat_format": "chatml",
+        "max_context": 16384,
+        "gpu_layers": [-1, 32, 24, 16]  # Full offload if using Q8_0 or Q4_0 KV cache
+    },
     "phi-4-14b": {
-        "filename": "phi-4-Q3_K_S.gguf",
-        "display_name": "Microsoft Phi-4 14B (Q3_K_S)",
+        "filename": "phi-4-Q2_K.gguf",
+        "display_name": "Microsoft Phi-4 14B (Q2_K)",
         "chat_format": "chatml",  # Phi-4 maps well to ChatML in most agent UI frameworks
         "max_context": 16384,
         "gpu_layers": [-1, 32, 24, 16]

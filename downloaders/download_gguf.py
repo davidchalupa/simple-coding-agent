@@ -18,9 +18,17 @@ models = {
         "repo_id": "NousResearch/Hermes-3-Llama-3.1-8B-GGUF",
         "filename": "Hermes-3-Llama-3.1-8B.Q4_K_M.gguf"
     },
+    "mistral-nemo-12b-q2k": {
+        "repo_id": "bartowski/Mistral-Nemo-Instruct-2407-GGUF",
+        "filename": "Mistral-Nemo-Instruct-2407-Q2_K.gguf"
+    },
+    "mistral-nemo-12b-q3ks": {
+        "repo_id": "bartowski/Mistral-Nemo-Instruct-2407-GGUF",
+        "filename": "Mistral-Nemo-Instruct-2407-Q3_K_S.gguf"
+    },
     "phi-4-14b": {
         "repo_id": "bartowski/phi-4-GGUF",
-        "filename": "phi-4-Q3_K_S.gguf"
+        "filename": "phi-4-Q2_K.gguf"
     },
     "qwen-2.5-coder-14b": {
         "repo_id": "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF",
