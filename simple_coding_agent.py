@@ -74,7 +74,7 @@ def initialize_agent():
 
     max_ctx = active_config["max_context"]
     # base_gpu_contexts = [32768, 16384, 8192]
-    base_gpu_contexts = [32768, 16384, 12288, 10240]
+    base_gpu_contexts = [32768, 24576, 16384, 12288, 10240]
     gpu_contexts = sorted(list(set([min(ctx, max_ctx) for ctx in base_gpu_contexts])), reverse=True)
 
     if total_ram >= 24:
