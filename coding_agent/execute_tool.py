@@ -13,11 +13,32 @@ from coding_agent.tool_definitions import (
 from coding_agent import native_linter
 
 
-def execute_tool(tool_name, tool_args, is_split_mode):
+def execute_tool_without_rollback(tool_name, tool_args, is_split_mode):
     """
     Routes an approved tool call to the correct underlying function.
     Returns a tuple of (tool_result, tool_reinforcement, file_was_modified).
     """
+    # =========================================================================
+    # TYPE ENFORCEMENT & LAZY JSON RECOVERY
+    # =========================================================================
+    if tool_args is None:
+        tool_args = {}
+    elif isinstance(tool_args, str):
+        # If the LLM passes a raw string instead of a dictionary, try to salvage it
+        if tool_name == "run_cmd":
+            tool_args = {"command": tool_args}
+        elif tool_name == "read_file":
+            tool_args = {"filepath": tool_args}
+        else:
+            # If we can't safely guess how to map the string, return a graceful error
+            # instead of crashing the entire test harness.
+            error_msg = (
+                f"System Error: Tool '{tool_name}' expects a JSON object for arguments, "
+                f"but received a raw string: '{tool_args}'. Please use a valid JSON dictionary."
+            )
+            return error_msg, "", False
+    # =========================================================================
+
     tool_result = ""
     tool_reinforcement = ""
     file_was_modified = False
@@ -87,6 +108,8 @@ def execute_tool(tool_name, tool_args, is_split_mode):
         new_content = re.sub(r"\n```$", "", new_content)
 
         tool_result = patch_file(filepath, old_content, new_content)
+
+        file_was_modified = tool_result.startswith("Successfully")
 
         # Run linter after patching to catch broken indentation or missing imports
         linter_error = native_linter.check_python_syntax_and_imports(filepath)
@@ -172,3 +195,38 @@ def execute_tool(tool_name, tool_args, is_split_mode):
         tool_result = "Error: Unknown tool."
 
     return tool_result, tool_reinforcement, file_was_modified
+
+
+# def execute_tool(tool_name, tool_args, is_split_mode):
+#     filepath = tool_args.get("filepath") if isinstance(tool_args, dict) else None
+#     original_content = None
+#
+#     # Backup file contents before modifying disk
+#     if filepath and tool_name in ("write_file", "patch_file", "replace_lines"):
+#         try:
+#             with open(filepath, "r", encoding="utf-8") as f:
+#                 original_content = f.read()
+#         except FileNotFoundError:
+#             original_content = None
+#
+#     # Execute the underlying tool logic
+#     tool_result, tool_reinforcement, file_was_modified = execute_tool_without_rollback(tool_name, tool_args, is_split_mode)
+#
+#     # Validate syntax and roll back if corrupted
+#     if file_was_modified and filepath:
+#         linter_error = native_linter.check_python_syntax_and_imports(filepath)
+#         if linter_error and "SyntaxError" in linter_error:
+#             if original_content is not None:
+#                 with open(filepath, "w", encoding="utf-8") as f:
+#                     f.write(original_content)
+#                 tool_result = (
+#                     f"⚠️ ACTION REVERTED: The edit was applied, but introduced a severe syntax error:\n{linter_error}\n"
+#                     "The file has been restored to its previous state. Please correct your code syntax and try again."
+#                 )
+#             else:
+#                 tool_result += f"\n\n⚠️ CRITICAL WARNING: File contains syntax error:\n{linter_error}"
+#
+#     return tool_result, tool_reinforcement, file_was_modified
+
+def execute_tool(tool_name, tool_args, is_split_mode):
+    return execute_tool_without_rollback(tool_name, tool_args, is_split_mode)

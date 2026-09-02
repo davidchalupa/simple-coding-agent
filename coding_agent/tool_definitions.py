@@ -99,13 +99,38 @@ def append_file(filepath, content):
 #         return f"Error patching file: {e}"
 
 
-def run_cmd(command):
+def run_cmd(command, max_chars=3000):
+    """Catching the output for maximum max_chars at the tail - more likely to contain important info."""
     try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=15)
-        output = result.stdout
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30  # Increased slightly for multi-step test suites
+        )
+
+        output = result.stdout or ""
         if result.stderr:
-            output += f"\nErrors:\n{result.stderr}"
-        return output[:1200]
+            output += f"\n\n--- STDERR ---\n{result.stderr}"
+
+        output = output.strip()
+
+        # Smart Head/Tail Truncation
+        if len(output) > max_chars:
+            head_len = 500
+            tail_len = max_chars - head_len
+            omitted = len(output) - max_chars
+
+            head = output[:head_len]
+            tail = output[-tail_len:]
+
+            output = f"{head}\n\n... [TRUNCATED {omitted} CHARS — HEAD & TAIL SHOWN] ...\n\n{tail}"
+
+        return output if output else "Command completed with no output."
+
+    except subprocess.TimeoutExpired:
+        return "Error: Command timed out after 30 seconds."
     except Exception as e:
         return f"Error executing command: {e}"
 
@@ -276,82 +301,148 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str,
     )
 
 
-def patch_file(filepath: str, old_content: str, new_content: str) -> str:
-    path = Path(filepath)
-    if not path.exists():
-        return f"Error: File '{filepath}' does not exist."
-    if not old_content:
-        return "Error: 'old_content' must not be empty. Provide the exact existing code to replace."
+# def patch_file(filepath: str, old_content: str, new_content: str) -> str:
+#     """Patches a file by replacing old_content with new_content - strict 3-line match enforced."""
+#     path = Path(filepath)
+#     if not path.exists():
+#         return f"Error: File '{filepath}' does not exist."
+#     if not old_content:
+#         return "Error: 'old_content' must not be empty. Provide the exact existing code to replace."
+#
+#     # Read + normalize BEFORE any check that needs to inspect file content
+#     raw = path.read_text(encoding="utf-8")
+#     uses_crlf = "\r\n" in raw
+#     text = raw.replace("\r\n", "\n")
+#     old = old_content.replace("\r\n", "\n")
+#     new = new_content.replace("\r\n", "\n")
+#
+#     # --- STRICT CONTEXT VALIDATION ---
+#     if old_content.count('\n') < 2:
+#         line_count = old_content.count('\n') + 1
+#         idx = text.find(old.strip())
+#         context_hint = ""
+#         if idx != -1:
+#             start = text.rfind('\n', 0, idx)
+#             end = text.find('\n', idx + len(old))
+#             prev_line_start = text.rfind('\n', 0, start) if start != -1 else -1
+#             next_line_end = text.find('\n', end + 1) if end != -1 else -1
+#             if prev_line_start != -1 and next_line_end != -1:
+#                 suggested = text[prev_line_start+1:next_line_end]
+#                 context_hint = f"\nSuggested old_content:\n{suggested}"
+#         return (
+#             f"Error: 'old_content' has only {line_count} line(s); at least 3 lines are required."
+#             f"{context_hint}"
+#         )
+#
+#     occurrences = text.count(old)
+#
+#     if occurrences == 0:
+#         # Assuming _closest_match_hint is defined elsewhere in your toolset
+#         hint = _closest_match_hint(text, old)
+#         return (
+#             f"Error: 'old_content' was not found VERBATIM in '{filepath}' (0 exact matches).\n"
+#             f"This usually means the file has changed since you last read it, or the "
+#             f"whitespace/indentation doesn't match exactly.\n"
+#             f"Action: re-read the current file content and copy the exact text you want "
+#             f"to replace, including indentation.{hint}"
+#         )
+#
+#     if occurrences > 1:
+#         return (
+#             f"Error: 'old_content' matched {occurrences} separate locations in "
+#             f"'{filepath}' — it must be unique.\n"
+#             f"Action: include more surrounding context (e.g. the function signature, "
+#             f"or a preceding/following line) so the match is unambiguous."
+#         )
+#
+#     new_text = text.replace(old, new, 1)
+#     if uses_crlf:
+#         new_text = new_text.replace("\n", "\r\n")
+#
+#     path.write_text(new_text, encoding="utf-8")
+#
+#     old_line_count = old.count("\n") + 1
+#     new_line_count = new.count("\n") + 1
+#     delta = new_line_count - old_line_count
+#     delta_str = f"+{delta}" if delta > 0 else str(delta)
+#
+#     size_warning = ""
+#     if old_line_count >= 5 and new_line_count <= 1:
+#         size_warning = (
+#             f"\nNote: this collapsed {old_line_count} lines down to {new_line_count}. "
+#             f"If you only meant to ADD something (like an import) rather than replace "
+#             f"an entire block, double-check this was intentional."
+#         )
+#
+#     return (
+#         f"Successfully replaced {old_line_count} line(s) with {new_line_count} line(s) "
+#         f"in '{filepath}' (line delta: {delta_str}).{size_warning}"
+#     )
 
-    # Read + normalize BEFORE any check that needs to inspect file content
-    raw = path.read_text(encoding="utf-8")
-    uses_crlf = "\r\n" in raw
-    text = raw.replace("\r\n", "\n")
-    old = old_content.replace("\r\n", "\n")
-    new = new_content.replace("\r\n", "\n")
 
-    # --- STRICT CONTEXT VALIDATION ---
-    if old_content.count('\n') < 2:
-        line_count = old_content.count('\n') + 1
-        idx = text.find(old.strip())
-        context_hint = ""
-        if idx != -1:
-            start = text.rfind('\n', 0, idx)
-            end = text.find('\n', idx + len(old))
-            prev_line_start = text.rfind('\n', 0, start) if start != -1 else -1
-            next_line_end = text.find('\n', end + 1) if end != -1 else -1
-            if prev_line_start != -1 and next_line_end != -1:
-                suggested = text[prev_line_start+1:next_line_end]
-                context_hint = f"\nSuggested old_content:\n{suggested}"
-        return (
-            f"Error: 'old_content' has only {line_count} line(s); at least 3 lines are required."
-            f"{context_hint}"
-        )
+# def patch_file(filepath, old_content, new_content):
+#     """Patches a file by replacing old_content with new_content - no enforcement of multi-line match."""
+#     try:
+#         with open(filepath, 'r', encoding='utf-8') as f:
+#             full_text = f.read()
+#
+#         if old_content not in full_text:
+#             return f"Error: 'old_content' not found in {filepath}. Ensure exact whitespace and line matching."
+#
+#         match_count = full_text.count(old_content)
+#         old_lines = old_content.strip().splitlines()
+#
+#         # If it's short (< 3 lines) and occurs multiple times, demand more context
+#         if len(old_lines) < 3 and match_count > 1:
+#             return (
+#                 f"Error: 'old_content' has only {len(old_lines)} line(s) and appears {match_count} times in {filepath}. "
+#                 "Please include at least 3 lines of surrounding code context to ensure a unique match."
+#             )
+#
+#         updated_text = full_text.replace(old_content, new_content, 1)
+#         with open(filepath, 'w', encoding='utf-8') as f:
+#             f.write(updated_text)
+#
+#         return f"Successfully patched {filepath}."
+#     except Exception as e:
+#         return f"Error patching file: {str(e)}"
 
-    occurrences = text.count(old)
 
-    if occurrences == 0:
-        # Assuming _closest_match_hint is defined elsewhere in your toolset
-        hint = _closest_match_hint(text, old)
-        return (
-            f"Error: 'old_content' was not found VERBATIM in '{filepath}' (0 exact matches).\n"
-            f"This usually means the file has changed since you last read it, or the "
-            f"whitespace/indentation doesn't match exactly.\n"
-            f"Action: re-read the current file content and copy the exact text you want "
-            f"to replace, including indentation.{hint}"
-        )
+def patch_file(filepath, old_content, new_content):
+    """
+    Patches filepath by replacing old_content with new_content safely. Uses exact-occurrence counting.
+    """
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            full_text = f.read()
 
-    if occurrences > 1:
-        return (
-            f"Error: 'old_content' matched {occurrences} separate locations in "
-            f"'{filepath}' — it must be unique.\n"
-            f"Action: include more surrounding context (e.g. the function signature, "
-            f"or a preceding/following line) so the match is unambiguous."
-        )
+        match_count = full_text.count(old_content)
 
-    new_text = text.replace(old, new, 1)
-    if uses_crlf:
-        new_text = new_text.replace("\n", "\r\n")
+        # 1. Zero matches
+        if match_count == 0:
+            return (
+                f"Error: 'old_content' not found in {filepath}.\n"
+                "Check for exact whitespace, indentation, or quotes. Use read_file to verify."
+            )
 
-    path.write_text(new_text, encoding="utf-8")
+        # 2. Multiple matches (Ambiguous)
+        if match_count > 1:
+            return (
+                f"Error: 'old_content' appears {match_count} times in {filepath}.\n"
+                "To ensure the correct location is edited, include 1-2 surrounding lines of code "
+                "above or below 'old_content' to make it unique."
+            )
 
-    old_line_count = old.count("\n") + 1
-    new_line_count = new.count("\n") + 1
-    delta = new_line_count - old_line_count
-    delta_str = f"+{delta}" if delta > 0 else str(delta)
+        # 3. Exactly 1 match -> Safe to apply (even if it's just 1 line)
+        updated_text = full_text.replace(old_content, new_content, 1)
 
-    size_warning = ""
-    if old_line_count >= 5 and new_line_count <= 1:
-        size_warning = (
-            f"\nNote: this collapsed {old_line_count} lines down to {new_line_count}. "
-            f"If you only meant to ADD something (like an import) rather than replace "
-            f"an entire block, double-check this was intentional."
-        )
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(updated_text)
 
-    return (
-        f"Successfully replaced {old_line_count} line(s) with {new_line_count} line(s) "
-        f"in '{filepath}' (line delta: {delta_str}).{size_warning}"
-    )
+        return f"Successfully patched {filepath}."
+
+    except Exception as e:
+        return f"Error patching file: {str(e)}"
 
 
 def _closest_match_hint(text: str, old: str, context_lines: int = 2) -> str:

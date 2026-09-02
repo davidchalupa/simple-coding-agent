@@ -555,6 +555,24 @@ def main():
                 messages.append(
                     {"role": "user", "content": f"Tool Execution Result:\n{tool_result}{tool_reinforcement}"})
 
+            # potential recovery from misformatted JSONs
+            # except json.JSONDecodeError as e:
+            #     print(f"\n❌ [Parser Interceptor] Caught JSON error, feeding back to agent...")
+            #     error_msg = (
+            #         f"⚠️ ACTION FAILED: Your tool call was NOT executed because the JSON is invalid.\n"
+            #         f"JSON Error: {str(e)}\n\n"
+            #         f"Hint: In JSON, you cannot escape single quotes like \\'. To put a literal backslash "
+            #         f"and a quote in Python code via JSON, you must double-escape the backslash: \\\\', "
+            #         f"or avoid illegal JSON escape sequences. Please fix your JSON and try again."
+            #     )
+            #     messages.append({"role": "user", "content": error_msg})
+            #
+            #     consecutive_errors += 1
+            #     if consecutive_errors >= 3:
+            #         print("🛑 [Circuit Breaker] Agent stuck in JSON formatting loop. Forcing exit.")
+            #         break
+            #
+            #     continue  # CRITICAL: 'continue' lets the agent retry instantly
             except json.JSONDecodeError as e:
                 print(f"\n❌ [Parser Interceptor] Halted syntax loop.")
                 messages.append({"role": "user",
@@ -563,6 +581,7 @@ def main():
             except Exception as e:
                 print(f"\n[Error during generation]: {e}")
                 break
+
 
 
 if __name__ == "__main__":
