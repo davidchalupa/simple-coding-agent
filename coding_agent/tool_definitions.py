@@ -211,15 +211,15 @@ def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_c
 
 
 def replace_lines(filepath: str, start_line: int, end_line: int, content: str,
-                   expected_start_snippet: str = None, expected_end_snippet: str = None) -> str:
+                   expected_start_snippet: str = None, expected_end_snippet: str = None) -> tuple[bool, str]:
     path = Path(filepath)
     if not path.exists():
-        return f"Error: File '{filepath}' does not exist."
+        return False, f"Error: File '{filepath}' does not exist."
 
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
 
     if start_line < 1 or end_line > len(lines) or start_line > end_line:
-        return f"Error: Invalid line range [{start_line}, {end_line}] for file with {len(lines)} lines."
+        return False, f"Error: Invalid line range [{start_line}, {end_line}] for file with {len(lines)} lines."
 
     def _find_unique_hint(snippet, anchor_label):
         matches = [i + 1 for i, line in enumerate(lines) if snippet in line.strip()]
@@ -250,7 +250,7 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str,
                 f"(same range length, shifted by {offset:+d}). Keep expected_start_snippet "
                 f"and expected_end_snippet the same as this attempt."
             )
-        return (
+        return False, (
             f"Error: Line {start_line} does not contain what you expected.\n"
             f"You expected something like: {snippet!r}\n"
             f"Line {start_line} actually contains: {actual_start_line!r}"
@@ -258,12 +258,8 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str,
         )
 
     # --- END ANCHOR CHECK ---
-    # expected_end_snippet describes the line immediately AFTER the replaced range
-    # (e.g. the next function's signature) -- NOT the last replaced line itself.
     if expected_end_snippet:
         snippet = expected_end_snippet.strip()
-        # Allow up to a few blank/whitespace-only lines between end_line and the next
-        # real content, so the model doesn't need to count trailing blank lines exactly.
         next_content_idx = None
         for i in range(end_line, min(end_line + 5, len(lines))):
             if lines[i].strip():
@@ -273,13 +269,24 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str,
         actual_next_line = lines[next_content_idx].strip() if next_content_idx is not None else ""
         if snippet not in actual_next_line:
             found_line, hint = _find_unique_hint(snippet, "expected_end_snippet")
+
             if found_line is not None:
-                corrected_end = found_line - 1
-                hint += (
-                    f" Retry with end_line={corrected_end} (keep start_line={start_line} as-is). "
-                    f"Keep expected_start_snippet and expected_end_snippet the same as this attempt."
-                )
-            return (
+                if found_line <= end_line:
+                    hint = (
+                        f"\nWARNING: You provided a snippet that exists at line {found_line}, "
+                        f"which is INSIDE the block you are replacing. `expected_end_snippet` must be the line AFTER the replaced block.\n"
+                        f"To fix this, change `expected_end_snippet` to exactly: {actual_next_line!r}"
+                    )
+                else:
+                    corrected_end = found_line - 1
+                    hint += (
+                        f" Retry with end_line={corrected_end} (keep start_line={start_line} as-is). "
+                        f"Keep expected_start_snippet and expected_end_snippet the same as this attempt."
+                    )
+            else:
+                hint += f"\nTo fix this, change `expected_end_snippet` to exactly: {actual_next_line!r}"
+
+            return False, (
                 f"Error: The line after end_line ({end_line}) does not contain what you expected.\n"
                 f"You expected the NEXT block after your replacement to start with: {snippet!r}\n"
                 f"The next non-blank line actually contains: {actual_next_line!r}\n"
@@ -287,14 +294,14 @@ def replace_lines(filepath: str, start_line: int, end_line: int, content: str,
                 f"of the NEXT function/block, not the last line inside the one you're replacing.{hint}"
             )
 
+    # --- PERFORM REPLACEMENT ---
     old_slice = "".join(lines[start_line - 1:end_line])
-
     new_lines = [line + "\n" for line in content.splitlines()]
     lines[start_line - 1:end_line] = new_lines
 
     path.write_text("".join(lines), encoding="utf-8")
 
-    return (
+    return True, (
         f"Successfully replaced lines {start_line}-{end_line} in {filepath}.\n"
         f"--- Old content (for verification) ---\n{old_slice}"
         f"--- New content ---\n{content}\n"
@@ -601,6 +608,7 @@ def read_symbol(filepath: str, symbol_name: str) -> str:
         with open(filepath, 'r', encoding='utf-8') as f:
             source = f.read()
 
+        source_lines = source.splitlines()  # <--- Added to get exact line text
         tree = ast.parse(source)
         top_level_defs = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
 
@@ -614,11 +622,13 @@ def read_symbol(filepath: str, symbol_name: str) -> str:
                 if i + 1 < len(top_level_defs):
                     next_node = top_level_defs[i + 1]
                     next_line = next_node.lineno
-                    kind = "class" if isinstance(next_node, ast.ClassDef) else "def"
+                    next_line_text = source_lines[next_line - 1].strip()  # <--- Extract text
+
+                    # Update hint to give the EXACT snippet
                     next_symbol_hint = (
                         f"\nNext symbol after this one: '{next_node.name}' starts at line {next_line}. "
                         f"If replacing this whole symbol via replace_lines, use end_line={end_line}, "
-                        f"expected_end_snippet matching the line at {next_line}."
+                        f"expected_end_snippet=\"{next_line_text}\""
                     )
                 else:
                     next_symbol_hint = "\nThis is the LAST top-level symbol in the file."

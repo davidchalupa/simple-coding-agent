@@ -166,9 +166,8 @@ def execute_tool_without_rollback(tool_name, tool_args, is_split_mode):
                 pass
         # -----------------------------------
 
-        tool_result = replace_lines(filepath, start_line, end_line, content, expected_start_snippet,
+        file_was_modified, tool_result = replace_lines(filepath, start_line, end_line, content, expected_start_snippet,
                                     expected_end_snippet)
-        file_was_modified = tool_result.startswith("Successfully")
 
         linter_error = None
         if file_was_modified:
@@ -197,36 +196,47 @@ def execute_tool_without_rollback(tool_name, tool_args, is_split_mode):
     return tool_result, tool_reinforcement, file_was_modified
 
 
-# def execute_tool(tool_name, tool_args, is_split_mode):
-#     filepath = tool_args.get("filepath") if isinstance(tool_args, dict) else None
-#     original_content = None
-#
-#     # Backup file contents before modifying disk
-#     if filepath and tool_name in ("write_file", "patch_file", "replace_lines"):
-#         try:
-#             with open(filepath, "r", encoding="utf-8") as f:
-#                 original_content = f.read()
-#         except FileNotFoundError:
-#             original_content = None
-#
-#     # Execute the underlying tool logic
-#     tool_result, tool_reinforcement, file_was_modified = execute_tool_without_rollback(tool_name, tool_args, is_split_mode)
-#
-#     # Validate syntax and roll back if corrupted
-#     if file_was_modified and filepath:
-#         linter_error = native_linter.check_python_syntax_and_imports(filepath)
-#         if linter_error and "SyntaxError" in linter_error:
-#             if original_content is not None:
-#                 with open(filepath, "w", encoding="utf-8") as f:
-#                     f.write(original_content)
-#                 tool_result = (
-#                     f"⚠️ ACTION REVERTED: The edit was applied, but introduced a severe syntax error:\n{linter_error}\n"
-#                     "The file has been restored to its previous state. Please correct your code syntax and try again."
-#                 )
-#             else:
-#                 tool_result += f"\n\n⚠️ CRITICAL WARNING: File contains syntax error:\n{linter_error}"
-#
-#     return tool_result, tool_reinforcement, file_was_modified
-
 def execute_tool(tool_name, tool_args, is_split_mode):
-    return execute_tool_without_rollback(tool_name, tool_args, is_split_mode)
+    filepath = tool_args.get("filepath") if isinstance(tool_args, dict) else None
+    original_content = None
+
+    # Backup file contents before modifying disk
+    if filepath and tool_name in ("write_file", "append_file", "patch_file", "replace_lines"):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                original_content = f.read()
+        except FileNotFoundError:
+            original_content = None
+
+    # Execute the underlying tool logic
+    tool_result, tool_reinforcement, file_was_modified = execute_tool_without_rollback(tool_name, tool_args,
+                                                                                       is_split_mode)
+
+    # Validate syntax and roll back if corrupted
+    if file_was_modified and filepath:
+        linter_error = native_linter.check_python_syntax_and_imports(filepath)
+
+        # If the linter returns an error and it's a severe syntax break
+        if linter_error and "SyntaxError" in linter_error:
+            if original_content is not None:
+                # Rollback to original content
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(original_content)
+
+                # OVERWRITE the tool_result and reinforcement completely
+                tool_result = (
+                    f"⚠️ ACTION REVERTED: The edit was applied, but introduced a severe syntax error:\n{linter_error}\n"
+                    "The file has been restored to its previous state. Please correct your code formatting "
+                    "(e.g., unescaped newlines like '\\n' inside strings), and try again."
+                )
+                # 🔥 CRITICAL FIX: Tell the agent it failed and must retry
+                tool_reinforcement = "\n\n(System Rule: Your last action FAILED and was reverted due to a SyntaxError. You MUST fix the syntax and submit a corrected tool call. DO NOT output 'Task Complete'.)"
+                file_was_modified = False
+            else:
+                tool_result += f"\n\n⚠️ CRITICAL WARNING: File contains syntax error:\n{linter_error}"
+
+    return tool_result, tool_reinforcement, file_was_modified
+
+
+# def execute_tool(tool_name, tool_args, is_split_mode):
+#     return execute_tool_without_rollback(tool_name, tool_args, is_split_mode)
