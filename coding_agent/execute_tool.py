@@ -224,11 +224,31 @@ def execute_tool(tool_name, tool_args, is_split_mode):
                     f.write(original_content)
 
                 # OVERWRITE the tool_result and reinforcement completely
+                # general hint
+                # tool_result = (
+                #     f"⚠️ ACTION REVERTED: The edit was applied, but introduced a severe syntax error:\n{linter_error}\n"
+                #     "The file has been restored to its previous state. Please correct your code formatting "
+                #     "(e.g., unescaped newlines like '\\n' inside strings), and try again."
+                # )
+                # overly specialized hint
+                # tool_result = (
+                #     f"⚠️ ACTION REVERTED: The edit introduced a Python SyntaxError:\n{linter_error}\n"
+                #     f"Fix Hint: You used conflicting single quotes inside a single-quoted Python string. "
+                #     f"To fix this, use double quotes for the print statement, like this:\n"
+                #     f"print(\"Unknown action. Use 'c' to click or 'f' to flag.\")\n"
+                #     f"Please rewrite your tool call using double quotes for the outer string."
+                # )
+                # balanced hint
                 tool_result = (
-                    f"⚠️ ACTION REVERTED: The edit was applied, but introduced a severe syntax error:\n{linter_error}\n"
-                    "The file has been restored to its previous state. Please correct your code formatting "
-                    "(e.g., unescaped newlines like '\\n' inside strings), and try again."
+                    f"⚠️ ACTION REVERTED: The edit introduced a Python SyntaxError:\n{linter_error}\n"
+                    f"Fix Hint: Review the line indicated by the syntax error. Common causes during code generation include:\n"
+                    f"1. Conflicting single quotes inside a single-quoted Python string. Use double quotes for the print statement.\n"
+                    f"To fix this, use double quotes for the print statement, like this:\n"
+                    f"print(\"Unknown action. Use 'c' to click or 'f' to flag.\")\n"
+                    f"2. Unescaped newlines like '\\n' inside strings.\n"
+                    f"Carefully inspect the target lines, fix the formatting, and retry the edit."
                 )
+
                 # 🔥 CRITICAL FIX: Tell the agent it failed and must retry
                 tool_reinforcement = "\n\n(System Rule: Your last action FAILED and was reverted due to a SyntaxError. You MUST fix the syntax and submit a corrected tool call. DO NOT output 'Task Complete'.)"
                 file_was_modified = False
