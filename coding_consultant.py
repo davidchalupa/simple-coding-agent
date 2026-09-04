@@ -53,43 +53,29 @@ def get_system_ram_gb():
 
 
 def build_consultant_system_prompt():
-    """
-    Builds the system prompt for the read-only coding consultant.
-
-    Deliberately NOT shared with coding_agent's build_system_prompt. Consultant-specific
-    prompt tuning (anti-over-fetching language, cache-awareness instructions) caused
-    hard-to-reproduce, probabilistic regressions when it lived behind a read_only flag
-    inside the agent's shared prompt builder — a wording change made for consult mode
-    could shift agent-mode behavior in subtle ways, and vice versa. Keeping this fully
-    separate means changes here can never destabilize the write-capable agent.
-    """
     tools_section = (
-        '1. `list_tree`: {"dir_path": "<str>", "max_depth": <int>} - Explores and visualizes directory structures.\n    '
-        '2. `search_codebase`: {"dir_path": "<str>", "query": "<str>", "is_regex": <bool>, "max_matches": <int>} - Greps for strings or regex across non-binary files.\n    '
-        '3. `read_file`: {"filepath": "<str>", "start_line": <int>, "max_lines": <int>} - Output is prefixed with the real 1-indexed line number of each line.\n    '
-        '4. `read_symbol`: {"filepath": "<str>", "symbol_name": "<str>"} - Extracts a specific function, method, or class from a Python file.\n    '
+        '1. `list_tree`: {"dir_path": "<str>", "max_depth": <int>}\n'
+        '2. `search_codebase`: {"dir_path": "<str>", "query": "<str>", "is_regex": <bool>, "max_matches": <int>}\n'
+        '3. `read_file`: {"filepath": "<str>", "start_line": <int>, "max_lines": <int>}\n'
+        '4. `read_symbol`: {"filepath": "<str>", "symbol_name": "<str>"}\n'
         '5. `run_cmd`: {"command": "<str>"}'
     )
 
-    format_example = r'<tool_call>{"name": "read_symbol", "args": {"filepath": "target.py", "symbol_name": "failing_function"}}</tool_call>'
+    return f"""You are a read-only coding consultant. You strictly follow a 2-step state machine.
 
-    return f"""You are an elite, read-only coding consultant. Use tools modularly to answer questions about a codebase.
+AVAILABLE TOOLS:
+{tools_section}
 
-    AVAILABLE TOOLS:
-    {tools_section}
+STATE 1 - USER ASKS QUESTION:
+If the user asks a question, you may output one or more `<tool_call>` blocks to gather missing context. Do not guess. Do not proactively fetch unrequested files.
 
-    CRITICAL RULES:
-    1. If the user's request requires reading or inspecting something you do NOT already have in this conversation, you MUST use the appropriate tool. Never guess or answer from memory.
-    2. If the content was already retrieved earlier in this conversation, use it directly. Do NOT call the tool again for the same file or symbol.
-    3. You are in READ-ONLY mode. Write and modification tools do not exist and must never be called.
-    4. If the task is complete, reply in plain text. You MAY output multiple `<tool_call>` blocks in a single response to fetch information in parallel (e.g., reading multiple files).
-    5. The JSON tool call MUST be minified on a SINGLE LINE.
-    6. NEVER print, repeat, or summarize file contents in standard conversational text outside of a direct answer to the user's question.
-    7. Only propose a corrected or modified version of code if the user has described a bug or explicitly asked for a change. Do not invent problems or rewrite code that wasn't reported as broken.
-    8. Do exactly what was asked, then stop. Do not proactively fetch related files or symbols the user did not request.
+STATE 2 - RECEIVING TOOL RESULTS:
+If your prompt begins with "Tool Execution Results:", you MUST immediately transition to plain text. 
+- Analyze the results to answer the user's original question.
+- YOU ARE STRICTLY FORBIDDEN from outputting another `<tool_call>`.
+- Never attempt to read `main` or related functions unless explicitly asked.
 
-    REQUIRED FORMAT EXAMPLE:
-    {format_example}"""
+FORMAT: <tool_call>{{"name": "tool_name", "args": {{}}}}</tool_call>"""
 
 
 def initialize_agent():
@@ -283,6 +269,9 @@ def main():
                 if interrupted:
                     break
 
+                # Save the model's output to history
+                messages.append({"role": "assistant", "content": response_content})
+
                 # --- 1. Regex extraction for <tool_call> tags ---
                 raw_calls = re.findall(r'<tool_call>(.*?)</tool_call>', response_content, re.DOTALL)
                 tool_requests = []
@@ -318,8 +307,18 @@ def main():
                     if not tool_requests:
                         tool_requests = fuzzy_extract_tool_calls(response_content)
 
-                if not tool_requests:
+                # ==============================================================
+                # THE FIX: HISTORY NORMALIZATION
+                # ==============================================================
+                if tool_requests:
+                    # Force the model's memory to look like perfect XML,
+                    # even if it hallucinated markdown blocks.
+                    perfect_history = "\n".join(
+                        [f'<tool_call>{json.dumps(req)}</tool_call>' for req in tool_requests])
+                    messages.append({"role": "assistant", "content": perfect_history})
+                else:
                     # Plain text reply — nothing left to do this turn.
+                    messages.append({"role": "assistant", "content": response_content})
                     print("\n💬 [Consult] Agent finished. Awaiting your next question.")
                     break
 
@@ -393,8 +392,10 @@ def main():
 
                 # --- FEEDBACK & LOOP CONTINUATION ---
                 if combined_results.strip():
-                    messages.append(
-                        {"role": "user", "content": f"Tool Execution Results:\n{combined_results.strip()}"})
+                    messages.append({
+                        "role": "user",
+                        "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n[SYSTEM DIRECTIVE: Context loaded. If the user's initial request is fully satisfied, reply with 'Context loaded. What would you like to know?' and DO NOT output further tool calls.]"
+                    })
 
                 # If we hit the budget, add a forceful prompt to make the model stop tooling and answer
                 if real_tool_calls_this_turn >= MAX_TOOL_CALLS_PER_TURN:
