@@ -8,6 +8,9 @@ import llama_cpp
 from llama_cpp import Llama
 from pathlib import Path
 
+import common.llm_init
+from common.llm_init import initialize_agent, llm, CONTEXT_WINDOW
+
 from coding_agent.input_handler import get_user_prompt
 from coding_agent.execute_tool import execute_tool
 from coding_agent import payload_parser
@@ -27,8 +30,6 @@ CONTEXT_WINDOW = active_config["max_context"]
 # Deliberately no is_split_mode / is_execute_mode / sandbox_directory / ALLOW_PATCH /
 # FORCE_TESTING / SELF_VERIFY_PY_WRITES here. This script is read-only, single-purpose,
 # and none of that agent-mode machinery can ever be reached from it.
-llm = None
-SYSTEM_PROMPT = ""
 messages = []
 session_cwd = os.getcwd()
 consult_read_cache = {}  # {(tool_name, filepath, symbol_name, start_line, max_lines): tool_result}
@@ -76,96 +77,6 @@ If your prompt begins with "Tool Execution Results:", you MUST immediately trans
 - Never attempt to read `main` or related functions unless explicitly asked.
 
 FORMAT: <tool_call>{{"name": "tool_name", "args": {{}}}}</tool_call>"""
-
-
-def initialize_agent():
-    """Initializes LLM dynamically according to registry config, GPU, and RAM."""
-    global llm, SYSTEM_PROMPT, messages, CONTEXT_WINDOW
-
-    if llm is not None:
-        return
-
-    if not os.path.exists(target_path):
-        print(f"❌ Error: Model file not found at {target_path}")
-        sys.exit(1)
-
-    print(f"Loading {loaded_model_name}...")
-
-    total_ram = get_system_ram_gb()
-
-    max_ctx = active_config["max_context"]
-    # base_gpu_contexts = [32768, 16384, 8192]
-    base_gpu_contexts = [32768, 24576, 16384, 12288, 10240]
-    gpu_contexts = sorted(list(set([min(ctx, max_ctx) for ctx in base_gpu_contexts])), reverse=True)
-
-    if total_ram >= 24:
-        cpu_contexts = gpu_contexts
-    elif total_ram >= 12:
-        cpu_contexts = [ctx for ctx in gpu_contexts if ctx <= 16384]
-    else:
-        cpu_contexts = [ctx for ctx in gpu_contexts if ctx <= 8192]
-
-    has_gpu = getattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)()
-
-    configured_layers = active_config["gpu_layers"]
-    gpu_layer_attempts = configured_layers if isinstance(configured_layers, list) else [configured_layers]
-
-    # --- 1. ATTEMPT GPU LOAD (full then partial offload) ---
-    if has_gpu:
-        for n_layers in gpu_layer_attempts:
-            for ctx_size in gpu_contexts:
-                try:
-                    label = "full" if n_layers == -1 else f"partial ({n_layers} layers)"
-                    print(f"🔄 Attempting GPU load [{label}] with {ctx_size} context...")
-                    llm = Llama(
-                        model_path=str(target_path),
-                        n_ctx=ctx_size,
-                        n_threads=6,
-                        n_batch=512,
-                        # n_ubatch=128,
-                        # 8-bit KV cache for saving VRAM
-                        type_k=llama_cpp.GGML_TYPE_Q8_0,  # 8-bit Key Cache (halves VRAM size)
-                        type_v=llama_cpp.GGML_TYPE_Q8_0,  # 8-bit Value Cache
-                        n_gpu_layers=n_layers,
-                        chat_format=active_config["chat_format"],
-                        flash_attn=True,
-                        verbose=False
-                    )
-                    CONTEXT_WINDOW = ctx_size
-                    print(f"🚀 Loaded on GPU [{label}] (Context: {CONTEXT_WINDOW}).")
-                    break
-                except Exception as e:
-                    print(f"⚠️ GPU load failed [{label}] at {ctx_size} context: {e}")
-            if llm is not None:
-                break
-
-    # --- 2. CPU FALLBACK ---
-    if llm is None:
-        print(f"🐢 Running on CPU (Detected System RAM: {total_ram:.1f} GB)...")
-        for ctx_size in cpu_contexts:
-            try:
-                print(f"🔄 Attempting CPU load with {ctx_size} context...")
-                llm = Llama(
-                    model_path=str(target_path),
-                    n_ctx=ctx_size,
-                    n_threads=6,
-                    n_batch=512,
-                    n_gpu_layers=0,
-                    chat_format=active_config["chat_format"],
-                    verbose=False
-                )
-                CONTEXT_WINDOW = ctx_size
-                print(f"🐢 Loaded on CPU (Context: {CONTEXT_WINDOW}).")
-                break
-            except Exception as e_cpu:
-                print(f"⚠️ CPU allocation failed at {ctx_size} context: {e_cpu}")
-
-    if llm is None:
-        print("❌ Critical Error: Unable to initialize model on GPU or CPU.")
-        sys.exit(1)
-
-    SYSTEM_PROMPT = build_consultant_system_prompt()
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
 
 def check_context_guardrail(current_messages, model, limit):
@@ -229,7 +140,11 @@ def fuzzy_extract_tool_calls(text):
 def main():
     global messages, session_cwd, consult_read_cache
 
-    initialize_agent()
+    SYSTEM_PROMPT = build_consultant_system_prompt()
+    initialize_agent(target_path, loaded_model_name, active_config)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    llm = common.llm_init.llm
 
     print(f"\n🔍 [Coding Consultant] {loaded_model_name} loaded. Read-only — write tools are disabled.\n")
 
