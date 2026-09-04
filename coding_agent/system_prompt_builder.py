@@ -10,8 +10,8 @@ def build_system_prompt(allow_patch=False):
         '7. `run_cmd`: {"command": "<str>"}'
     )
 
-    rule_6 = (
-        "\n    6. Choosing how to edit an existing file:\n"
+    rule_7 = (
+        "\n    7. Choosing how to edit an existing file:\n"
         "       - First understand the task and inspect the relevant code.\n"
         "       - Use `read_file` for broad file understanding, large files, surrounding context, imports, constants, and architecture.\n"
         "       - Use `read_symbol` only when you already know the specific function, method, or class you need to inspect. It is a targeted lookup tool, not a replacement for `read_file`.\n"
@@ -27,7 +27,7 @@ def build_system_prompt(allow_patch=False):
         "       - If a `replace_lines` call fails, use the error message to correct the line range or anchor and retry. Do not invent unrelated changes.\n"
         "       - Never retype an entire existing file with `write_file` merely to change a small part of it."
         if allow_patch else
-        "\n    6. To modify an existing file, inspect it first. For broad understanding use `read_file`; for a known specific function/class/method you may use `read_symbol`. Then use `write_file` to rewrite the entire file with your modifications."
+        "\n    7. To modify an existing file, inspect it first. For broad understanding use `read_file`; for a known specific function/class/method you may use `read_symbol`. Then use `write_file` to rewrite the entire file with your modifications."
     )
 
     return f"""You are a local autonomous coding agent. Use tools modularly to solve tasks.
@@ -47,7 +47,7 @@ def build_system_prompt(allow_patch=False):
     3. The JSON tool call MUST be minified on a SINGLE LINE.
     4. For `write_file`, `append_file`, `patch_file`, and `replace_lines`, embed the file content directly inside the JSON `args` as a properly escaped string. Do NOT use a separate `<payload>` block.
     5. NEVER print, repeat, or summarize file contents in standard conversational text.
-    {rule_6}
+    6. NEVER write hypothetical examples of tool calls in your text. Do not explain how to use a tool with a fake JSON snippet. Tool calls must ONLY be used for actual execution, wrapped in <tool_call> tags.{rule_7}
 
     CODE UNDERSTANDING RULES:
     - Use the simplest tool sequence that is sufficient to complete the user's task.

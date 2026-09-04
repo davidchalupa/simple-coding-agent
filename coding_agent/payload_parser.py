@@ -2,6 +2,26 @@ import json
 import re
 
 
+def _is_example_context(text: str, match_start: int) -> bool:
+    """
+    Safety heuristic to detect if the LLM is providing an educational example
+    rather than intending to execute a tool. Prevents the 'example-execution trap'.
+    """
+    # Check the 120 characters right before the JSON block
+    prefix = text[max(0, match_start - 120):match_start].lower()
+
+    # Highly specific patterns that LLMs use to introduce examples.
+    # The [,\:] prevents false positives like "create a file for example.py"
+    patterns = [
+        r'\bfor example[,:]',
+        r'\bfor instance[,:]',
+        r'\ban example\b',
+        r'\bhypothetical\b',
+        r'\bfollowing json command\b'
+    ]
+    return any(re.search(p, prefix) for p in patterns)
+
+
 def _normalize_double_escaped_content(text):
     """
     Some models JSON-escape their own intended escape sequences (writing \\n
@@ -75,32 +95,37 @@ def _extract_balanced_json_object(text, start_idx=0):
 
 
 def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict | None:
-    """
-    Model-agnostic wrapper that isolates candidate tool JSON strings
-    and passes them to the hyper-robust parser without altering internal mechanics.
-    """
     tool_json_str = None
-    search_start = 0  # where to start looking for <payload> after this
+    search_start = 0
 
+    # 1. Primary extraction: ALWAYS trusted, no example check.
     tool_match = re.search(r"<tool_call>(.*?)</tool_call>", response_content, re.DOTALL)
     if tool_match:
         tool_json_str = tool_match.group(1).strip()
         search_start = tool_match.end()
     else:
+        # 2. Fallback: ```json block
         for md_match in re.finditer(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL):
             candidate = md_match.group(1).strip()
             if '"name"' in candidate:
+                # VETO CHECK: Is this just a conversational example?
+                if _is_example_context(response_content, md_match.start()):
+                    continue  # Skip this block and keep searching!
+
                 tool_json_str = candidate
                 search_start = md_match.end()
                 break
 
     if not tool_json_str:
+        # 3. Fallback: Naked JSON
         naked_start_match = re.search(r'\{\s*"name"\s*:\s*"[^"]+"', response_content, re.DOTALL)
         if naked_start_match:
-            balanced = _extract_balanced_json_object(response_content, naked_start_match.start())
-            if balanced:
-                tool_json_str = balanced.strip()
-                search_start = naked_start_match.start() + len(balanced)
+            # VETO CHECK: Is this just a conversational example?
+            if not _is_example_context(response_content, naked_start_match.start()):
+                balanced = _extract_balanced_json_object(response_content, naked_start_match.start())
+                if balanced:
+                    tool_json_str = balanced.strip()
+                    search_start = naked_start_match.start() + len(balanced)
 
     if not tool_json_str:
         return None
