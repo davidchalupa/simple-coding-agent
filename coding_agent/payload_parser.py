@@ -4,64 +4,78 @@ import re
 
 def _is_example_context(text: str, match_start: int) -> bool:
     """
-    Safety heuristic to detect if the LLM is providing an educational example
-    rather than intending to execute a tool. Prevents the 'example-execution trap'.
+    Safety heuristic to detect if the LLM is providing an educational example.
+    Expanded window and enhanced regex to catch chatty models.
     """
-    # Check the 120 characters right before the JSON block
-    prefix = text[max(0, match_start - 120):match_start].lower()
+    # Increased lookback window to 300 characters to catch longer conversational setups
+    prefix = text[max(0, match_start - 300):match_start].lower()
 
-    # Highly specific patterns that LLMs use to introduce examples.
-    # The [,\:] prevents false positives like "create a file for example.py"
+    # Relaxed patterns to catch more variations of example introductions
     patterns = [
-        r'\bfor example[,:]',
-        r'\bfor instance[,:]',
+        r'\bfor example\b',
+        r'\bfor instance\b',
         r'\ban example\b',
         r'\bhypothetical\b',
-        r'\bfollowing json command\b'
+        r'\bfollowing\b.*\b(json|command|tool|call|format)\b',
+        r'\byou can use\b',
+        r'\bhere is how\b',
+        r'\bhere\'s how\b',
+        r'\blike this\b',
+        r'\bas follows\b'
     ]
     return any(re.search(p, prefix) for p in patterns)
 
 
+def _has_trailing_prose(text: str, match_end: int) -> bool:
+    """
+    VETO CHECK: Real tool calls usually end the agent's turn.
+    If the agent keeps talking after the code block, it's almost certainly
+    showing an example, not requesting an execution.
+    """
+    suffix = text[match_end:].strip()
+    if not suffix:
+        return False
+
+    # Strip out valid trailing structures that belong to a real execution
+    # 1. Remove valid <payload> blocks
+    suffix = re.sub(r"<payload>.*?(?:</payload>|$)", "", suffix, flags=re.DOTALL)
+    # 2. Remove other trailing code blocks (in case it drafted multiple tools)
+    suffix = re.sub(r"```.*?```", "", suffix, flags=re.DOTALL)
+    # 3. Remove loose markdown backticks
+    suffix = re.sub(r"`+", "", suffix)
+
+    # If there are actual words/letters left over, it's conversational prose!
+    if re.search(r'[a-zA-Z0-9]', suffix):
+        return True
+
+    return False
+
+
 def _normalize_double_escaped_content(text):
-    """
-    Some models JSON-escape their own intended escape sequences (writing \\n
-    instead of \n inside the JSON string), so after a normal json.loads() pass
-    the text still contains literal backslash-n instead of a real newline.
-    Detect that pattern and fix it.
-    """
+    # [Keep existing implementation]
     if not isinstance(text, str):
         return text
     if '\n' in text:
-        # Already has real newlines -- content is fine as-is, don't touch it.
         return text
     if '\\n' not in text and '\\t' not in text and '\\r' not in text:
         return text
     return (
         text.replace('\\r\\n', '\n')
-            .replace('\\n', '\n')
-            .replace('\\t', '\t')
-            .replace('\\r', '\n')
+        .replace('\\n', '\n')
+        .replace('\\t', '\t')
+        .replace('\\r', '\n')
     )
 
 
 def _clean_over_escaped_quotes(text):
-    """
-    After json.loads() has already decoded standard JSON escapes once, any
-    remaining literal backslash-quote sequence is virtually always the model
-    double-escaping (e.g. \\\" instead of \"). Collapse it.
-    """
+    # [Keep existing implementation]
     if not isinstance(text, str):
         return text
     return text.replace('\\"', '"')
 
 
 def _extract_balanced_json_object(text, start_idx=0):
-    """
-    Finds the first top-level JSON object substring starting at or after start_idx,
-    correctly skipping over any { or } characters that appear INSIDE JSON string
-    values (e.g. Python code with dict/set literals embedded in a "content" field).
-    Returns the substring including the outer braces, or None if unbalanced/truncated.
-    """
+    # [Keep existing implementation]
     start = text.find('{', start_idx)
     if start == -1:
         return None
@@ -98,7 +112,7 @@ def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict |
     tool_json_str = None
     search_start = 0
 
-    # 1. Primary extraction: ALWAYS trusted, no example check.
+    # 1. Primary extraction: Explicitly tagged executions bypass conversational filters
     tool_match = re.search(r"<tool_call>(.*?)</tool_call>", response_content, re.DOTALL)
     if tool_match:
         tool_json_str = tool_match.group(1).strip()
@@ -108,24 +122,32 @@ def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict |
         for md_match in re.finditer(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL):
             candidate = md_match.group(1).strip()
             if '"name"' in candidate:
-                # VETO CHECK: Is this just a conversational example?
+
+                # VETO 1: Is this introduced as an example?
                 if _is_example_context(response_content, md_match.start()):
-                    continue  # Skip this block and keep searching!
+                    continue
+
+                    # VETO 2: Did the agent keep talking after this block?
+                if _has_trailing_prose(response_content, md_match.end()):
+                    continue
 
                 tool_json_str = candidate
                 search_start = md_match.end()
                 break
 
     if not tool_json_str:
-        # 3. Fallback: Naked JSON
+        # 3. Fallback: Naked JSON (Heavily restricted)
         naked_start_match = re.search(r'\{\s*"name"\s*:\s*"[^"]+"', response_content, re.DOTALL)
         if naked_start_match:
-            # VETO CHECK: Is this just a conversational example?
             if not _is_example_context(response_content, naked_start_match.start()):
                 balanced = _extract_balanced_json_object(response_content, naked_start_match.start())
                 if balanced:
-                    tool_json_str = balanced.strip()
-                    search_start = naked_start_match.start() + len(balanced)
+                    match_end = naked_start_match.start() + len(balanced)
+
+                    # Apply trailing prose veto to naked JSON as well
+                    if not _has_trailing_prose(response_content, match_end):
+                        tool_json_str = balanced.strip()
+                        search_start = match_end
 
     if not tool_json_str:
         return None

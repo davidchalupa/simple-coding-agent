@@ -3,18 +3,14 @@ import os
 import json
 import re
 import shutil
-import psutil
 
-import llama_cpp
-from llama_cpp import Llama
 from pathlib import Path
 
-import common.llm_init
-from common.llm_init import initialize_agent, llm, CONTEXT_WINDOW
+from common.llm_init import LLMInitializer
 
 from coding_agent.welcome_banner import display_welcome_banner
 from coding_agent.input_handler import get_user_prompt
-from coding_agent.tool_definitions import read_file, extract_code_blocks
+from coding_agent.tool_definitions import read_file
 from coding_agent.execute_tool import execute_tool
 from coding_agent.system_prompt_builder import build_system_prompt
 from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context, \
@@ -25,7 +21,7 @@ from coding_agent import hidden_readme_prompt_builder
 from coding_agent import file_splitter
 from coding_agent import payload_parser
 from cli import parse_cli_arguments
-# the agent currently supports: Qwen2.5-Coder-7B-Instruct-Q4_K_M, Hermes-3-Llama-3.1-8B.Q4_K_M
+# the agent currently supports: Qwen2.5-Coder-7B-Instruct-Q4_K_M/Q5_K_M
 from model_registry import MODEL_REGISTRY
 
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
@@ -57,10 +53,15 @@ def main():
     global messages, session_cwd, is_split_mode, is_execute_mode, original_split_file, sandbox_directory, automated_followup, has_prompted_for_tests
 
     SYSTEM_PROMPT = build_system_prompt()
-    agent = initialize_agent(target_path, loaded_model_name, active_config)
+
+    initializer = LLMInitializer(target_path, loaded_model_name, active_config)
+    initializer.initialize_agent()
+
+    CONTEXT_WINDOW = initializer.CONTEXT_WINDOW
+
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    llm = common.llm_init.llm
+    llm = initializer.llm
 
     display_welcome_banner(loaded_model_name, ALLOW_PATCH)
 

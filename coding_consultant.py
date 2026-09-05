@@ -1,19 +1,17 @@
 import sys
 import os
 import json
-import psutil
 import re
 
-import llama_cpp
-from llama_cpp import Llama
 from pathlib import Path
 
-import common.llm_init
-from common.llm_init import initialize_agent, llm, CONTEXT_WINDOW
+from common.llm_init import LLMInitializer
+
+from consultant.system_prompt_builder import build_consultant_system_prompt
+from consultant.guardrail_tools import check_context_guardrail, fuzzy_extract_tool_calls
 
 from coding_agent.input_handler import get_user_prompt
 from coding_agent.execute_tool import execute_tool
-from coding_agent import payload_parser
 from coding_agent.guardrail_tools import stream_agent_response
 from cli import parse_cli_arguments
 from model_registry import MODEL_REGISTRY
@@ -24,7 +22,6 @@ active_config = MODEL_REGISTRY[parsed_args["model"]]
 
 target_path = Path(__file__).resolve().parent / "models" / active_config["filename"]
 loaded_model_name = active_config["display_name"]
-CONTEXT_WINDOW = active_config["max_context"]
 
 # --- GLOBAL STATE ---
 # Deliberately no is_split_mode / is_execute_mode / sandbox_directory / ALLOW_PATCH /
@@ -48,103 +45,19 @@ WRITE_TOOLS = frozenset({"write_file", "append_file", "patch_file", "replace_lin
 MAX_TOOL_CALLS_PER_TURN = 20
 
 
-def get_system_ram_gb():
-    """Returns total system RAM in gigabytes."""
-    return psutil.virtual_memory().total / (1024 ** 3)
-
-
-def build_consultant_system_prompt():
-    tools_section = (
-        '1. `list_tree`: {"dir_path": "<str>", "max_depth": <int>}\n'
-        '2. `search_codebase`: {"dir_path": "<str>", "query": "<str>", "is_regex": <bool>, "max_matches": <int>}\n'
-        '3. `read_file`: {"filepath": "<str>", "start_line": <int>, "max_lines": <int>}\n'
-        '4. `read_symbol`: {"filepath": "<str>", "symbol_name": "<str>"}\n'
-        '5. `run_cmd`: {"command": "<str>"}'
-    )
-
-    return f"""You are a read-only coding consultant. You strictly follow a 2-step state machine.
-
-AVAILABLE TOOLS:
-{tools_section}
-
-STATE 1 - USER ASKS QUESTION:
-If the user asks a question, you may output one or more `<tool_call>` blocks to gather missing context. Do not guess. Do not proactively fetch unrequested files.
-
-STATE 2 - RECEIVING TOOL RESULTS:
-If your prompt begins with "Tool Execution Results:", you MUST immediately transition to plain text. 
-- Analyze the results to answer the user's original question.
-- YOU ARE STRICTLY FORBIDDEN from outputting another `<tool_call>`.
-- Never attempt to read `main` or related functions unless explicitly asked.
-
-FORMAT: <tool_call>{{"name": "tool_name", "args": {{}}}}</tool_call>"""
-
-
-def check_context_guardrail(current_messages, model, limit):
-    """Calculates tokens and warns on memory overload."""
-    try:
-        tokens = sum(len(model.tokenize(m["content"].encode('utf-8'))) + 10 for m in current_messages)
-        if tokens > limit:
-            print(
-                f"\n🚨 [MEMORY OVERLOAD]: Prompt size is {tokens} tokens (Limit: {limit}).\n   The consultant will likely hallucinate... Consider using '/clear'.")
-        elif tokens > int(limit * 0.85):
-            print(
-                f"\n⚠️  [MEMORY WARNING]: Approaching context limit ({tokens}/{limit} tokens, {(tokens / limit) * 100:.1f}%).")
-    except Exception:
-        pass
-
-
-def fuzzy_extract_tool_calls(text):
-    """
-    Hunts for any valid JSON object containing 'name' and 'args',
-    regardless of how the LLM wrapped, separated, or formatted them.
-    """
-    tools = []
-    # Find every starting position of what looks like a tool call
-    start_indices = [m.start() for m in re.finditer(r'\{\s*"name"\s*:', text)]
-
-    for start_idx in start_indices:
-        brace_count = 0
-        in_string = False
-        escape = False
-
-        for i in range(start_idx, len(text)):
-            char = text[i]
-
-            if escape:
-                escape = False
-                continue
-
-            if char == '\\':
-                escape = True
-            elif char == '"':
-                in_string = not in_string
-            elif not in_string:
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-
-                    if brace_count == 0:
-                        # Reached the end of this specific JSON object
-                        json_str = text[start_idx:i + 1]
-                        try:
-                            parsed = json.loads(json_str)
-                            if "name" in parsed:
-                                tools.append(parsed)
-                        except json.JSONDecodeError:
-                            pass
-                        break
-    return tools
-
-
 def main():
     global messages, session_cwd, consult_read_cache
 
     SYSTEM_PROMPT = build_consultant_system_prompt()
-    initialize_agent(target_path, loaded_model_name, active_config)
+
+    initializer = LLMInitializer(target_path, loaded_model_name, active_config)
+    initializer.initialize_agent()
+
+    CONTEXT_WINDOW = initializer.CONTEXT_WINDOW
+
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    llm = common.llm_init.llm
+    llm = initializer.llm
 
     print(f"\n🔍 [Coding Consultant] {loaded_model_name} loaded. Read-only — write tools are disabled.\n")
 
@@ -222,9 +135,7 @@ def main():
                     if not tool_requests:
                         tool_requests = fuzzy_extract_tool_calls(response_content)
 
-                # ==============================================================
-                # THE FIX: HISTORY NORMALIZATION
-                # ==============================================================
+                # HISTORY NORMALIZATION
                 if tool_requests:
                     # Force the model's memory to look like perfect XML,
                     # even if it hallucinated markdown blocks.
