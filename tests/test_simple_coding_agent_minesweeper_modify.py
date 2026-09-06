@@ -7,7 +7,7 @@ def test_agent_minesweeper_modify_generate_only():
 
     input_queue = [
         "Read the the code in `minesweeper-solve/minesweeper.py`. ",
-        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
+        "CRITICAL: Set `start_line: 1` and `max_lines: -1` so you read the entire file.",
         "/send",
 
         "Good. Now I will need you to change the run_game_loop function so that it has a return value. ",
@@ -35,7 +35,7 @@ def test_agent_minesweeper_modify_with_replace_lines():
 
     input_queue = [
         "Read the code in `minesweeper-solve/minesweeper.py`. "
-        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file.",
+        "CRITICAL: Set `start_line: 1` and `max_lines: -1` so you read the entire file.",
         "/send",
 
         "Good. Now I will need you to change the run_game_loop function so that it has a return value. "
