@@ -35,7 +35,7 @@ def build_system_prompt(allow_patch=False):
     AVAILABLE TOOLS:
     1. `list_tree`: {{"dir_path": "<str>", "max_depth": <int>}} - Explores and visualizes directory structures.
     2. `search_codebase`: {{"dir_path": "<str>", "query": "<str>", "is_regex": <bool>, "max_matches": <int>}} - Greps for strings or regex across non-binary files.
-    3. `read_file`: {{"filepath": "<str>", "start_line": <int>, "max_lines": <int>}} - Output is prefixed with the real 1-indexed line number of each line (e.g. "  42\\tsome code"). Use these exact numbers, do not count lines yourself.
+    3. `read_file`: {{"filepath": "<str>", "start_line": <int>, "max_lines": <int>}} - Output is prefixed with the real 1-indexed line number of each line (e.g. "  42\\tsome code"). Use these exact numbers, do not count lines yourself. Set "max_lines" to -1 to read the entire file.
     4. `read_symbol`: {{"filepath": "<str>", "symbol_name": "<str>"}} - Extracts a specific function, method, or class from a Python file, returning its code and exact start/end line numbers. Use this only for targeted inspection when you already know the symbol you need.
     5. `write_file`: {{"filepath": "<str>", "content": "<str>"}} - Overwrites or initializes a file completely. Pass the full file content inside the JSON as a properly escaped string (use \\n for newlines, \\" for quotes). No <payload> block.
     6. `append_file`: {{"filepath": "<str>", "content": "<str>"}} - Appends code structures. Pass content inside the JSON (properly escaped). No <payload> block.

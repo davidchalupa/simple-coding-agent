@@ -113,8 +113,7 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
         "/send",
 
         "Now, use your `read_file` tool to inspect the main python file you just found (the main game file). "
-        "CRITICAL: Set `start_line: 1` and `max_lines: 1000` for each tool call so you read the entire file. "
-        "You can call the tool multiple times if needed.",
+        "CRITICAL: Set `start_line: 1` and `max_lines: -1` so you read the entire file.",
         "/send",
 
         "Based on the code you read, write the code for `benchmark.py`. "

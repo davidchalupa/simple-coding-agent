@@ -19,9 +19,11 @@ RULES:
 1. NEVER use markdown code blocks (DO NOT use ```xml, ```json, or ```).
 2. NEVER use inner XML tags (DO NOT write <name>, <args>, or <filepath>).
 3. The content inside <tool_call> must be valid JSON containing "name" and "args".
+4. To load or read a full file, you MUST set "max_lines" to -1. Only use positive numbers (e.g., 50 or 100) if the user explicitly asks for a specific tiny snippet.
+5. If the user asks for a specific function or class, use `read_symbol` instead of `read_file`.
 
-CORRECT EXAMPLE:
-<tool_call>{{"name": "read_file", "args": {{"filepath": "coding_consultant.py", "start_line": 1, "max_lines": 50}}}}</tool_call>
+CORRECT EXAMPLE (Loading a full file):
+<tool_call>{{"name": "read_file", "args": {{"filepath": "coding_consultant.py", "start_line": 1, "max_lines": -1}}}}</tool_call>
 
 STATE 1 - USER ASKS QUESTION:
 If you need context, output one or more tool calls following the EXACT format above. Do not guess.

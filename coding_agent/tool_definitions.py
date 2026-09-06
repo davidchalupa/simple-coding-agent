@@ -7,7 +7,6 @@ import difflib
 from pathlib import Path
 
 
-# 2. Tool Definitions
 def read_file(filepath, start_line=1, max_lines=100):
     """Reads a file with strict pagination to prevent context window exhaustion.
     Output includes 1-indexed line numbers so the model can accurately reference
@@ -21,7 +20,13 @@ def read_file(filepath, start_line=1, max_lines=100):
 
         total_lines = len(lines)
         start_idx = max(0, int(start_line) - 1)
-        end_idx = start_idx + max(1, int(max_lines))
+
+        # --- UPDATE: Handle -1 for full file read ---
+        max_lines_int = int(max_lines)
+        if max_lines_int == -1:
+            end_idx = total_lines
+        else:
+            end_idx = start_idx + max(1, max_lines_int)
 
         selected_lines = lines[start_idx:end_idx]
         numbered_lines = [
@@ -30,6 +35,7 @@ def read_file(filepath, start_line=1, max_lines=100):
         ]
         content = "\n".join(numbered_lines)
 
+        # Truncation warning only triggers if we haven't reached the end
         if total_lines > end_idx:
             content += f"\n\n... [TRUNCATED: Lines {end_idx + 1} to {total_lines} remain. Use read_file with start_line={end_idx + 1} if needed] ..."
 
