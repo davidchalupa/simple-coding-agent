@@ -234,22 +234,31 @@ def verify_refactor_integrity(original_filepath, generated_files_dir, expected_f
         ]
 
         if missing_files:
+            # IMPORTANT:
+            # Only request ONE file at a time. The agent runtime/tool parser is
+            # expected to execute the XML tool call directly. Requesting multiple
+            # calls in one response makes it easy for the model to emit them as
+            # ordinary markdown instead of actual tool invocations.
+            next_file = missing_files[0]
+
             return False, (
-                f"INCOMPLETE REFACTOR: You proposed creating these files in your "
-                f"<blueprint>, but they are missing: {missing_files}\n"
-                f"You must scaffold ALL of them using `write_file` before outputting "
-                f"'Refactor Phase Complete'.\n\n"
-                f"CRITICAL REMINDER: You MUST use the exact XML format below. "
-                f"Do NOT use markdown (```) blocks.\n\n"
-                f"MANDATORY FORMAT:\n"
+                f"INCOMPLETE REFACTOR: `{next_file}` from your blueprint is missing.\n"
+                f"Create this file now using `write_file`.\n"
+                f"Do NOT output `Refactor Phase Complete` yet.\n"
+                f"Do NOT use markdown code fences.\n"
+                f"Do NOT output JSON outside the XML tool-call format.\n"
+                f"After this tool call is executed, stop and wait for the next "
+                f"verification pass.\n\n"
                 f"<tool_call>\n"
                 f"{{\n"
-                f"    \"name\": \"write_file\",\n"
-                f"    \"args\": {{\"filepath\": \"filename.py\"}}\n"
+                f'    "name": "write_file",\n'
+                f'    "args": {{"filepath": "{next_file}"}}\n'
                 f"}}\n"
                 f"</tool_call>\n"
                 f"<payload>\n"
-                f"import sys\n\nclass Skeleton:\n    pass\n"
+                f"import sys\n\n"
+                f"class Skeleton:\n"
+                f"    pass\n"
                 f"</payload>"
             )
 
@@ -281,7 +290,9 @@ def verify_refactor_integrity(original_filepath, generated_files_dir, expected_f
                             all_sandbox_methods.add(node.name)
 
                 except SyntaxError as e:
-                    return False, f"Syntax Error in generated file '{file}': {e}"
+                    return False, (
+                        f"Syntax Error in generated file '{file}': {e}"
+                    )
 
     # 2. Check for dropped logic
     missing = original_methods - all_sandbox_methods

@@ -133,6 +133,10 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
         "10. DO NOT import or reference interactive-mode functions such as `interactive_get_action`, "
         "`main_interactive`, or `prompt_first_click`.\n"
         "11. Every name used by the generated script must either be defined in the script or explicitly imported.\n"
+        "12. Compute the FIRST click's row and column ONCE (e.g. `first_r, first_c = random.randrange(board_size), "
+        "random.randrange(board_size)`), and pass that SAME (first_r, first_c) pair to BOTH `place_mines` and "
+        "`handle_click`. Do NOT call random.randrange separately for each function — that would let the first "
+        "click land on a different cell than the one place_mines was told to keep safe."
         "\n"
         "Just output the python code in a standard ```python markdown block. "
         "DO NOT use the `write_file` tool yet.",
