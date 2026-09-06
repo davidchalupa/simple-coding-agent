@@ -7,12 +7,6 @@ import simple_coding_agent
 
 def pytest_addoption(parser):
     parser.addoption(
-        "--hermes",
-        action="store_true",
-        default=False,
-        help="Run tests using the Hermes 3 model."
-    )
-    parser.addoption(
         "--model",
         action="store",
         default="qwen2.5-7b",
@@ -22,11 +16,7 @@ def pytest_addoption(parser):
 
 @pytest.fixture(autouse=True)
 def setup_agent_model(request):
-    # Check if --hermes flag was passed, otherwise read --model option
-    if request.config.getoption("hermes"):
-        selected_model = "hermes3"
-    else:
-        selected_model = request.config.getoption("model")
+    selected_model = request.config.getoption("model")
 
     # Inject active model config into simple_coding_agent
     if selected_model in simple_coding_agent.MODEL_REGISTRY:

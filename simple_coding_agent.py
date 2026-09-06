@@ -34,7 +34,6 @@ active_config = MODEL_REGISTRY[parsed_args["model"]]
 
 target_path = Path(__file__).resolve().parent / "models" / active_config["filename"]
 loaded_model_name = active_config["display_name"]
-CONTEXT_WINDOW = active_config["max_context"]
 
 # Global State Placeholders
 messages = []

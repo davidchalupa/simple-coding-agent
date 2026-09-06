@@ -1,5 +1,6 @@
 import json
 import re
+import ast
 
 
 def check_context_guardrail(current_messages, model, limit):
@@ -22,13 +23,14 @@ def fuzzy_extract_tool_calls(text):
     regardless of how the LLM wrapped, separated, or formatted them.
     """
     tools = []
-    # Find every starting position of what looks like a tool call
-    start_indices = [m.start() for m in re.finditer(r'\{\s*"name"\s*:', text)]
+    # Tweaked regex: catches both "name" and 'name'
+    start_indices = [m.start() for m in re.finditer(r'\{\s*["\']name["\']\s*:', text)]
 
     for start_idx in start_indices:
         brace_count = 0
         in_string = False
         escape = False
+        string_char = None # track if we are in a ' or " string
 
         for i in range(start_idx, len(text)):
             char = text[i]
@@ -39,8 +41,13 @@ def fuzzy_extract_tool_calls(text):
 
             if char == '\\':
                 escape = True
-            elif char == '"':
-                in_string = not in_string
+            elif char in ('"', "'"):
+                # Handle entering/exiting strings with correct quote type
+                if not in_string:
+                    in_string = True
+                    string_char = char
+                elif string_char == char:
+                    in_string = False
             elif not in_string:
                 if char == '{':
                     brace_count += 1
@@ -48,13 +55,19 @@ def fuzzy_extract_tool_calls(text):
                     brace_count -= 1
 
                     if brace_count == 0:
-                        # Reached the end of this specific JSON object
                         json_str = text[start_idx:i + 1]
                         try:
+                            # Try standard JSON first
                             parsed = json.loads(json_str)
                             if "name" in parsed:
                                 tools.append(parsed)
                         except json.JSONDecodeError:
-                            pass
+                            # Fallback: Model used single quotes or trailing commas
+                            try:
+                                parsed = ast.literal_eval(json_str)
+                                if isinstance(parsed, dict) and "name" in parsed:
+                                    tools.append(parsed)
+                            except (ValueError, SyntaxError):
+                                pass
                         break
     return tools
