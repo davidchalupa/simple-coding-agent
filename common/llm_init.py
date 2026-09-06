@@ -5,11 +5,12 @@ from llama_cpp import Llama, llama_cpp
 
 
 class LLMInitializer:
-    def __init__(self, target_path, loaded_model_name, active_config):
+    def __init__(self, target_path, loaded_model_name, active_config, disable_quantization):
         self.target_path = target_path
         self.loaded_model_name = loaded_model_name
         self.active_config = active_config
         self.llm = None
+        self.disable_quantization = disable_quantization
         self.CONTEXT_WINDOW = None
 
     def get_system_ram_gb(self):
@@ -56,8 +57,8 @@ class LLMInitializer:
                             n_ctx=ctx_size,
                             n_threads=6,
                             n_batch=512,
-                            type_k=llama_cpp.GGML_TYPE_Q8_0,
-                            type_v=llama_cpp.GGML_TYPE_Q8_0,
+                            type_k=llama_cpp.GGML_TYPE_Q8_0 if not self.disable_quantization else None,
+                            type_v=llama_cpp.GGML_TYPE_Q8_0 if not self.disable_quantization else None,
                             n_gpu_layers=n_layers,
                             chat_format=self.active_config["chat_format"],
                             flash_attn=True,

@@ -19,6 +19,7 @@ from model_registry import MODEL_REGISTRY
 # --- CLI / MODEL SETUP ---
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
 active_config = MODEL_REGISTRY[parsed_args["model"]]
+disable_kv_quantization = parsed_args["disable_kv_quantization"]
 
 target_path = Path(__file__).resolve().parent / "models" / active_config["filename"]
 loaded_model_name = active_config["display_name"]
@@ -50,7 +51,7 @@ def main():
 
     SYSTEM_PROMPT = build_consultant_system_prompt()
 
-    initializer = LLMInitializer(target_path, loaded_model_name, active_config)
+    initializer = LLMInitializer(target_path, loaded_model_name, active_config, disable_kv_quantization)
     initializer.initialize_agent()
 
     CONTEXT_WINDOW = initializer.CONTEXT_WINDOW

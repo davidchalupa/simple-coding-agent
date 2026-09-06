@@ -29,6 +29,7 @@ parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
 ALLOW_PATCH = parsed_args["allow_patch"]
 FORCE_TESTING = parsed_args["force_testing"]
 SELF_VERIFY_PY_WRITES = parsed_args["self_verify_py_writes"]
+disable_kv_quantization = parsed_args["disable_kv_quantization"]
 
 active_config = MODEL_REGISTRY[parsed_args["model"]]
 
@@ -53,7 +54,7 @@ def main():
 
     SYSTEM_PROMPT = build_system_prompt()
 
-    initializer = LLMInitializer(target_path, loaded_model_name, active_config)
+    initializer = LLMInitializer(target_path, loaded_model_name, active_config, disable_kv_quantization)
     initializer.initialize_agent()
 
     CONTEXT_WINDOW = initializer.CONTEXT_WINDOW
