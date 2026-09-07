@@ -338,7 +338,7 @@ def main():
                 # Define standard payload key handling
                 content_key = "new_content" if tool_name == "patch_file" else "content"
 
-                # Payload recovery & Empty file guard
+                # Payload recovery, empty file guard & no-op / regurgitation guardrail
                 if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"]:
                     content_clean = re.sub(r'```[a-zA-Z]*\s*```', '', tool_args.get(content_key, '')).strip()
 
@@ -362,6 +362,27 @@ def main():
                                 break
                             messages.append({"role": "user", "content": msg})
                             continue
+
+                    # --- NO-OP / REGURGITATION GUARDRAIL ---
+                    if tool_name == "write_file":
+                        target_fp = tool_args.get("filepath", "")
+                        if os.path.isfile(target_fp):
+                            try:
+                                with open(target_fp, "r", encoding="utf-8") as f:
+                                    existing_disk_content = f.read()
+
+                                proposed_content = tool_args.get(content_key, "")
+                                if existing_disk_content.strip() == proposed_content.strip():
+                                    print(
+                                        f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
+                                    messages.append({
+                                        "role": "user",
+                                        "content": f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk. "
+                                                   f"If the user only asked to read, analyze, inspect, or explain, DO NOT invoke write tools. Answer directly in plain text."
+                                    })
+                                    continue
+                            except Exception:
+                                pass
 
                 # Loop Guardrail
                 curr_sig = f"{tool_name}:{str(tool_args)}"

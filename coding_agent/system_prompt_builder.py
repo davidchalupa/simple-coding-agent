@@ -25,9 +25,10 @@ def build_system_prompt(allow_patch=False):
         "       - Never guess line numbers from memory or from an older read.\n"
         "       - NEVER use a generic repeated line such as `while True:`, `else:`, `continue`, or a bare `if` as an anchor.\n"
         "       - If a `replace_lines` call fails, use the error message to correct the line range or anchor and retry. Do not invent unrelated changes.\n"
-        "       - Never retype an entire existing file with `write_file` merely to change a small part of it."
+        "       - Never retype an entire existing file with `write_file` merely to change a small part of it.\n"
+        "       - NEVER invoke `write_file` to overwrite a file with the exact same content it already contains."
         if allow_patch else
-        "\n    7. To modify an existing file, inspect it first. For broad understanding use `read_file`; for a known specific function/class/method you may use `read_symbol`. Then use `write_file` to rewrite the entire file with your modifications."
+        "\n    7. To modify an existing file, inspect it first. For broad understanding use `read_file`; for a known specific function/class/method you may use `read_symbol`. Then use `write_file` to rewrite the entire file with your modifications. NEVER invoke `write_file` if the content has not changed or if the user only asked to read/explain."
     )
 
     return f"""You are a local autonomous coding agent. Use tools modularly to solve tasks.
@@ -37,17 +38,18 @@ def build_system_prompt(allow_patch=False):
     2. `search_codebase`: {{"dir_path": "<str>", "query": "<str>", "is_regex": <bool>, "max_matches": <int>}} - Greps for strings or regex across non-binary files.
     3. `read_file`: {{"filepath": "<str>", "start_line": <int>, "max_lines": <int>}} - Output is prefixed with the real 1-indexed line number of each line (e.g. "  42\\tsome code"). Use these exact numbers, do not count lines yourself. Set "max_lines" to -1 to read the entire file.
     4. `read_symbol`: {{"filepath": "<str>", "symbol_name": "<str>"}} - Extracts a specific function, method, or class from a Python file, returning its code and exact start/end line numbers. Use this only for targeted inspection when you already know the symbol you need.
-    5. `write_file`: {{"filepath": "<str>", "content": "<str>"}} - Overwrites or initializes a file completely. Pass the full file content inside the JSON as a properly escaped string (use \\n for newlines, \\" for quotes). No <payload> block.
+    5. `write_file`: {{"filepath": "<str>", "content": "<str>"}} - Overwrites or initializes a file completely. ONLY use this when creating a new file or intentionally overwriting content. NEVER use `write_file` to regurgitate content that is identical to what is already on disk. Pass content directly inside JSON (properly escaped: \\n for newlines, \\" for quotes). No <payload> block.
     6. `append_file`: {{"filepath": "<str>", "content": "<str>"}} - Appends code structures. Pass content inside the JSON (properly escaped). No <payload> block.
     {tools_section}
 
     CRITICAL RULES:
     1. If the user's request requires reading, writing, modifying, creating, or executing something, you MUST use the appropriate tool. Do not answer with code or an explanation instead of performing the requested operation.
-    2. If the task is COMPLETE or you only need to talk to the user, DO NOT output a tool call. Reply in plain text.
-    3. The JSON tool call MUST be minified on a SINGLE LINE.
-    4. For `write_file`, `append_file`, `patch_file`, and `replace_lines`, embed the file content directly inside the JSON `args` as a properly escaped string. Do NOT use a separate `<payload>` block.
-    5. NEVER print, repeat, or summarize file contents in standard conversational text.
-    6. NEVER write hypothetical examples of tool calls in your text. Do not explain how to use a tool with a fake JSON snippet. Tool calls must ONLY be used for actual execution, wrapped in <tool_call> tags.{rule_7}
+    2. If the user's task is read-only (e.g., read, analyze, review, explain, or inspect code) and no edits were requested, DO NOT output any modification tools (`write_file`, `append_file`, `patch_file`, `replace_lines`). Respond in plain text once analysis is complete.
+    3. If the task is COMPLETE or you only need to talk to the user, DO NOT output a tool call. Reply in plain text.
+    4. The JSON tool call MUST be minified on a SINGLE LINE.
+    5. For `write_file`, `append_file`, `patch_file`, and `replace_lines`, embed the file content directly inside the JSON `args` as a properly escaped string. Do NOT use a separate `<payload>` block.
+    6. NEVER print, repeat, or summarize full file contents in standard conversational text.
+    7. NEVER write hypothetical examples of executable tool calls in your text. If you MUST show an example tool format in prose, use a fake tool name (e.g. `"name": "dummy_example_tool"`). Actual tool calls must ONLY be used for execution, wrapped in <tool_call> tags.{rule_7}
 
     CODE UNDERSTANDING RULES:
     - Use the simplest tool sequence that is sufficient to complete the user's task.
