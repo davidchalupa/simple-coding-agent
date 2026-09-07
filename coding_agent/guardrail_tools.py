@@ -2,7 +2,6 @@ import os
 import json
 import re
 
-from coding_agent.tool_definitions import extract_code_blocks
 from coding_agent import file_splitter
 from coding_agent import native_linter
 
@@ -100,42 +99,6 @@ def stream_agent_response(llm, messages, stop=None, temperature=0.1):
     return content, (finish_reason == "length"), False
 
 
-def handle_ast_extraction(content, split_file, sandbox_dir):
-    """Intercepts JSON routing plan and extracts blocks deterministically."""
-    match = re.search(r"```json\s*\n(.*?)\n```", content, re.DOTALL)
-    if not match:
-        return False, None
-
-    try:
-        plan = json.loads(match.group(1))
-
-        print("\n⚙️  [System] Intercepted JSON routing plan. Executing AST extraction natively...")
-
-        results = [
-            f"[{fn}]: {extract_code_blocks(split_file, os.path.join(sandbox_dir, fn), blocks)}"
-            for fn, blocks in plan.items()
-            if isinstance(blocks, list)
-        ]
-
-        report = "\n".join(results)
-        print(report)
-
-        return True, (
-            "System Alert: AST Extraction successfully executed.\n"
-            f"Results:\n{report}\n\n"
-            "Next Step: Review the extracted files with the available tools if needed. "
-            "Do not attempt to recreate the extracted methods. "
-            "When the refactor is complete, output 'Refactor Phase Complete'."
-        )
-
-    except json.JSONDecodeError:
-        print("\n❌ [System] Failed to parse JSON plan.")
-        return True, (
-            "System Alert: Your JSON block was invalid. "
-            "Please output ONLY valid JSON in the ```json block."
-        )
-
-
 def verify_sandbox_health(split_file, sandbox_dir, messages):
     """Checks structural integrity and lints sandbox files."""
     print("\n⚙️  [System Guardrail] Analyzing sandbox refactoring health...")
@@ -202,3 +165,17 @@ def auto_heal_newline_escaping(fp):
         new_lines.append(line)
         i += 1
     return healed, new_lines
+
+
+def check_context_guardrail(messages, llm, limit):
+    """Calculates tokens and warns on memory overload."""
+    try:
+        tokens = sum(len(llm.tokenize(m["content"].encode('utf-8'))) + 10 for m in messages)
+        if tokens > limit:
+            print(
+                f"\n🚨 [MEMORY OVERLOAD]: Prompt size is {tokens} tokens (Limit: {limit}).\n   The agent will likely hallucinate... Consider using '/clear' or '--deep-ast'.")
+        elif tokens > int(limit * 0.85):
+            print(
+                f"\n⚠️  [MEMORY WARNING]: Approaching context limit ({tokens}/{limit} tokens, {(tokens / limit) * 100:.1f}%).")
+    except Exception:
+        pass

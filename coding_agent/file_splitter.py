@@ -1,6 +1,10 @@
 import ast
 import os
 import shutil
+import json
+import re
+
+from coding_agent.tool_definitions import extract_code_blocks
 
 
 def analyze_file_metrics(filepath):
@@ -146,7 +150,7 @@ Example structure:
 The system will parse this JSON blueprint and perform the AST extraction deterministically.
 """
     else:
-        prompt = f"""You are a senior Software Architect. Your task is to design a refactoring split blueprint.
+        prompt = f"""You are a senior Software Architect. Your task is to design a refactoring split blueprint for review.
 
 [Context]
 File Target: `{filename}`
@@ -159,38 +163,28 @@ Layout Footprint:
 [Architectural Rules]
 {architectural_guidance}
 - Ensure that core entry execution setups or initialization points remain clearly in the root file.
+- Preserve all existing functions and methods by assigning each one to exactly one output file.
 
 [Required Output Layout Format]
-1. EXPLANATION: Write out your structural design reasoning out loud. Justify your module division choices using generic domain terms.
-2. BLUEPRINT: Provide your file mapping inside a <blueprint> XML tag as a JSON dictionary (mapping filenames to target methods). DO NOT use markdown (```) blocks.
-3. IMMEDIATE EXECUTION: You must immediately begin executing your plan. Use your `write_file` tool to create the FIRST file from your blueprint.
-   - CRITICAL: Write ONLY the structural boilerplate skeleton.
-   - You MUST use `pass` for every single method body to ensure perfectly valid Python syntax.
-   - Do NOT attempt to write the actual implementation logic yet.
-4. ITERATIVE COMPLETION: You MUST continue using your `write_file` tool to scaffold EVERY remaining file listed in your blueprint.
-   - Do NOT output "Refactor Phase Complete" until all planned files are successfully created.
-   - DO NOT delete or modify the original `{filename}` file.
+1. EXPLANATION: Write out your structural design reasoning. Justify your module division choices using generic domain terms.
+2. BLUEPRINT: Immediately after the explanation, provide ONE valid JSON object.
 
-MANDATORY TOOL CALL FORMAT:
-<tool_call>
+CRITICAL BLUEPRINT RULES:
+- The JSON object MUST be inside exactly one fenced JSON code block.
+- The opening line MUST be exactly: ```json
+- The closing line MUST be exactly: ```
+- The JSON object maps output filenames to lists of function/method names.
+- The key `{filename}` MUST appear in the JSON if any functions or methods remain in the root file.
+- Do NOT rename the root file.
+- Do NOT call any tools. Do NOT write file contents yet.
+- STOP immediately after the closing JSON code fence. This blueprint will be reviewed before anything is written.
+
+Example structure:
+
 {{
-    "name": "write_file",
-    "args": {{"filepath": "filename_from_blueprint.py"}}
+  "{filename}": ["__init__", "process_order"],
+  "some_specialized_module.py": ["validate_order"]
 }}
-</tool_call>
-<payload>
-import sys
-
-class YourClassName:
-    # YOU MUST INCLUDE ALL METHODS ASSIGNED TO THIS FILE IN THE BLUEPRINT
-    def method_assigned_in_blueprint_1(self):
-        pass
-
-    def method_assigned_in_blueprint_2(self):
-        pass
-</payload>
-
-Start executing the skeleton generation for the first file immediately after closing your <blueprint> tag.
 """
 
     return prompt
@@ -212,6 +206,60 @@ def setup_refactor_sandbox(source_filepath):
     shutil.copy2(abs_source, sandbox_target)
 
     return sandbox_target, sandbox_dir
+
+
+def handle_ast_extraction(content, split_file, sandbox_dir):
+    """Intercepts JSON routing plan and extracts blocks deterministically."""
+    match = re.search(r"```json\s*\n(.*?)\n```", content, re.DOTALL)
+    if not match:
+        return False, None
+
+    try:
+        plan = json.loads(match.group(1))
+
+        print("\n⚙️  [System] Intercepted JSON routing plan. Executing AST extraction natively...")
+
+        # Separate valid extraction entries from malformed ones instead of
+        # silently dropping the latter.
+        valid_entries = {fn: blocks for fn, blocks in plan.items() if isinstance(blocks, list)}
+        invalid_entries = {fn: blocks for fn, blocks in plan.items() if not isinstance(blocks, list)}
+
+        results = [
+            f"[{fn}]: {extract_code_blocks(split_file, os.path.join(sandbox_dir, fn), blocks)}"
+            for fn, blocks in valid_entries.items()
+        ]
+
+        report = "\n".join(results) if results else "(no valid entries were extracted)"
+        print(report)
+
+        if invalid_entries:
+            print(f"\n❌ [System] Rejected malformed blueprint entries: {invalid_entries}")
+            return True, (
+                "System Alert: Blueprint schema error. The following entries were REJECTED "
+                f"because their value must be a LIST of function/method names, not a string "
+                f"or other type: {invalid_entries}\n\n"
+                + (f"Valid entries were still extracted:\n{report}\n\n" if results else "")
+                + "This ```json blueprint format is ONLY for extracting existing functions/methods "
+                "by name into files. It is NOT for writing new code such as import statements. "
+                "To add a missing import, use the `patch_file` or `append_file` tool directly on "
+                "the target file instead.\n"
+                "Do not output 'Refactor Phase Complete' until this is actually fixed."
+            )
+
+        return True, (
+            "System Alert: AST Extraction successfully executed.\n"
+            f"Results:\n{report}\n\n"
+            "Next Step: Review the extracted files with the available tools if needed. "
+            "Do not attempt to recreate the extracted methods. "
+            "When the refactor is complete, output 'Refactor Phase Complete'."
+        )
+
+    except json.JSONDecodeError:
+        print("\n❌ [System] Failed to parse JSON plan.")
+        return True, (
+            "System Alert: Your JSON block was invalid. "
+            "Please output ONLY valid JSON in the ```json block."
+        )
 
 
 def verify_refactor_integrity(original_filepath, generated_files_dir, expected_files=None):

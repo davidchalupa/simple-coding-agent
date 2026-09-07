@@ -16,8 +16,8 @@ from coding_agent.system_prompt_builder import build_system_prompt
 from coding_agent.native_helpers import (get_repo_structure, generate_requirements_native, gather_deep_context,
                                          gather_deep_context_ast)
 from coding_agent.self_verification import find_last_code_block, run_self_verification
-from coding_agent.guardrail_tools import (stream_agent_response, handle_ast_extraction, verify_sandbox_health,
-                                          auto_heal_newline_escaping)
+from coding_agent.guardrail_tools import (stream_agent_response, verify_sandbox_health,
+                                          auto_heal_newline_escaping, check_context_guardrail)
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import file_splitter
 from coding_agent import payload_parser
@@ -249,19 +249,6 @@ def main():
         # Loop Guardrail: track recent signatures, not just the immediately previous one
         recent_tool_signatures = []
 
-        def check_context_guardrail(messages, llm, limit):
-            """Calculates tokens and warns on memory overload."""
-            try:
-                tokens = sum(len(llm.tokenize(m["content"].encode('utf-8'))) + 10 for m in messages)
-                if tokens > limit:
-                    print(
-                        f"\n🚨 [MEMORY OVERLOAD]: Prompt size is {tokens} tokens (Limit: {limit}).\n   The agent will likely hallucinate... Consider using '/clear' or '--deep-ast'.")
-                elif tokens > int(limit * 0.85):
-                    print(
-                        f"\n⚠️  [MEMORY WARNING]: Approaching context limit ({tokens}/{limit} tokens, {(tokens / limit) * 100:.1f}%).")
-            except Exception:
-                pass
-
         while True:
             check_context_guardrail(messages, llm, CONTEXT_WINDOW)
 
@@ -270,8 +257,19 @@ def main():
                 if interrupted: break
 
                 # --- AST EXTRACTION INTERCEPTOR ---
-                if is_split_mode and is_execute_mode and "```json" in response_content:
-                    handled, alert = handle_ast_extraction(response_content, original_split_file, sandbox_directory)
+                if is_split_mode and "```json" in response_content:
+                    if is_execute_mode:
+                        handled, alert = file_splitter.handle_ast_extraction(response_content, original_split_file, sandbox_directory)
+                    else:
+                        print("\n📋 Advisor blueprint received:")
+                        approval = input("Apply this blueprint deterministically to the sandbox? (y/n): ").strip().lower()
+                        if approval == 'y':
+                            handled, alert = file_splitter.handle_ast_extraction(response_content, original_split_file, sandbox_directory)
+                        else:
+                            handled, alert = True, (
+                                "Blueprint held pending revision. If you'd like changes, "
+                                "explain them and provide an updated ```json blueprint."
+                            )
                     if handled:
                         messages.append({"role": "user", "content": alert})
                         is_execute_mode = False if "successfully executed" in alert else is_execute_mode
@@ -549,7 +547,6 @@ def main():
             except Exception as e:
                 print(f"\n[Error during generation]: {e}")
                 break
-
 
 
 if __name__ == "__main__":
