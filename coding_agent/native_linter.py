@@ -135,10 +135,16 @@ class DependencyChecker(ast.NodeVisitor):
                 self.generic_visit(n)
 
             def visit_FunctionDef(self, n):
-                pass  # Do not bleed into nested functions
+                local_vars.add(n.name)
+                # Do not bleed into nested function body
+
+            def visit_AsyncFunctionDef(self, n):
+                local_vars.add(n.name)
+                # Do not bleed into nested function body
 
             def visit_ClassDef(self, n):
-                pass  # Do not bleed into nested classes
+                local_vars.add(n.name)
+                # Do not bleed into nested class body
 
         for stmt in getattr(node, 'body', []):
             LocalVisitor().visit(stmt)
