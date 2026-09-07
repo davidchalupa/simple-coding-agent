@@ -13,10 +13,11 @@ from coding_agent.input_handler import get_user_prompt
 from coding_agent.tool_definitions import read_file
 from coding_agent.execute_tool import execute_tool
 from coding_agent.system_prompt_builder import build_system_prompt
-from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_deep_context, \
-    gather_deep_context_ast
+from coding_agent.native_helpers import (get_repo_structure, generate_requirements_native, gather_deep_context,
+                                         gather_deep_context_ast)
 from coding_agent.self_verification import find_last_code_block, run_self_verification
-from coding_agent.guardrail_tools import stream_agent_response, handle_ast_extraction, verify_sandbox_health
+from coding_agent.guardrail_tools import (stream_agent_response, handle_ast_extraction, verify_sandbox_health,
+                                          auto_heal_newline_escaping)
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import file_splitter
 from coding_agent import payload_parser
@@ -363,26 +364,46 @@ def main():
                             messages.append({"role": "user", "content": msg})
                             continue
 
-                    # --- NO-OP / REGURGITATION GUARDRAIL ---
-                    if tool_name == "write_file":
-                        target_fp = tool_args.get("filepath", "")
-                        if os.path.isfile(target_fp):
-                            try:
-                                with open(target_fp, "r", encoding="utf-8") as f:
-                                    existing_disk_content = f.read()
+                        # --- NO-OP / REGURGITATION GUARDRAIL ---
+                        if tool_name == "write_file":
+                            target_fp = tool_args.get("filepath", "")
+                            if os.path.isfile(target_fp):
+                                try:
+                                    with open(target_fp, "r", encoding="utf-8") as f:
+                                        existing_disk_content = f.read()
 
-                                proposed_content = tool_args.get(content_key, "")
-                                if existing_disk_content.strip() == proposed_content.strip():
-                                    print(
-                                        f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
-                                    messages.append({
-                                        "role": "user",
-                                        "content": f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk. "
-                                                   f"If the user only asked to read, analyze, inspect, or explain, DO NOT invoke write tools. Answer directly in plain text."
-                                    })
-                                    continue
-                            except Exception:
-                                pass
+                                    proposed_content = tool_args.get(content_key, "")
+                                    if existing_disk_content.strip() == proposed_content.strip():
+                                        print(
+                                            f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
+
+                                        consecutive_errors += 1
+                                        if consecutive_errors >= 3:
+                                            print(
+                                                "🛑 [Circuit Breaker] Agent stuck in identical write loop. Forcing turn end.")
+                                            break
+
+                                        # Context-Aware Guardrail Message
+                                        if last_verification_failure and last_verification_failure.get(
+                                                "filepath") == target_fp:
+                                            alert_msg = (
+                                                f"System Alert: `write_file` blocked. You attempted to overwrite '{target_fp}' with the EXACT SAME BROKEN CODE that just failed self-verification. "
+                                                f"You must actually CHANGE the code to fix the error.\nError was:\n{last_verification_failure.get('error', '')}")
+                                            if "unterminated string literal" in last_verification_failure.get(
+                                                    "error", ""):
+                                                alert_msg += "\nHint: If you used '\\n' inside a Python string, the JSON parser converted it to a real newline. Avoid using '\\n' in string literals (e.g. use multiple prints) or quadruple-escape it as `\\\\n`."
+                                        else:
+                                            alert_msg = (
+                                                f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk. "
+                                                f"If the user only asked to read, analyze, inspect, or explain, DO NOT invoke write tools. Answer directly in plain text.")
+
+                                        messages.append({
+                                            "role": "user",
+                                            "content": alert_msg
+                                        })
+                                        continue
+                                except Exception:
+                                    pass
 
                 # Loop Guardrail
                 curr_sig = f"{tool_name}:{str(tool_args)}"
@@ -444,22 +465,45 @@ def main():
                         print(f"   Result ({len(tool_result)} chars, truncated): {preview}...")
                     else:
                         print(f"   Result: {tool_result}")
+
                     # Self-Verification
                     if SELF_VERIFY_PY_WRITES and was_mod and tool_name in ["write_file", "append_file",
                                                                            "patch_file", "replace_lines"]:
                         fp = tool_args.get("filepath", "")
                         if linter_error := run_self_verification(fp):
+
+                            # --- AUTO-HEALER FOR JSON NEWLINE ESCAPING ---
+                            if "unterminated string literal" in linter_error:
+                                try:
+                                    healed, new_lines = auto_heal_newline_escaping(fp)
+                                    if healed:
+                                        with open(fp, "w", encoding="utf-8") as f:
+                                            f.writelines(new_lines)
+
+                                        # Re-verify after healing
+                                        linter_error = run_self_verification(fp)
+                                        if not linter_error:
+                                            print(
+                                                f"🔧 [Auto-Healer] Successfully repaired JSON newline escaping artifact in {os.path.basename(fp)}!")
+                                            consecutive_lint_failures = 0
+                                            last_verification_failure = None
+                                            # Skip the rest of the failure block since it's fixed!
+                                            continue
+                                except Exception as e:
+                                    print(f"⚠️ Auto-healer encountered an exception: {e}")
+                            # -----------------------------------------------
+
                             consecutive_lint_failures += 1
                             print(f"🚨 [Self-Verification] FAILED on {os.path.basename(fp)}:\n{linter_error}")
 
-                            # Track failure using dynamic content_key
-                            last_verification_failure = {
-                                "filepath": fp,
-                                "content": tool_args.get(content_key, ""),
-                                "error": linter_error
-                            }
+                            tool_reinforcement += f"\n\nSystem Alert: Syntax check failed:\n{linter_error}\nFix it."
 
-                            tool_reinforcement += f"\n\nSystem Alert: File written but syntax/import check failed:\n{linter_error}\nFix it."
+                            # Amnesia patch to prevent repetition loops
+                            if messages and messages[-1].get("role") == "assistant":
+                                old_content = messages[-1].get("content", "")
+                                if len(old_content) > 50:
+                                    messages[-1][
+                                        "content"] = f"[Action logged: write_file to {fp}. Full JSON payload redacted to prevent repetition collapse.]"
 
                             if consecutive_lint_failures >= 3:
                                 print("🛑 [Circuit Breaker] Repeated lint failures. Forcing turn end.")
