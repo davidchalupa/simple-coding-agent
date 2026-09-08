@@ -241,7 +241,6 @@ def main(state, execution_state):
             # Standard execution or continuation of sandbox mode
             state.messages.append({"role": "user", "content": user_input})
 
-        # Internal Agent Execution Loop
         file_was_modified = False  # Track if any files change during this cycle
         last_tool_call_signature = None  # <-- Track the last tool run
         consecutive_errors = 0  # <-- Track infinite loop traps
@@ -251,6 +250,7 @@ def main(state, execution_state):
         # Loop Guardrail: track recent signatures, not just the immediately previous one
         recent_tool_signatures = []
 
+        # Internal Agent Execution Loop
         while True:
             check_context_guardrail(state.messages, llm, context_window)
 
