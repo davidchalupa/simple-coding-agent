@@ -34,23 +34,23 @@ models = {
         "repo_id": "bartowski/phi-4-GGUF",
         "filename": "phi-4-Q2_K.gguf"
     },
-    "qwen-2.5-coder-14b": {
+    "qwen2.5-14b": {
         "repo_id": "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF",
         "filename": "Qwen2.5-Coder-14B-Instruct-Q3_K_S.gguf"
     },
-    "qwen-2.5-coder-14b-q2k": {
+    "qwen2.5-14b-q2k": {
         "repo_id": "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF",
         "filename": "Qwen2.5-Coder-14B-Instruct-Q2_K.gguf"
     },
-    "qwen-2.5-coder-7b": {
+    "qwen2.5-7b": {
         "repo_id": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
         "filename": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
     },
-    "qwen-2.5-coder-7b-q5-k-m": {
+    "qwen2.5-7b-q5-k-m": {
         "repo_id": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
         "filename": "Qwen2.5-Coder-7B-Instruct-Q5_K_M.gguf"
     },
-    "qwen-2.5-coder-7b-q6-k": {
+    "qwen2.5-7b-q6-k": {
         "repo_id": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
         "filename": "Qwen2.5-Coder-7B-Instruct-Q6_K.gguf"
     },
@@ -68,7 +68,7 @@ models = {
     }
 }
 
-def download_model(model_id):
+def download_model(model_id, force_redownload=False):
     model_info = models.get(model_id)
     if not model_info:
         print(f"Model {model_id} not found.")
@@ -83,6 +83,13 @@ def download_model(model_id):
     url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
     tmp_path = os.path.join(dest_dir, filename + ".part")
     out_path = os.path.join(dest_dir, filename)
+
+    if not force_redownload:
+        file_exists = os.path.exists(out_path)
+
+        if file_exists:
+            print(f"Model: {filename} already exists at {dest_dir}.")
+            return
 
     print(f"Starting download: {filename}...")
 
