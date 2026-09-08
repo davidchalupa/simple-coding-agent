@@ -7,12 +7,14 @@ from pathlib import Path
 
 from common.llm_init import LLMInitializer
 
-from consultant.system_prompt_builder import build_consultant_system_prompt
-from consultant.guardrail_tools import check_context_guardrail, fuzzy_extract_tool_calls
+from common.input_handler import get_user_prompt
+from common.execute_tool import execute_tool
+from common.output_handler import stream_agent_response
+from common.guardrail_tools import check_context_guardrail
 
-from coding_agent.input_handler import get_user_prompt
-from coding_agent.execute_tool import execute_tool
-from coding_agent.guardrail_tools import stream_agent_response
+from consultant.system_prompt_builder import build_consultant_system_prompt
+from consultant.guardrail_tools import fuzzy_extract_tool_calls
+
 from cli import parse_cli_arguments
 from model_registry import MODEL_REGISTRY
 

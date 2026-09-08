@@ -3,20 +3,6 @@ import re
 import ast
 
 
-def check_context_guardrail(current_messages, model, limit):
-    """Calculates tokens and warns on memory overload."""
-    try:
-        tokens = sum(len(model.tokenize(m["content"].encode('utf-8'))) + 10 for m in current_messages)
-        if tokens > limit:
-            print(
-                f"\n🚨 [MEMORY OVERLOAD]: Prompt size is {tokens} tokens (Limit: {limit}).\n   The consultant will likely hallucinate... Consider using '/clear'.")
-        elif tokens > int(limit * 0.85):
-            print(
-                f"\n⚠️  [MEMORY WARNING]: Approaching context limit ({tokens}/{limit} tokens, {(tokens / limit) * 100:.1f}%).")
-    except Exception:
-        pass
-
-
 def fuzzy_extract_tool_calls(text):
     """
     Hunts for any valid JSON object containing 'name' and 'args',

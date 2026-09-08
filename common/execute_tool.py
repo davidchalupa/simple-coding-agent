@@ -1,5 +1,5 @@
 import re
-from coding_agent.tool_definitions import (
+from common.tool_definitions import (
     read_file,
     write_file,
     append_file,
@@ -10,6 +10,7 @@ from coding_agent.tool_definitions import (
     search_codebase,
     read_symbol
 )
+
 from coding_agent import native_linter
 
 

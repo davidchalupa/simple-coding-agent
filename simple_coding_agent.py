@@ -7,20 +7,22 @@ import shutil
 from pathlib import Path
 
 from common.llm_init import LLMInitializer
+from common.input_handler import get_user_prompt
+from common.tool_definitions import read_file
+from common.execute_tool import execute_tool
+from common.guardrail_tools import check_context_guardrail
+from common.output_handler import stream_agent_response
 
 from coding_agent.welcome_banner import display_welcome_banner
-from coding_agent.input_handler import get_user_prompt
-from coding_agent.tool_definitions import read_file
-from coding_agent.execute_tool import execute_tool
 from coding_agent.system_prompt_builder import build_system_prompt
 from coding_agent.native_helpers import (get_repo_structure, generate_requirements_native, gather_deep_context,
                                          gather_deep_context_ast)
-from coding_agent.self_verification import find_last_code_block, run_self_verification
-from coding_agent.guardrail_tools import (stream_agent_response, verify_sandbox_health,
-                                          auto_heal_newline_escaping, check_context_guardrail)
+from coding_agent.guardrail_tools import (verify_sandbox_health, auto_heal_newline_escaping,
+                                          find_last_code_block, run_self_verification)
 from coding_agent import hidden_readme_prompt_builder
-from coding_agent import file_splitter
+from coding_agent import split_tools
 from coding_agent import payload_parser
+
 from cli import parse_cli_arguments
 # the agent currently supports: Qwen2.5-Coder-7B-Instruct-Q4_K_M/Q5_K_M
 from model_registry import MODEL_REGISTRY
@@ -216,7 +218,7 @@ def main():
                 print(f"\n🔍 Initializing Sandbox (Advisor Mode) for {abs_target_file}...")
 
             # 1. Setup sandbox tracking
-            _, sandbox_directory = file_splitter.setup_refactor_sandbox(abs_target_file)
+            _, sandbox_directory = split_tools.setup_refactor_sandbox(abs_target_file)
             original_split_file = abs_target_file
             is_split_mode = True
             is_execute_mode = execute_mode
@@ -225,7 +227,7 @@ def main():
             session_cwd = sandbox_directory
 
             # Pass the flag to the prompt builder
-            split_prompt = file_splitter.build_split_prompt(abs_target_file, session_cwd, execute_mode=execute_mode)
+            split_prompt = split_tools.build_split_prompt(abs_target_file, session_cwd, execute_mode=execute_mode)
 
             if not execute_mode:
                 split_prompt += "\n\nFormat your plan now. Do not write file contents yet. Wait for confirmation."
@@ -259,12 +261,12 @@ def main():
                 # --- AST EXTRACTION INTERCEPTOR ---
                 if is_split_mode and "```json" in response_content:
                     if is_execute_mode:
-                        handled, alert = file_splitter.handle_ast_extraction(response_content, original_split_file, sandbox_directory)
+                        handled, alert = split_tools.handle_ast_extraction(response_content, original_split_file, sandbox_directory)
                     else:
                         print("\n📋 Advisor blueprint received:")
                         approval = input("Apply this blueprint deterministically to the sandbox? (y/n): ").strip().lower()
                         if approval == 'y':
-                            handled, alert = file_splitter.handle_ast_extraction(response_content, original_split_file, sandbox_directory)
+                            handled, alert = split_tools.handle_ast_extraction(response_content, original_split_file, sandbox_directory)
                         else:
                             handled, alert = True, (
                                 "Blueprint held pending revision. If you'd like changes, "

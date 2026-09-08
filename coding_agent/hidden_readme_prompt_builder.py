@@ -1,7 +1,5 @@
 import os
 
-from .tool_definitions import read_file
-
 
 def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strategy_steps, code_summary=None, cli_help=None):
     """

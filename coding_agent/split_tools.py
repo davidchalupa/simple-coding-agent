@@ -4,7 +4,7 @@ import shutil
 import json
 import re
 
-from coding_agent.tool_definitions import extract_code_blocks
+from common.tool_definitions import extract_code_blocks
 
 
 def analyze_file_metrics(filepath):

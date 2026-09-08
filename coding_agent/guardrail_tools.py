@@ -2,101 +2,8 @@ import os
 import json
 import re
 
-from coding_agent import file_splitter
+from coding_agent import split_tools
 from coding_agent import native_linter
-
-from collections import Counter
-
-
-def _detect_repetition(significant_lines, window=80, threshold=6):
-    """Line-level fallback: catches degenerate single-line spam loops."""
-    recent = significant_lines[-window:]
-    if len(recent) < threshold:
-        return False
-    _, count = Counter(recent).most_common(1)[0]
-    return count >= threshold
-
-
-import hashlib
-
-def _extract_completed_payloads(normalized_content):
-    """Yields the string content of each fully-closed ```json {...} ``` block."""
-    for match in re.finditer(r"```json\s*\n(.*?)\n```", normalized_content, re.DOTALL):
-        try:
-            payload = json.loads(match.group(1))
-            if "args" in payload and "content" in payload.get("args", {}):
-                yield payload["args"]["content"]
-        except json.JSONDecodeError:
-            continue
-
-
-def stream_agent_response(llm, messages, stop=None, temperature=0.1):
-    print(f"\n[Agent]: ", end="", flush=True)
-    content, finish_reason = "", None
-    seen_payload_hashes = set()
-
-    try:
-        for chunk in llm.create_chat_completion(
-                messages=messages,
-                stream=True,
-                temperature=temperature,
-                max_tokens=4096,
-                stop=stop or []
-        ):
-            choice = chunk['choices'][0]
-            finish_reason = choice.get('finish_reason') or finish_reason
-            if 'content' in (delta := choice.get('delta', {})):
-                new_text = delta['content']
-                print(new_text, end="", flush=True)
-                content += new_text
-
-                is_real_newline = '\n' in new_text
-                is_escaped_newline = '\\n' in new_text or (
-                        new_text == 'n' and len(content) >= 2 and content[-2:] == '\\n')
-
-                if is_real_newline or is_escaped_newline:
-                    normalized_content = content.replace('\\n', '\n')
-
-                    significant_lines = [
-                        line.strip() for line in normalized_content.split('\n')
-                        if len(line.strip()) > 10
-                    ]
-
-                    if _detect_repetition(significant_lines):
-                        print("\n\n🛑 [System]: Repetition loop detected. Forcing halt.")
-                        finish_reason = "repetition_loop"
-                        break
-
-                # --- BLOCK-LEVEL DUPLICATE PAYLOAD CHECK ---
-                # Catches "same code, different narration" retries that the
-                # line-frequency detector structurally can't see, since each
-                # retry's internal lines are individually unique even though
-                # the whole payload is an exact repeat.
-                if "```json" in content and content.rstrip().endswith("```"):
-                    for payload_content in _extract_completed_payloads(content):
-                        h = hashlib.sha256(payload_content.encode('utf-8')).hexdigest()
-                        if h in seen_payload_hashes:
-                            print("\n\n🛑 [System]: Duplicate payload detected. Forcing halt.")
-                            finish_reason = "repetition_loop"
-                            break
-                        seen_payload_hashes.add(h)
-                    if finish_reason == "repetition_loop":
-                        break
-
-    except KeyboardInterrupt:
-        print("\n\n🛑 [Generation Interrupted by User]")
-        if "<tool_call> " in content and "</tool_call>" not in content:
-            content = re.sub(r"<tool_call>.*$", "", content, flags=re.DOTALL).strip()
-        if content: messages.append({"role": "assistant", "content": content + " [Interrupted]"})
-        return content, False, True
-
-    if "<tool_call>" in content and "</tool_call>" not in content:
-        content += "</tool_call>"
-        print("</tool_call>", end="", flush=True)
-
-    print()
-    messages.append({"role": "assistant", "content": content})
-    return content, (finish_reason == "length"), False
 
 
 def verify_sandbox_health(split_file, sandbox_dir, messages):
@@ -126,7 +33,7 @@ def verify_sandbox_health(split_file, sandbox_dir, messages):
             break
 
     # Pass expected_files into the verifier
-    passed, report = file_splitter.verify_refactor_integrity(split_file, sandbox_dir, expected_files)
+    passed, report = split_tools.verify_refactor_integrity(split_file, sandbox_dir, expected_files)
 
     if passed:
         for root, _, files in os.walk(sandbox_dir):
@@ -167,15 +74,28 @@ def auto_heal_newline_escaping(fp):
     return healed, new_lines
 
 
-def check_context_guardrail(messages, llm, limit):
-    """Calculates tokens and warns on memory overload."""
+def find_last_code_block(messages):
+    """Scan backwards through assistant turns for the most recent fenced code block."""
+    for msg in reversed(messages):
+        if msg["role"] == "assistant":
+            match = re.search(r"```(?:python)?\s*\n(.*?)\n```", msg["content"], re.DOTALL)
+            if match:
+                return match.group(1)
+    return None
+
+
+def run_self_verification(filepath):
+    """
+    Generalized post-write self-verification for Python files.
+    """
+    if not filepath or not filepath.endswith(".py"):
+        return None
+    if not os.path.isfile(filepath):
+        return None
+
     try:
-        tokens = sum(len(llm.tokenize(m["content"].encode('utf-8'))) + 10 for m in messages)
-        if tokens > limit:
-            print(
-                f"\n🚨 [MEMORY OVERLOAD]: Prompt size is {tokens} tokens (Limit: {limit}).\n   The agent will likely hallucinate... Consider using '/clear' or '--deep-ast'.")
-        elif tokens > int(limit * 0.85):
-            print(
-                f"\n⚠️  [MEMORY WARNING]: Approaching context limit ({tokens}/{limit} tokens, {(tokens / limit) * 100:.1f}%).")
-    except Exception:
-        pass
+        return native_linter.check_python_syntax_and_imports(filepath)
+    except Exception as e:
+        # Failsafe: never let a linter crash take down the agent loop.
+        print(f"⚠️ [Self-Verification] Linter itself raised an error, skipping check: {e}")
+        return None
