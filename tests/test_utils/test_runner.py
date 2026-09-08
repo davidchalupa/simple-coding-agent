@@ -117,8 +117,8 @@ def run_automated_coding_task_test(
                     pristine_contents[sandbox_dest_path] = f.read()
 
         # State Injection
-        simple_coding_agent.session_cwd = repo_sandbox
-        simple_coding_agent.FORCE_TESTING = True
+        simple_coding_agent.state.session_cwd = repo_sandbox
+        simple_coding_agent.state.force_testing = True
 
         safety_counter = {"calls": 0, "max_calls": max_calls_limit}
 
@@ -150,7 +150,7 @@ def run_automated_coding_task_test(
 
         with patch("builtins.input", side_effect=smart_input_mocker):
             try:
-                simple_coding_agent.main()
+                simple_coding_agent.main(simple_coding_agent.state, simple_coding_agent.execution_state)
             except SystemExit:
                 pass
 

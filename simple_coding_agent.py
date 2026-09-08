@@ -27,55 +27,55 @@ from cli import parse_cli_arguments
 # the agent currently supports: Qwen2.5-Coder-7B-Instruct-Q4_K_M/Q5_K_M
 from model_registry import MODEL_REGISTRY
 
+
+class AgentState:
+    def __init__(self, parsed_args):
+        self.allow_patch = parsed_args["allow_patch"]
+        self.force_testing = parsed_args["force_testing"]
+        self.self_verify_py_writes = parsed_args["self_verify_py_writes"]
+        self.disable_kv_quantization = parsed_args["disable_kv_quantization"]
+
+        self.active_config = MODEL_REGISTRY[parsed_args["model"]]
+
+        self.target_path = Path(__file__).resolve().parent / "models" / self.active_config["filename"]
+        self.loaded_model_name = self.active_config["display_name"]
+
+        self.messages = []
+        self.session_cwd = os.getcwd()
+
+class AgentExecutionState:
+    def __init__(self):
+        self.is_split_mode: bool = False  # Indicates whether the agent is currently in split mode
+        self.is_execute_mode: bool = False  # Indicates whether the agent is using AST interception
+        self.original_split_file: str | None = None  # Stores the original file path when in split mode
+        self.sandbox_directory: str | None = None  # Stores the path to the sandbox directory when in split mode
+        self.automated_followup: str | None = None  # Buffer for system-generated prompt injections
+        self.has_prompted_for_tests: bool = False  # Indicates whether the agent has prompted the user for tests
+
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
-
-ALLOW_PATCH = parsed_args["allow_patch"]
-FORCE_TESTING = parsed_args["force_testing"]
-SELF_VERIFY_PY_WRITES = parsed_args["self_verify_py_writes"]
-disable_kv_quantization = parsed_args["disable_kv_quantization"]
-
-active_config = MODEL_REGISTRY[parsed_args["model"]]
-
-target_path = Path(__file__).resolve().parent / "models" / active_config["filename"]
-loaded_model_name = active_config["display_name"]
-
-# Global State Placeholders
-messages = []
-session_cwd = os.getcwd()
-
-# --- SANDBOX STATE TRACKING ---
-is_split_mode = False
-is_execute_mode = False  # Track if we are using AST interception
-original_split_file = None
-sandbox_directory = None
-automated_followup = None  # Buffer for system-generated prompt injections
-has_prompted_for_tests = False
+state = AgentState(parsed_args)
+execution_state = AgentExecutionState()
 
 
-def main():
-    global messages, session_cwd, is_split_mode, is_execute_mode, original_split_file, sandbox_directory, automated_followup, has_prompted_for_tests
+def main(state, execution_state):
+    system_prompt = build_system_prompt()
 
-    SYSTEM_PROMPT = build_system_prompt()
-
-    initializer = LLMInitializer(target_path, loaded_model_name, active_config, disable_kv_quantization)
+    initializer = LLMInitializer(state.target_path, state.loaded_model_name, state.active_config, state.disable_kv_quantization)
     initializer.initialize_agent()
-
-    CONTEXT_WINDOW = initializer.CONTEXT_WINDOW
-
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
+    context_window = initializer.CONTEXT_WINDOW
     llm = initializer.llm
 
-    display_welcome_banner(loaded_model_name, ALLOW_PATCH)
+    state.messages = [{"role": "system", "content": system_prompt}]
 
-    # 6. Main Agent Loop
+    display_welcome_banner(state.loaded_model_name, state.allow_patch)
+
     while True:
         user_input = ""
 
         # Check if we have an automated follow-up prompt queued
-        if automated_followup:
-            user_input = automated_followup
-            automated_followup = None
+        if execution_state.automated_followup:
+            user_input = execution_state.automated_followup
+            execution_state.automated_followup = None
             print(f"\n[Automated User]: {user_input}")
         else:
             # smart input handler
@@ -86,14 +86,14 @@ def main():
                 sys.exit(0)
 
             if user_input == "/clear":
-                messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-                session_cwd = os.getcwd()
-                is_split_mode = False
-                is_execute_mode = False
-                original_split_file = None
-                sandbox_directory = None
-                automated_followup = None
-                has_prompted_for_tests = False
+                state.messages = [{"role": "system", "content": system_prompt}]
+                state.session_cwd = os.getcwd()
+                execution_state.is_split_mode = False
+                execution_state.is_execute_mode = False
+                execution_state.original_split_file = None
+                execution_state.sandbox_directory = None
+                execution_state.automated_followup = None
+                execution_state.has_prompted_for_tests = False
                 print("🧹 Memory and environment completely cleared!")
                 continue
 
@@ -113,7 +113,7 @@ def main():
             target_dir = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "."
 
             abs_target_dir = os.path.abspath(os.path.expanduser(target_dir))
-            session_cwd = abs_target_dir
+            state.session_cwd = abs_target_dir
 
             if not os.path.isdir(abs_target_dir):
                 print(f"❌ Error: Target directory '{abs_target_dir}' does not exist.")
@@ -124,8 +124,8 @@ def main():
 
             if approval == 'y':
                 tool_result = generate_requirements_native(abs_target_dir, no_version=no_version_flag)
-                messages = [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                state.messages = [
+                    {"role": "system", "content": system_prompt},
                     {"role": "user",
                      "content": f"System Alert: User manually ran /requirements for '{abs_target_dir}'. Result: {tool_result}. Briefly acknowledge completion."}
                 ]
@@ -149,7 +149,7 @@ def main():
             target_dir = " ".join(path_tokens) if path_tokens else "."
 
             abs_target_dir = os.path.abspath(os.path.expanduser(target_dir))
-            session_cwd = abs_target_dir
+            state.session_cwd = abs_target_dir
 
             if not os.path.isdir(abs_target_dir):
                 print(f"❌ Error: Target directory '{abs_target_dir}' does not exist.")
@@ -179,7 +179,7 @@ def main():
                 code_summary, cli_help = gather_deep_context(abs_target_dir)
 
             strategy_steps = hidden_readme_prompt_builder.build_strategy_steps(
-                readme_path, ALLOW_PATCH,
+                readme_path, state.allow_patch,
                 deep_focus=(deep_focus or deep_ast_focus)
             )
 
@@ -188,8 +188,8 @@ def main():
                 cli_help=cli_help
             )
 
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+            state.messages = [
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": hidden_readme_prompt}
             ]
 
@@ -218,28 +218,28 @@ def main():
                 print(f"\n🔍 Initializing Sandbox (Advisor Mode) for {abs_target_file}...")
 
             # 1. Setup sandbox tracking
-            _, sandbox_directory = split_tools.setup_refactor_sandbox(abs_target_file)
-            original_split_file = abs_target_file
-            is_split_mode = True
-            is_execute_mode = execute_mode
+            _, execution_state.sandbox_directory = split_tools.setup_refactor_sandbox(abs_target_file)
+            execution_state.original_split_file = abs_target_file
+            execution_state.is_split_mode = True
+            execution_state.is_execute_mode = execute_mode
 
             # 2. Divert agent's current working directory to the sandbox!
-            session_cwd = sandbox_directory
+            state.session_cwd = execution_state.sandbox_directory
 
             # Pass the flag to the prompt builder
-            split_prompt = split_tools.build_split_prompt(abs_target_file, session_cwd, execute_mode=execute_mode)
+            split_prompt = split_tools.build_split_prompt(abs_target_file, state.session_cwd, execute_mode=execute_mode)
 
             if not execute_mode:
                 split_prompt += "\n\nFormat your plan now. Do not write file contents yet. Wait for confirmation."
 
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+            state.messages = [
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": split_prompt}
             ]
 
         else:
             # Standard execution or continuation of sandbox mode
-            messages.append({"role": "user", "content": user_input})
+            state.messages.append({"role": "user", "content": user_input})
 
         # Internal Agent Execution Loop
         file_was_modified = False  # Track if any files change during this cycle
@@ -252,69 +252,69 @@ def main():
         recent_tool_signatures = []
 
         while True:
-            check_context_guardrail(messages, llm, CONTEXT_WINDOW)
+            check_context_guardrail(state.messages, llm, context_window)
 
             try:
-                response_content, is_truncated, interrupted = stream_agent_response(llm, messages)
+                response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
                 if interrupted: break
 
                 # --- AST EXTRACTION INTERCEPTOR ---
-                if is_split_mode and "```json" in response_content:
-                    if is_execute_mode:
-                        handled, alert = split_tools.handle_ast_extraction(response_content, original_split_file, sandbox_directory)
+                if execution_state.is_split_mode and "```json" in response_content:
+                    if execution_state.is_execute_mode:
+                        handled, alert = split_tools.handle_ast_extraction(response_content, execution_state.original_split_file, execution_state.sandbox_directory)
                     else:
                         print("\n📋 Advisor blueprint received:")
                         approval = input("Apply this blueprint deterministically to the sandbox? (y/n): ").strip().lower()
                         if approval == 'y':
-                            handled, alert = split_tools.handle_ast_extraction(response_content, original_split_file, sandbox_directory)
+                            handled, alert = split_tools.handle_ast_extraction(response_content, execution_state.original_split_file, execution_state.sandbox_directory)
                         else:
                             handled, alert = True, (
                                 "Blueprint held pending revision. If you'd like changes, "
                                 "explain them and provide an updated ```json blueprint."
                             )
                     if handled:
-                        messages.append({"role": "user", "content": alert})
-                        is_execute_mode = False if "successfully executed" in alert else is_execute_mode
+                        state.messages.append({"role": "user", "content": alert})
+                        execution_state.is_execute_mode = False if "successfully executed" in alert else execution_state.is_execute_mode
                         continue
 
                 # 🚨 FIX: Check for tool calls FIRST. Never let "Refactor Phase Complete"
                 # short-circuit a turn that also contains a tool call.
-                tool_request = payload_parser.extract_tool_call(response_content, allow_patch=ALLOW_PATCH)
+                tool_request = payload_parser.extract_tool_call(response_content, allow_patch=state.allow_patch)
 
                 if not tool_request:
                     # --- SANDBOX GUARDRAIL (Only runs if NO tool was called) ---
-                    if is_split_mode and any(
+                    if execution_state.is_split_mode and any(
                             x in response_content.lower() for x in ["refactor phase complete", "task complete"]):
-                        passed, report = verify_sandbox_health(original_split_file, sandbox_directory, messages)
+                        passed, report = verify_sandbox_health(execution_state.original_split_file, execution_state.sandbox_directory, state.messages)
                         if passed:
-                            print(f"✅ Sandbox passed! Staged in: {sandbox_directory}")
+                            print(f"✅ Sandbox passed! Staged in: {execution_state.sandbox_directory}")
                             if input("Promote to production? (y/n): ").strip().lower() == 'y':
-                                target_dir = os.path.dirname(original_split_file)
-                                for item in os.listdir(sandbox_directory):
+                                target_dir = os.path.dirname(execution_state.original_split_file)
+                                for item in os.listdir(execution_state.sandbox_directory):
                                     if not item.startswith('.'):
-                                        shutil.copy2(os.path.join(sandbox_directory, item),
+                                        shutil.copy2(os.path.join(execution_state.sandbox_directory, item),
                                                      os.path.join(target_dir, item))
                                 print("🚀 Files successfully promoted.")
-                            is_split_mode = is_execute_mode = False
-                            session_cwd = os.path.dirname(original_split_file)
+                            execution_state.is_split_mode = execution_state.is_execute_mode = False
+                            state.session_cwd = os.path.dirname(execution_state.original_split_file)
                             break
 
                         print(f"❌ Verification Failed:\n{report}")
-                        messages.append({"role": "user",
+                        state.messages.append({"role": "user",
                                          "content": f"System Verification Failed:\n{report}\n\nCorrect this error and output 'Refactor Phase Complete'."})
                         continue
 
                     # AUTOMATED FOLLOW-UP TRIGGER
-                    if FORCE_TESTING and file_was_modified and not is_split_mode:
+                    if state.force_testing and file_was_modified and not execution_state.is_split_mode:
                         raw_path = tool_args.get("filepath", "") if 'tool_args' in locals() else ""
                         fn = Path(raw_path).name.lower()
                         if raw_path and fn.endswith(".py") and (
-                                fn.startswith("test_") or fn.endswith("_test.py")) and not has_prompted_for_tests:
+                                fn.startswith("test_") or fn.endswith("_test.py")) and not execution_state.has_prompted_for_tests:
                             print("\n[System]: Automatically queuing follow-up test prompt.")
                             safe_exec = sys.executable.replace("\\", "/")
-                            messages.append({"role": "user",
+                            state.messages.append({"role": "user",
                                              "content": f"Great. Use `run_cmd` (e.g. `\"{safe_exec}\" -m unittest`) to verify. If a test fails, analyze if the test itself is wrong before fixing the source code."})
-                            has_prompted_for_tests = True
+                            execution_state.has_prompted_for_tests = True
                         else:
                             print("\n[System]: Main script written / modified.")
                     break
@@ -324,7 +324,7 @@ def main():
 
                 # --- PRE-FLIGHT VALIDATION & GUARDRAILS ---
                 if tool_name in ["read_file", "run_cmd"] and "<payload>" in response_content:
-                    messages.append({"role": "user",
+                    state.messages.append({"role": "user",
                                      "content": f"System Alert: Tool `{tool_name}` does NOT accept <payload> blocks. Retry with ONLY the JSON block."})
                     continue
 
@@ -334,7 +334,7 @@ def main():
                 # Path resolution
                 for key in ["filepath", "dir_path"]:
                     if key in tool_args and not os.path.isabs(tool_args[key]):
-                        tool_args[key] = os.path.abspath(os.path.join(session_cwd, tool_args[key]))
+                        tool_args[key] = os.path.abspath(os.path.join(state.session_cwd, tool_args[key]))
 
                 # Define standard payload key handling
                 content_key = "new_content" if tool_name == "patch_file" else "content"
@@ -344,7 +344,7 @@ def main():
                     content_clean = re.sub(r'```[a-zA-Z]*\s*```', '', tool_args.get(content_key, '')).strip()
 
                     if not content_clean:
-                        recovered = find_last_code_block(messages)
+                        recovered = find_last_code_block(state.messages)
                         is_stale = bool(recovered and last_verification_failure and
                                         last_verification_failure.get("filepath") == tool_args.get("filepath") and
                                         recovered.strip() == last_verification_failure.get("content", "").strip())
@@ -361,7 +361,7 @@ def main():
                             if consecutive_errors >= 3:
                                 print("🛑 [Circuit Breaker] Agent stuck in syntax loop. Forcing exit.")
                                 break
-                            messages.append({"role": "user", "content": msg})
+                            state.messages.append({"role": "user", "content": msg})
                             continue
 
                         # --- NO-OP / REGURGITATION GUARDRAIL ---
@@ -397,7 +397,7 @@ def main():
                                                 f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk. "
                                                 f"If the user only asked to read, analyze, inspect, or explain, DO NOT invoke write tools. Answer directly in plain text.")
 
-                                        messages.append({
+                                        state.messages.append({
                                             "role": "user",
                                             "content": alert_msg
                                         })
@@ -416,7 +416,7 @@ def main():
                     if consecutive_errors >= 3:
                         print("🛑 [Circuit Breaker] Agent loop. Forcing turn end.")
                         break
-                    messages.append({"role": "user",
+                    state.messages.append({"role": "user",
                                      "content": f"System Alert: This exact tool call has been attempted {repeat_count} times "
                                                 f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
                                                 f"underlying issue (e.g. re-check content/context requirements) or try a "
@@ -453,7 +453,7 @@ def main():
                 tool_result, tool_reinforcement = "", ""
 
                 if approval == 'y':
-                    tool_result, tool_reinforcement, was_mod = execute_tool(tool_name, tool_args, is_split_mode)
+                    tool_result, tool_reinforcement, was_mod = execute_tool(tool_name, tool_args, execution_state.is_split_mode)
                     file_was_modified = file_was_modified or was_mod
                     print(f"⚙️  Tool execution finished.")
 
@@ -467,7 +467,7 @@ def main():
                         print(f"   Result: {tool_result}")
 
                     # Self-Verification
-                    if SELF_VERIFY_PY_WRITES and was_mod and tool_name in ["write_file", "append_file",
+                    if state.self_verify_py_writes and was_mod and tool_name in ["write_file", "append_file",
                                                                            "patch_file", "replace_lines"]:
                         fp = tool_args.get("filepath", "")
                         if linter_error := run_self_verification(fp):
@@ -499,15 +499,15 @@ def main():
                             tool_reinforcement += f"\n\nSystem Alert: Syntax check failed:\n{linter_error}\nFix it."
 
                             # Amnesia patch to prevent repetition loops
-                            if messages and messages[-1].get("role") == "assistant":
-                                old_content = messages[-1].get("content", "")
+                            if state.messages and state.messages[-1].get("role") == "assistant":
+                                old_content = state.messages[-1].get("content", "")
                                 if len(old_content) > 50:
-                                    messages[-1][
+                                    state.messages[-1][
                                         "content"] = f"[Action logged: write_file to {fp}. Full JSON payload redacted to prevent repetition collapse.]"
 
                             if consecutive_lint_failures >= 3:
                                 print("🛑 [Circuit Breaker] Repeated lint failures. Forcing turn end.")
-                                messages.append(
+                                state.messages.append(
                                     {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
                                 break
                         else:
@@ -520,7 +520,7 @@ def main():
                     tool_result = "User denied permission."
                     print("🛑 Action blocked.")
 
-                messages.append(
+                state.messages.append(
                     {"role": "user", "content": f"Tool Execution Result:\n{tool_result}{tool_reinforcement}"})
 
             # potential recovery from misformatted JSONs
@@ -533,7 +533,7 @@ def main():
                     f"and a quote in Python code via JSON, you must double-escape the backslash: \\\\', "
                     f"or avoid illegal JSON escape sequences. Please fix your JSON and try again."
                 )
-                messages.append({"role": "user", "content": error_msg})
+                state.messages.append({"role": "user", "content": error_msg})
 
                 consecutive_errors += 1
                 if consecutive_errors >= 3:
@@ -543,7 +543,7 @@ def main():
                 continue  # CRITICAL: 'continue' lets the agent retry instantly
             # except json.JSONDecodeError as e:
             #     print(f"\n❌ [Parser Interceptor] Halted syntax loop.")
-            #     messages.append({"role": "user",
+            #     state.messages.append({"role": "user",
             #                      "content": f"Formatting Failure: {e}\nRemember to use raw unescaped content inside <payload>."})
             #     break
             except Exception as e:
@@ -552,4 +552,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(state, execution_state)
