@@ -230,7 +230,7 @@ def main(state):
                 if combined_results.strip():
                     state.messages.append({
                         "role": "user",
-                        "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n[SYSTEM DIRECTIVE: Context loaded. If the user's initial request is fully satisfied, reply with 'Context loaded. What would you like to know?' and DO NOT output further tool calls.]"
+                        "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n[SYSTEM DIRECTIVE: Context loaded. If the user's original request was strictly to read or load a file/context, simply reply with 'Context loaded. What's next?'. However, if the user asked a question, requested a refactor, or wanted code tweaked, fulfill that specific request immediately right now. DO NOT output further tool calls.]"
                     })
 
                 # If we hit the budget, add a forceful prompt to make the model stop tooling and answer

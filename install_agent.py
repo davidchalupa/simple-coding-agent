@@ -14,8 +14,8 @@ def main(stdscr):
 
     def show_current_menu(chosen_model_index):
         stdscr.clear()
-        stdscr.addstr(0, 0, "Simple coding agent & Coding consultant setup", curses.A_BOLD)
-        stdscr.addstr(1, 0, "Press '↑' to move up, '↓' to move down, 'Enter' to submit setup, 'q' to quit", curses.A_DIM)
+        stdscr.addstr(0, 0, "Simple coding agent & coding consultant setup", curses.A_BOLD)
+        stdscr.addstr(1, 0, "Press '↑' to move up, '↓' to move down, 'Space' to select a model, 'Enter' to submit setup, 'q' to quit", curses.A_DIM)
 
         y = 3
         cursor_y = y + chosen_model_index
@@ -41,8 +41,8 @@ def main(stdscr):
         elif key == ord('\n'):
             active_models = [model for model, state in model_states.items() if state]
             stdscr.clear()
-            stdscr.addstr(0, 0, "Setup Submitted", curses.A_BOLD)
-            stdscr.addstr(1, 0, f"Active Models: {', '.join(active_models)}", curses.A_NORMAL)
+            stdscr.addstr(0, 0, "Setup submitted", curses.A_BOLD)
+            stdscr.addstr(1, 0, f"Active models: {', '.join(active_models)}", curses.A_NORMAL)
             stdscr.addstr(2, 0, "Press 'Enter' to download models or 'q' to quit", curses.A_DIM)
             stdscr.refresh()
             while True:
@@ -58,12 +58,12 @@ def main(stdscr):
                     input("\nDownloads complete. Press Enter to return to the menu...")
 
                     stdscr.clear()
-                    stdscr.addstr(0, 0, "Models Downloaded", curses.A_BOLD)
-                    stdscr.addstr(1, 0, "Press 'q' to quit", curses.A_DIM)
+                    stdscr.addstr(0, 0, "Models downloaded", curses.A_BOLD)
+                    stdscr.addstr(1, 0, "Press 'Enter' to quit", curses.A_DIM)
                     stdscr.refresh()
                     while True:
                         key = stdscr.getch()
-                        if key == ord('q'):
+                        if key == ord('\n'):
                             return
         elif key == curses.KEY_DOWN:
             if chosen_model_index == len(MODEL_REGISTRY.keys()) - 1:
