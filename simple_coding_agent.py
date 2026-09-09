@@ -57,6 +57,28 @@ state = AgentState(parsed_args)
 execution_state = AgentExecutionState()
 
 
+def handle_user_input(state, user_input, system_prompt):
+    if user_input == "/quit":
+        print("Exiting. Goodbye!")
+        sys.exit(0)
+
+    if user_input == "/clear":
+        state.messages = [{"role": "system", "content": system_prompt}]
+        state.session_cwd = os.getcwd()
+        state.consult_read_cache = {}
+        print("🧹 Memory and environment completely cleared!")
+        return True
+
+    if user_input == "/cancel":
+        print("❌ Current draft discarded.")
+        return True
+
+    if not user_input:
+        return True
+
+    return False
+
+
 def main(state, execution_state):
     system_prompt = build_system_prompt()
 
@@ -81,28 +103,7 @@ def main(state, execution_state):
             # smart input handler
             user_input = get_user_prompt()
 
-            if user_input == "/quit":
-                print("Exiting. Goodbye!")
-                sys.exit(0)
-
-            if user_input == "/clear":
-                state.messages = [{"role": "system", "content": system_prompt}]
-                state.session_cwd = os.getcwd()
-                execution_state.is_split_mode = False
-                execution_state.is_execute_mode = False
-                execution_state.original_split_file = None
-                execution_state.sandbox_directory = None
-                execution_state.automated_followup = None
-                execution_state.has_prompted_for_tests = False
-                print("🧹 Memory and environment completely cleared!")
-                continue
-
-            if user_input == "/cancel":
-                print("❌ Current draft discarded.")
-                continue
-
-        # Restart loop if no input was gathered
-        if not user_input:
+        if handle_user_input(state, user_input, system_prompt):
             continue
 
         # --- MACRO: /requirements ---
@@ -241,14 +242,16 @@ def main(state, execution_state):
             # Standard execution or continuation of sandbox mode
             state.messages.append({"role": "user", "content": user_input})
 
-        file_was_modified = False  # Track if any files change during this cycle
-        last_tool_call_signature = None  # <-- Track the last tool run
-        consecutive_errors = 0  # <-- Track infinite loop traps
-        consecutive_lint_failures = 0  # <-- Track repeated self-verification failures on the same turn
-        last_verification_failure = None  # <-- Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
+        class AgentFlags:
+            def __init__(self):
+                self.file_was_modified = False  # Track if any files change during this cycle
+                self.last_tool_call_signature = None  # Track the last tool run
+                self.consecutive_errors = 0   # Track infinite loop traps
+                self.consecutive_lint_failures = 0  # Track repeated self-verification failures on the same turn
+                self.last_verification_failure = None  # Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
+                self.recent_tool_signatures = []  # Loop Guardrail: track recent signatures, not just the immediately previous one
 
-        # Loop Guardrail: track recent signatures, not just the immediately previous one
-        recent_tool_signatures = []
+        agent_flags = AgentFlags()
 
         # Internal Agent Execution Loop
         while True:
@@ -305,7 +308,7 @@ def main(state, execution_state):
                         continue
 
                     # AUTOMATED FOLLOW-UP TRIGGER
-                    if state.force_testing and file_was_modified and not execution_state.is_split_mode:
+                    if state.force_testing and agent_flags.file_was_modified and not execution_state.is_split_mode:
                         raw_path = tool_args.get("filepath", "") if 'tool_args' in locals() else ""
                         fn = Path(raw_path).name.lower()
                         if raw_path and fn.endswith(".py") and (
@@ -345,20 +348,20 @@ def main(state, execution_state):
 
                     if not content_clean:
                         recovered = find_last_code_block(state.messages)
-                        is_stale = bool(recovered and last_verification_failure and
-                                        last_verification_failure.get("filepath") == tool_args.get("filepath") and
-                                        recovered.strip() == last_verification_failure.get("content", "").strip())
+                        is_stale = bool(recovered and agent_flags.last_verification_failure and
+                                        agent_flags.last_verification_failure.get("filepath") == tool_args.get("filepath") and
+                                        recovered.strip() == agent_flags.last_verification_failure.get("content", "").strip())
 
                         if recovered and recovered.strip() and not is_stale:
                             print(f"🔧 [Recovery] Reusing last drafted code block for {tool_name}.")
                             tool_args[content_key] = recovered
                         else:
                             msg = (f"System Alert: Blocked empty {tool_name}." if not is_stale else
-                                   f"System Alert: Stale-Fix Guard. You provided the SAME failing code again.\n{last_verification_failure.get('error', '')}")
+                                   f"System Alert: Stale-Fix Guard. You provided the SAME failing code again.\n{agent_flags.last_verification_failure.get('error', '')}")
                             msg += f"\nYou MUST provide the corrected code inside a <payload> block. Retry {tool_name}."
 
-                            consecutive_errors += 1
-                            if consecutive_errors >= 3:
+                            agent_flags.consecutive_errors += 1
+                            if agent_flags.consecutive_errors >= 3:
                                 print("🛑 [Circuit Breaker] Agent stuck in syntax loop. Forcing exit.")
                                 break
                             state.messages.append({"role": "user", "content": msg})
@@ -377,19 +380,19 @@ def main(state, execution_state):
                                         print(
                                             f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
 
-                                        consecutive_errors += 1
-                                        if consecutive_errors >= 3:
+                                        agent_flags.consecutive_errors += 1
+                                        if agent_flags.consecutive_errors >= 3:
                                             print(
                                                 "🛑 [Circuit Breaker] Agent stuck in identical write loop. Forcing turn end.")
                                             break
 
                                         # Context-Aware Guardrail Message
-                                        if last_verification_failure and last_verification_failure.get(
+                                        if agent_flags.last_verification_failure and agent_flags.last_verification_failure.get(
                                                 "filepath") == target_fp:
                                             alert_msg = (
                                                 f"System Alert: `write_file` blocked. You attempted to overwrite '{target_fp}' with the EXACT SAME BROKEN CODE that just failed self-verification. "
-                                                f"You must actually CHANGE the code to fix the error.\nError was:\n{last_verification_failure.get('error', '')}")
-                                            if "unterminated string literal" in last_verification_failure.get(
+                                                f"You must actually CHANGE the code to fix the error.\nError was:\n{agent_flags.last_verification_failure.get('error', '')}")
+                                            if "unterminated string literal" in agent_flags.last_verification_failure.get(
                                                     "error", ""):
                                                 alert_msg += "\nHint: If you used '\\n' inside a Python string, the JSON parser converted it to a real newline. Avoid using '\\n' in string literals (e.g. use multiple prints) or quadruple-escape it as `\\\\n`."
                                         else:
@@ -407,13 +410,13 @@ def main(state, execution_state):
 
                 # Loop Guardrail
                 curr_sig = f"{tool_name}:{str(tool_args)}"
-                recent_tool_signatures.append(curr_sig)
-                recent_tool_signatures = recent_tool_signatures[-6:]  # keep a short rolling window
+                agent_flags.recent_tool_signatures.append(curr_sig)
+                agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-6:]  # keep a short rolling window
 
-                repeat_count = recent_tool_signatures.count(curr_sig)
+                repeat_count = agent_flags.recent_tool_signatures.count(curr_sig)
                 if repeat_count >= 2:
-                    consecutive_errors += 1
-                    if consecutive_errors >= 3:
+                    agent_flags.consecutive_errors += 1
+                    if agent_flags.consecutive_errors >= 3:
                         print("🛑 [Circuit Breaker] Agent loop. Forcing turn end.")
                         break
                     state.messages.append({"role": "user",
@@ -454,7 +457,7 @@ def main(state, execution_state):
 
                 if approval == 'y':
                     tool_result, tool_reinforcement, was_mod = execute_tool(tool_name, tool_args, execution_state.is_split_mode)
-                    file_was_modified = file_was_modified or was_mod
+                    agent_flags.file_was_modified = agent_flags.file_was_modified or was_mod
                     print(f"⚙️  Tool execution finished.")
 
                     # Auxiliary output of the tool_result, useful for debugging
@@ -485,15 +488,15 @@ def main(state, execution_state):
                                         if not linter_error:
                                             print(
                                                 f"🔧 [Auto-Healer] Successfully repaired JSON newline escaping artifact in {os.path.basename(fp)}!")
-                                            consecutive_lint_failures = 0
-                                            last_verification_failure = None
+                                            agent_flags.consecutive_lint_failures = 0
+                                            agent_flags.last_verification_failure = None
                                             # Skip the rest of the failure block since it's fixed!
                                             continue
                                 except Exception as e:
                                     print(f"⚠️ Auto-healer encountered an exception: {e}")
                             # -----------------------------------------------
 
-                            consecutive_lint_failures += 1
+                            agent_flags.consecutive_lint_failures += 1
                             print(f"🚨 [Self-Verification] FAILED on {os.path.basename(fp)}:\n{linter_error}")
 
                             tool_reinforcement += f"\n\nSystem Alert: Syntax check failed:\n{linter_error}\nFix it."
@@ -505,14 +508,14 @@ def main(state, execution_state):
                                     state.messages[-1][
                                         "content"] = f"[Action logged: write_file to {fp}. Full JSON payload redacted to prevent repetition collapse.]"
 
-                            if consecutive_lint_failures >= 3:
+                            if agent_flags.consecutive_lint_failures >= 3:
                                 print("🛑 [Circuit Breaker] Repeated lint failures. Forcing turn end.")
                                 state.messages.append(
                                     {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
                                 break
                         else:
-                            if consecutive_lint_failures > 0: print(f"✅ {os.path.basename(fp)} now passes checks.")
-                            consecutive_lint_failures, last_verification_failure = 0, None
+                            if agent_flags.consecutive_lint_failures > 0: print(f"✅ {os.path.basename(fp)} now passes checks.")
+                            agent_flags.consecutive_lint_failures, agent_flags.last_verification_failure = 0, None
 
                 elif approval == 'edit':
                     tool_result = f"User denied and provided feedback: {input('Feedback: ')}"
@@ -535,8 +538,8 @@ def main(state, execution_state):
                 )
                 state.messages.append({"role": "user", "content": error_msg})
 
-                consecutive_errors += 1
-                if consecutive_errors >= 3:
+                agent_flags.consecutive_errors += 1
+                if agent_flags.consecutive_errors >= 3:
                     print("🛑 [Circuit Breaker] Agent stuck in JSON formatting loop. Forcing exit.")
                     break
 
