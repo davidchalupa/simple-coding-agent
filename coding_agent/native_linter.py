@@ -71,6 +71,7 @@ class DependencyChecker(ast.NodeVisitor):
         self.missing_names = set()
         self.global_names = set(dir(builtins))
         self.scopes = [self.global_names]  # Stack of scope sets. Index 0 is global.
+        self.allowed_symbols = ['__file__']
 
     def visit_Module(self, node):
         # PASS 1: Gather all global definitions (including those inside if/try/with blocks)
@@ -189,7 +190,7 @@ class DependencyChecker(ast.NodeVisitor):
                 if node.id in scope:
                     found = True
                     break
-            if not found:
+            if not found and node.id not in self.allowed_symbols:
                 self.missing_names.add(node.id)
         self.generic_visit(node)
 
