@@ -279,7 +279,8 @@ def handle_sandbox_guardrail(execution_state, state, response_content):
 def handle_automated_follow_up(state, agent_flags, execution_state, tool_args):
     """Automated follow-up trigger"""
     if state.force_testing and agent_flags.file_was_modified and not execution_state.is_split_mode:
-        raw_path = tool_args.get("filepath", "") if 'tool_args' in locals() else ""
+        # Directly use .get() since tool_args is guaranteed to be a dict
+        raw_path = tool_args.get("filepath", "")
         fn = Path(raw_path).name.lower()
         if (raw_path and fn.endswith(".py") and
                 (fn.startswith("test_") or fn.endswith("_test.py")) and not execution_state.has_prompted_for_tests):
@@ -290,6 +291,128 @@ def handle_automated_follow_up(state, agent_flags, execution_state, tool_args):
             execution_state.has_prompted_for_tests = True
         else:
             print("\n[System]: Main script written / modified.")
+
+
+def check_and_handle_identical_write(tool_args, state, agent_flags, content_key):
+    """
+    Checks if the proposed content is identical to the existing content in the file.
+    If identical, blocks the write operation and provides a guardrail message.
+    """
+    target_fp = tool_args.get("filepath", "")
+    if os.path.isfile(target_fp):
+        try:
+            with open(target_fp, "r", encoding="utf-8") as f:
+                existing_disk_content = f.read()
+
+            proposed_content = tool_args.get(content_key, "")
+            if existing_disk_content.strip() == proposed_content.strip():
+                print(
+                    f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
+
+                agent_flags.consecutive_errors += 1
+                if agent_flags.consecutive_errors >= 3:
+                    print(
+                        "🛑 [Circuit Breaker] Agent stuck in identical write loop. Forcing turn end.")
+                    return True
+
+                # Context-Aware Guardrail Message
+                if agent_flags.last_verification_failure and agent_flags.last_verification_failure.get(
+                        "filepath") == target_fp:
+                    alert_msg = (
+                        f"System Alert: `write_file` blocked. You attempted to overwrite '{target_fp}' with the EXACT SAME BROKEN CODE that just failed self-verification. "
+                        f"You must actually CHANGE the code to fix the error.\nError was:\n{agent_flags.last_verification_failure.get('error', '')}")
+                    if "unterminated string literal" in agent_flags.last_verification_failure.get(
+                            "error", ""):
+                        alert_msg += "\nHint: If you used '\\n' inside a Python string, the JSON parser converted it to a real newline. Avoid using '\\n' in string literals (e.g. use multiple prints) or quadruple-escape it as `\\\\n`."
+                else:
+                    alert_msg = (
+                        f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk. "
+                        f"If the user only asked to read, analyze, inspect, or explain, DO NOT invoke write tools. Answer directly in plain text.")
+
+                state.messages.append({
+                    "role": "user",
+                    "content": alert_msg
+                })
+                return True
+        except Exception:
+            pass
+        return False
+
+
+def check_and_handle_loop_guardrail(tool_name, tool_args, agent_flags):
+    """
+    Checks if the same tool call has been attempted recently and blocks it if it has.
+    If the same tool call is repeated more than twice, it triggers a circuit breaker.
+    """
+    curr_sig = f"{tool_name}:{str(tool_args)}"
+    agent_flags.recent_tool_signatures.append(curr_sig)
+    agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-6:]  # keep a short rolling window
+
+    repeat_count = agent_flags.recent_tool_signatures.count(curr_sig)
+    if repeat_count >= 2:
+        agent_flags.consecutive_errors += 1
+        if agent_flags.consecutive_errors >= 3:
+            print("🛑 [Circuit Breaker] Agent loop. Forcing turn end.")
+            return True
+        state.messages.append({"role": "user",
+                               "content": f"System Alert: This exact tool call has been attempted {repeat_count} times "
+                                          f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
+                                          f"underlying issue (e.g. re-check content/context requirements) or try a "
+                                          f"different approach."})
+        return True
+    return False
+
+
+def handle_self_verification_and_healing(state, execution_state, tool_name, tool_args, agent_flags,
+                                         tool_reinforcement, was_mod):
+    if state.self_verify_py_writes and was_mod and tool_name in ["write_file", "append_file",
+                                                                 "patch_file", "replace_lines"]:
+        fp = tool_args.get("filepath", "")
+        if linter_error := run_self_verification(fp):
+            # --- AUTO-HEALER FOR JSON NEWLINE ESCAPING ---
+            if "unterminated string literal" in linter_error:
+                try:
+                    healed, new_lines = auto_heal_newline_escaping(fp)
+                    if healed:
+                        with open(fp, "w", encoding="utf-8") as f:
+                            f.writelines(new_lines)
+
+                        # Re-verify after healing
+                        linter_error = run_self_verification(fp)
+                        if not linter_error:
+                            print(
+                                f"🔧 [Auto-Healer] Successfully repaired JSON newline escaping artifact in {os.path.basename(fp)}!")
+                            agent_flags.consecutive_lint_failures = 0
+                            agent_flags.last_verification_failure = None
+                            # Skip the rest of the failure block since it's fixed!
+                            return True, tool_reinforcement
+                except Exception as e:
+                    print(f"⚠️ Auto-healer encountered an exception: {e}")
+            # ---------------
+
+            agent_flags.consecutive_lint_failures += 1
+            print(f"🚨 [Self-Verification] FAILED on {os.path.basename(fp)}:\n{linter_error}")
+
+            tool_reinforcement += f"\n\nSystem Alert: Syntax check failed:\n{linter_error}\nFix it."
+
+            # Amnesia patch to prevent repetition loops
+            if state.messages and state.messages[-1].get("role") == "assistant":
+                old_content = state.messages[-1].get("content", "")
+                if len(old_content) > 50:
+                    state.messages[-1][
+                        "content"] = f"[Action logged: write_file to {fp}. Full JSON payload redacted to prevent repetition collapse.]"
+
+            if agent_flags.consecutive_lint_failures >= 3:
+                print("🛑 [Circuit Breaker] Repeated lint failures. Forcing turn end.")
+                state.messages.append(
+                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
+                return False, tool_reinforcement
+        else:
+            if agent_flags.consecutive_lint_failures > 0: print(
+                f"✅ {os.path.basename(fp)} now passes checks.")
+            agent_flags.consecutive_lint_failures, agent_flags.last_verification_failure = 0, None
+            return True, tool_reinforcement
+    return True, tool_reinforcement
 
 
 def main(state, execution_state):
@@ -305,8 +428,6 @@ def main(state, execution_state):
     display_welcome_banner(state.loaded_model_name, state.allow_patch)
 
     while True:
-        user_input = ""
-
         # Check if we have an automated follow-up prompt queued
         if execution_state.automated_followup:
             user_input = execution_state.automated_followup
@@ -335,6 +456,7 @@ def main(state, execution_state):
                 self.recent_tool_signatures = []  # Loop Guardrail: track recent signatures, not just the immediately previous one
 
         agent_flags = AgentFlags()
+        tool_args = {}  # Very important: this must exist in the first iteration
 
         # Internal Agent Execution Loop
         while True:
@@ -407,63 +529,11 @@ def main(state, execution_state):
                             state.messages.append({"role": "user", "content": msg})
                             continue
 
-                        # --- NO-OP / REGURGITATION GUARDRAIL ---
                         if tool_name == "write_file":
-                            target_fp = tool_args.get("filepath", "")
-                            if os.path.isfile(target_fp):
-                                try:
-                                    with open(target_fp, "r", encoding="utf-8") as f:
-                                        existing_disk_content = f.read()
+                            if check_and_handle_identical_write(tool_args, state, agent_flags, content_key):
+                                continue
 
-                                    proposed_content = tool_args.get(content_key, "")
-                                    if existing_disk_content.strip() == proposed_content.strip():
-                                        print(
-                                            f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
-
-                                        agent_flags.consecutive_errors += 1
-                                        if agent_flags.consecutive_errors >= 3:
-                                            print(
-                                                "🛑 [Circuit Breaker] Agent stuck in identical write loop. Forcing turn end.")
-                                            break
-
-                                        # Context-Aware Guardrail Message
-                                        if agent_flags.last_verification_failure and agent_flags.last_verification_failure.get(
-                                                "filepath") == target_fp:
-                                            alert_msg = (
-                                                f"System Alert: `write_file` blocked. You attempted to overwrite '{target_fp}' with the EXACT SAME BROKEN CODE that just failed self-verification. "
-                                                f"You must actually CHANGE the code to fix the error.\nError was:\n{agent_flags.last_verification_failure.get('error', '')}")
-                                            if "unterminated string literal" in agent_flags.last_verification_failure.get(
-                                                    "error", ""):
-                                                alert_msg += "\nHint: If you used '\\n' inside a Python string, the JSON parser converted it to a real newline. Avoid using '\\n' in string literals (e.g. use multiple prints) or quadruple-escape it as `\\\\n`."
-                                        else:
-                                            alert_msg = (
-                                                f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk. "
-                                                f"If the user only asked to read, analyze, inspect, or explain, DO NOT invoke write tools. Answer directly in plain text.")
-
-                                        state.messages.append({
-                                            "role": "user",
-                                            "content": alert_msg
-                                        })
-                                        continue
-                                except Exception:
-                                    pass
-
-                # Loop Guardrail
-                curr_sig = f"{tool_name}:{str(tool_args)}"
-                agent_flags.recent_tool_signatures.append(curr_sig)
-                agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-6:]  # keep a short rolling window
-
-                repeat_count = agent_flags.recent_tool_signatures.count(curr_sig)
-                if repeat_count >= 2:
-                    agent_flags.consecutive_errors += 1
-                    if agent_flags.consecutive_errors >= 3:
-                        print("🛑 [Circuit Breaker] Agent loop. Forcing turn end.")
-                        break
-                    state.messages.append({"role": "user",
-                                     "content": f"System Alert: This exact tool call has been attempted {repeat_count} times "
-                                                f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
-                                                f"underlying issue (e.g. re-check content/context requirements) or try a "
-                                                f"different approach."})
+                if check_and_handle_loop_guardrail(tool_name, tool_args, agent_flags):
                     continue
 
                 # --- EXECUTION ---
@@ -510,52 +580,18 @@ def main(state, execution_state):
                         print(f"   Result: {tool_result}")
 
                     # Self-Verification
-                    if state.self_verify_py_writes and was_mod and tool_name in ["write_file", "append_file",
-                                                                           "patch_file", "replace_lines"]:
-                        fp = tool_args.get("filepath", "")
-                        if linter_error := run_self_verification(fp):
+                    success, tool_reinforcement = handle_self_verification_and_healing(state, execution_state,
+                                                                                       tool_name, tool_args,
+                                                                                       agent_flags, tool_reinforcement, was_mod)
+                    if not success:
+                        state.messages.append(
+                            {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
+                        break
 
-                            # --- AUTO-HEALER FOR JSON NEWLINE ESCAPING ---
-                            if "unterminated string literal" in linter_error:
-                                try:
-                                    healed, new_lines = auto_heal_newline_escaping(fp)
-                                    if healed:
-                                        with open(fp, "w", encoding="utf-8") as f:
-                                            f.writelines(new_lines)
+                    tool_reinforcement += f"\n\nSystem Alert: Tool executed successfully."
 
-                                        # Re-verify after healing
-                                        linter_error = run_self_verification(fp)
-                                        if not linter_error:
-                                            print(
-                                                f"🔧 [Auto-Healer] Successfully repaired JSON newline escaping artifact in {os.path.basename(fp)}!")
-                                            agent_flags.consecutive_lint_failures = 0
-                                            agent_flags.last_verification_failure = None
-                                            # Skip the rest of the failure block since it's fixed!
-                                            continue
-                                except Exception as e:
-                                    print(f"⚠️ Auto-healer encountered an exception: {e}")
-                            # -----------------------------------------------
-
-                            agent_flags.consecutive_lint_failures += 1
-                            print(f"🚨 [Self-Verification] FAILED on {os.path.basename(fp)}:\n{linter_error}")
-
-                            tool_reinforcement += f"\n\nSystem Alert: Syntax check failed:\n{linter_error}\nFix it."
-
-                            # Amnesia patch to prevent repetition loops
-                            if state.messages and state.messages[-1].get("role") == "assistant":
-                                old_content = state.messages[-1].get("content", "")
-                                if len(old_content) > 50:
-                                    state.messages[-1][
-                                        "content"] = f"[Action logged: write_file to {fp}. Full JSON payload redacted to prevent repetition collapse.]"
-
-                            if agent_flags.consecutive_lint_failures >= 3:
-                                print("🛑 [Circuit Breaker] Repeated lint failures. Forcing turn end.")
-                                state.messages.append(
-                                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
-                                break
-                        else:
-                            if agent_flags.consecutive_lint_failures > 0: print(f"✅ {os.path.basename(fp)} now passes checks.")
-                            agent_flags.consecutive_lint_failures, agent_flags.last_verification_failure = 0, None
+                    state.messages.append(
+                        {"role": "user", "content": f"Tool Execution Result:\n{tool_result}{tool_reinforcement}"})
 
                 elif approval == 'edit':
                     tool_result = f"User denied and provided feedback: {input('Feedback: ')}"
