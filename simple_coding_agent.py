@@ -225,6 +225,73 @@ def handle_macros(user_input, state, execution_state, system_prompt):
     return False  # Return False if no macro was handled
 
 
+def handle_ast_extraction_interception(state, execution_state, response_content):
+    if "```json" in response_content:
+        if execution_state.is_execute_mode:
+            handled, alert = split_tools.handle_ast_extraction(response_content,
+                                                               execution_state.original_split_file,
+                                                               execution_state.sandbox_directory)
+        else:
+            print("\n📋 Advisor blueprint received:")
+            approval = input(
+                "Apply this blueprint deterministically to the sandbox? (y/n): ").strip().lower()
+            if approval == 'y':
+                handled, alert = split_tools.handle_ast_extraction(response_content,
+                                                                   execution_state.original_split_file,
+                                                                   execution_state.sandbox_directory)
+            else:
+                handled, alert = True, (
+                    "Blueprint held pending revision. If you'd like changes, "
+                    "explain them and provide an updated ```json blueprint."
+                )
+        if handled:
+            state.messages.append({"role": "user", "content": alert})
+            return True
+    return False
+
+
+def handle_sandbox_guardrail(execution_state, state, response_content):
+    """SANDBOX GUARDRAIL: Only runs if NO tool was called."""
+    if any(x in response_content.lower() for x in ["refactor phase complete", "task complete"]):
+        passed, report = verify_sandbox_health(execution_state.original_split_file,
+                                               execution_state.sandbox_directory, state.messages)
+        if passed:
+            print(f"✅ Sandbox passed! Staged in: {execution_state.sandbox_directory}")
+            if execution_state.is_execute_mode:
+                # Promotion done only in execute mode, just for safety
+                if input("Promote to production? (y/n): ").strip().lower() == 'y':
+                    target_dir = os.path.dirname(execution_state.original_split_file)
+                    for item in os.listdir(execution_state.sandbox_directory):
+                        if not item.startswith('.'):
+                            shutil.copy2(os.path.join(execution_state.sandbox_directory, item),
+                                         os.path.join(target_dir, item))
+                    print("🚀 Files successfully promoted.")
+            execution_state.is_split_mode = execution_state.is_execute_mode = False
+            state.session_cwd = os.path.dirname(execution_state.original_split_file)
+            return True
+        print(f"❌ Verification Failed:\n{report}")
+        state.messages.append({"role": "user",
+                               "content": f"System Verification Failed:\n{report}\n\nCorrect this error and output 'Refactor Phase Complete'."})
+        return False
+    return False
+
+
+def handle_automated_follow_up(state, agent_flags, execution_state, tool_args):
+    """Automated follow-up trigger"""
+    if state.force_testing and agent_flags.file_was_modified and not execution_state.is_split_mode:
+        raw_path = tool_args.get("filepath", "") if 'tool_args' in locals() else ""
+        fn = Path(raw_path).name.lower()
+        if (raw_path and fn.endswith(".py") and
+                (fn.startswith("test_") or fn.endswith("_test.py")) and not execution_state.has_prompted_for_tests):
+            print("\n[System]: Automatically queuing follow-up test prompt.")
+            safe_exec = sys.executable.replace("\\", "/")
+            state.messages.append({"role": "user",
+                                   "content": f"Great. Use `run_cmd` (e.g. `\"{safe_exec}\" -m unittest`) to verify. If a test fails, analyze if the test itself is wrong before fixing the source code."})
+            execution_state.has_prompted_for_tests = True
+        else:
+            print("\n[System]: Main script written / modified.")
+
+
 def main(state, execution_state):
     system_prompt = build_system_prompt()
 
@@ -275,68 +342,24 @@ def main(state, execution_state):
 
             try:
                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
-                if interrupted: break
+                if interrupted:
+                    break
 
-                # --- AST EXTRACTION INTERCEPTOR ---
-                if execution_state.is_split_mode and "```json" in response_content:
-                    if execution_state.is_execute_mode:
-                        handled, alert = split_tools.handle_ast_extraction(response_content, execution_state.original_split_file, execution_state.sandbox_directory)
-                    else:
-                        print("\n📋 Advisor blueprint received:")
-                        approval = input("Apply this blueprint deterministically to the sandbox? (y/n): ").strip().lower()
-                        if approval == 'y':
-                            handled, alert = split_tools.handle_ast_extraction(response_content, execution_state.original_split_file, execution_state.sandbox_directory)
-                        else:
-                            handled, alert = True, (
-                                "Blueprint held pending revision. If you'd like changes, "
-                                "explain them and provide an updated ```json blueprint."
-                            )
-                    if handled:
-                        state.messages.append({"role": "user", "content": alert})
+                if execution_state.is_split_mode:
+                    if handle_ast_extraction_interception(state, execution_state, response_content):
                         continue
 
-                # 🚨 FIX: Check for tool calls FIRST. Never let "Refactor Phase Complete"
+                # Check for tool calls FIRST. Never let "Refactor Phase Complete"
                 # short-circuit a turn that also contains a tool call.
                 tool_request = payload_parser.extract_tool_call(response_content, allow_patch=state.allow_patch)
 
                 if not tool_request:
-                    # --- SANDBOX GUARDRAIL (Only runs if NO tool was called) ---
-                    if execution_state.is_split_mode and any(
-                            x in response_content.lower() for x in ["refactor phase complete", "task complete"]):
-                        passed, report = verify_sandbox_health(execution_state.original_split_file, execution_state.sandbox_directory, state.messages)
-                        if passed:
-                            print(f"✅ Sandbox passed! Staged in: {execution_state.sandbox_directory}")
-                            if execution_state.is_execute_mode:
-                                # Promotion done only in execute mode, just for safety
-                                if input("Promote to production? (y/n): ").strip().lower() == 'y':
-                                    target_dir = os.path.dirname(execution_state.original_split_file)
-                                    for item in os.listdir(execution_state.sandbox_directory):
-                                        if not item.startswith('.'):
-                                            shutil.copy2(os.path.join(execution_state.sandbox_directory, item),
-                                                         os.path.join(target_dir, item))
-                                    print("🚀 Files successfully promoted.")
-                            execution_state.is_split_mode = execution_state.is_execute_mode = False
-                            state.session_cwd = os.path.dirname(execution_state.original_split_file)
-                            break
+                    if execution_state.is_split_mode:
+                        if handle_sandbox_guardrail(execution_state, state, response_content):
+                            continue
 
-                        print(f"❌ Verification Failed:\n{report}")
-                        state.messages.append({"role": "user",
-                                         "content": f"System Verification Failed:\n{report}\n\nCorrect this error and output 'Refactor Phase Complete'."})
-                        continue
+                    handle_automated_follow_up(state, agent_flags, execution_state, tool_args)
 
-                    # AUTOMATED FOLLOW-UP TRIGGER
-                    if state.force_testing and agent_flags.file_was_modified and not execution_state.is_split_mode:
-                        raw_path = tool_args.get("filepath", "") if 'tool_args' in locals() else ""
-                        fn = Path(raw_path).name.lower()
-                        if raw_path and fn.endswith(".py") and (
-                                fn.startswith("test_") or fn.endswith("_test.py")) and not execution_state.has_prompted_for_tests:
-                            print("\n[System]: Automatically queuing follow-up test prompt.")
-                            safe_exec = sys.executable.replace("\\", "/")
-                            state.messages.append({"role": "user",
-                                             "content": f"Great. Use `run_cmd` (e.g. `\"{safe_exec}\" -m unittest`) to verify. If a test fails, analyze if the test itself is wrong before fixing the source code."})
-                            execution_state.has_prompted_for_tests = True
-                        else:
-                            print("\n[System]: Main script written / modified.")
                     break
 
                 tool_name = tool_request.get("name")
@@ -561,11 +584,7 @@ def main(state, execution_state):
                     break
 
                 continue  # CRITICAL: 'continue' lets the agent retry instantly
-            # except json.JSONDecodeError as e:
-            #     print(f"\n❌ [Parser Interceptor] Halted syntax loop.")
-            #     state.messages.append({"role": "user",
-            #                      "content": f"Formatting Failure: {e}\nRemember to use raw unescaped content inside <payload>."})
-            #     break
+
             except Exception as e:
                 print(f"\n[Error during generation]: {e}")
                 break
