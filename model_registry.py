@@ -85,11 +85,25 @@ MODEL_REGISTRY = {
         "max_context": 32768,
         "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
-    "deepseek-r1-qwen-7b": {
+    "deepseek-r1-distill-qwen-7b": {
         "filename": "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
-        "display_name": "DeepSeek R1 Distill Qwen 7B",
+        "display_name": "DeepSeek R1 Distill Qwen 7B (Q4_K_M)",
         "chat_format": "chatml",
         "max_context": 32768,
+        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
+    },
+    "deepseek-r1-distill-qwen-7b-q5km": {
+        "filename": "DeepSeek-R1-Distill-Qwen-7B-Q5_K_M.gguf",
+        "display_name": "DeepSeek R1 Distill Qwen 7B (Q5_K_M)",
+        "chat_format": "chatml",
+        "max_context": 32768,
+        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
+    },
+    "deepseek-r1-distill-qwen-7b-q6k": {
+        "filename": "DeepSeek-R1-Distill-Qwen-7B-Q6_K.gguf",
+        "display_name": "DeepSeek R1 Distill Qwen 7B (Q6_K)",
+        "chat_format": "chatml",
+        "max_context": 24576,
         "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
 }

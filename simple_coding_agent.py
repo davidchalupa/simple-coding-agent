@@ -293,7 +293,6 @@ def main(state, execution_state):
                             )
                     if handled:
                         state.messages.append({"role": "user", "content": alert})
-                        execution_state.is_execute_mode = False if "successfully executed" in alert else execution_state.is_execute_mode
                         continue
 
                 # 🚨 FIX: Check for tool calls FIRST. Never let "Refactor Phase Complete"
@@ -307,13 +306,15 @@ def main(state, execution_state):
                         passed, report = verify_sandbox_health(execution_state.original_split_file, execution_state.sandbox_directory, state.messages)
                         if passed:
                             print(f"✅ Sandbox passed! Staged in: {execution_state.sandbox_directory}")
-                            if input("Promote to production? (y/n): ").strip().lower() == 'y':
-                                target_dir = os.path.dirname(execution_state.original_split_file)
-                                for item in os.listdir(execution_state.sandbox_directory):
-                                    if not item.startswith('.'):
-                                        shutil.copy2(os.path.join(execution_state.sandbox_directory, item),
-                                                     os.path.join(target_dir, item))
-                                print("🚀 Files successfully promoted.")
+                            if execution_state.is_execute_mode:
+                                # Promotion done only in execute mode, just for safety
+                                if input("Promote to production? (y/n): ").strip().lower() == 'y':
+                                    target_dir = os.path.dirname(execution_state.original_split_file)
+                                    for item in os.listdir(execution_state.sandbox_directory):
+                                        if not item.startswith('.'):
+                                            shutil.copy2(os.path.join(execution_state.sandbox_directory, item),
+                                                         os.path.join(target_dir, item))
+                                    print("🚀 Files successfully promoted.")
                             execution_state.is_split_mode = execution_state.is_execute_mode = False
                             state.session_cwd = os.path.dirname(execution_state.original_split_file)
                             break

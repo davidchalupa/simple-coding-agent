@@ -14,6 +14,14 @@ models = {
         "repo_id": "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
         "filename": "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf"
     },
+    "deepseek-r1-distill-qwen-7b-q5km": {
+        "repo_id": "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
+        "filename": "DeepSeek-R1-Distill-Qwen-7B-Q5_K_M.gguf"
+    },
+    "deepseek-r1-distill-qwen-7b-q6k": {
+        "repo_id": "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
+        "filename": "DeepSeek-R1-Distill-Qwen-7B-Q6_K.gguf"
+    },
     "hermes3": {
         "repo_id": "NousResearch/Hermes-3-Llama-3.1-8B-GGUF",
         "filename": "Hermes-3-Llama-3.1-8B.Q4_K_M.gguf"

@@ -120,6 +120,13 @@ def run_automated_coding_task_test(
         simple_coding_agent.state.session_cwd = repo_sandbox
         simple_coding_agent.state.force_testing = True
 
+        # --- Guarantee pristine global state before the test starts ---
+        if hasattr(simple_coding_agent, 'execution_state'):
+            simple_coding_agent.execution_state.is_split_mode = False
+            simple_coding_agent.execution_state.is_execute_mode = False
+            simple_coding_agent.execution_state.sandbox_directory = None
+            simple_coding_agent.execution_state.original_split_file = None
+
         safety_counter = {"calls": 0, "max_calls": max_calls_limit}
 
         def smart_input_mocker(prompt=""):

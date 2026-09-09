@@ -52,6 +52,9 @@ def test_agent_split_execute_mode():
         f"/split --execute {target_file}",
         "/send",
 
+        "Looks good. Task Complete.",
+        "/send",
+
         "/quit"
     ]
 

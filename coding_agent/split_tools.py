@@ -166,7 +166,7 @@ Layout Footprint:
 - Preserve all existing functions and methods by assigning each one to exactly one output file.
 
 [Required Output Layout Format]
-1. EXPLANATION: Write out your structural design reasoning. Justify your module division choices using generic domain terms.
+1. EXPLANATION: Write out your structural design reasoning. Include the marker tag `[MODE: ADVISOR_SCAFFOLD]` in your reasoning text.
 2. BLUEPRINT: Immediately after the explanation, provide ONE valid JSON object.
 
 CRITICAL BLUEPRINT RULES:
@@ -177,7 +177,7 @@ CRITICAL BLUEPRINT RULES:
 - The key `{filename}` MUST appear in the JSON if any functions or methods remain in the root file.
 - Do NOT rename the root file.
 - Do NOT call any tools. Do NOT write file contents yet.
-- STOP immediately after the closing JSON code fence. This blueprint will be reviewed before anything is written.
+- STOP immediately after the closing JSON code fence. The system will parse this JSON blueprint and generate hollow structural scaffolding for human review.
 
 Example structure:
 
@@ -208,8 +208,63 @@ def setup_refactor_sandbox(source_filepath):
     return sandbox_target, sandbox_dir
 
 
-def handle_ast_extraction(content, split_file, sandbox_dir):
-    """Intercepts JSON routing plan and extracts blocks deterministically."""
+def _generate_scaffold(original_filepath, target_filename, blocks, all_files):
+    """
+    Helper for advisor mode: Generates hollow scaffolding of the blueprint.
+    Recreates structural layout with `pass`, keeps root imports, and adds
+    inter-file imports between the newly generated modules.
+    """
+    with open(original_filepath, 'r', encoding='utf-8') as f:
+        tree = ast.parse(f.read())
+
+    new_body = []
+
+    # 1. Preserve original imports
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            new_body.append(node)
+
+    # 2. Add inter-file imports for other modules in the blueprint
+    for other_file in all_files:
+        if other_file != target_filename and other_file.endswith('.py'):
+            mod_name = other_file[:-3]
+            new_body.append(ast.Import(names=[ast.alias(name=mod_name, asname=None)]))
+
+    # 3. Scaffold classes and functions out of the requested blocks
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            new_class_body = []
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if item.name in blocks:
+                        item.body = [ast.Pass()]
+                        new_class_body.append(item)
+            if new_class_body:
+                # Keep decorators, bases, and keywords intact
+                new_class = ast.ClassDef(
+                    name=node.name,
+                    bases=node.bases,
+                    keywords=node.keywords,
+                    body=new_class_body,
+                    decorator_list=node.decorator_list
+                )
+                new_body.append(new_class)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name in blocks:
+                node.body = [ast.Pass()]
+                new_body.append(node)
+
+    # Ensure the AST produces valid Python even if empty
+    if not new_body:
+        new_body.append(ast.Pass())
+
+    new_tree = ast.Module(body=new_body, type_ignores=[])
+    ast.fix_missing_locations(new_tree)
+    return ast.unparse(new_tree)
+
+
+def handle_ast_extraction(content, split_file, sandbox_dir, execute_mode=None):
+    """Intercepts JSON routing plan and extracts blocks or scaffolds deterministically."""
     match = re.search(r"```json\s*\n(.*?)\n```", content, re.DOTALL)
     if not match:
         return False, None
@@ -217,19 +272,35 @@ def handle_ast_extraction(content, split_file, sandbox_dir):
     try:
         plan = json.loads(match.group(1))
 
-        print("\n⚙️  [System] Intercepted JSON routing plan. Executing AST extraction natively...")
+        # Detect mode cleanly without polluting JSON blueprint keys
+        if execute_mode is None:
+            is_scaffold_marker = "[MODE: ADVISOR_SCAFFOLD]" in content
+            execute_mode = not is_scaffold_marker
 
-        # Separate valid extraction entries from malformed ones instead of
-        # silently dropping the latter.
         valid_entries = {fn: blocks for fn, blocks in plan.items() if isinstance(blocks, list)}
         invalid_entries = {fn: blocks for fn, blocks in plan.items() if not isinstance(blocks, list)}
 
-        results = [
-            f"[{fn}]: {extract_code_blocks(split_file, os.path.join(sandbox_dir, fn), blocks)}"
-            for fn, blocks in valid_entries.items()
-        ]
+        results = []
+        if not execute_mode:
+            print("\n⚙️  [System] Intercepted JSON routing plan. Generating scaffold in advisor mode...")
+            all_files = list(valid_entries.keys())
+            for fn, blocks in valid_entries.items():
+                try:
+                    scaffold_code = _generate_scaffold(split_file, fn, blocks, all_files)
+                    target_path = os.path.join(sandbox_dir, fn)
+                    with open(target_path, "w", encoding="utf-8") as f:
+                        f.write(scaffold_code)
+                    results.append(f"[{fn}]: Scaffold generated for {len(blocks)} components")
+                except Exception as e:
+                    results.append(f"[{fn}]: Error generating scaffold ({e})")
+        else:
+            print("\n⚙️  [System] Intercepted JSON routing plan. Executing AST extraction natively...")
+            results = [
+                f"[{fn}]: {extract_code_blocks(split_file, os.path.join(sandbox_dir, fn), blocks)}"
+                for fn, blocks in valid_entries.items()
+            ]
 
-        report = "\n".join(results) if results else "(no valid entries were extracted)"
+        report = "\n".join(results) if results else "(no valid entries were processed)"
         print(report)
 
         if invalid_entries:
@@ -238,7 +309,7 @@ def handle_ast_extraction(content, split_file, sandbox_dir):
                 "System Alert: Blueprint schema error. The following entries were REJECTED "
                 f"because their value must be a LIST of function/method names, not a string "
                 f"or other type: {invalid_entries}\n\n"
-                + (f"Valid entries were still extracted:\n{report}\n\n" if results else "")
+                + (f"Valid entries were still processed:\n{report}\n\n" if results else "")
                 + "This ```json blueprint format is ONLY for extracting existing functions/methods "
                 "by name into files. It is NOT for writing new code such as import statements. "
                 "To add a missing import, use the `patch_file` or `append_file` tool directly on "
@@ -247,7 +318,7 @@ def handle_ast_extraction(content, split_file, sandbox_dir):
             )
 
         return True, (
-            "System Alert: AST Extraction successfully executed.\n"
+            "System Alert: AST Processing successfully executed.\n"
             f"Results:\n{report}\n\n"
             "Next Step: Review the extracted files with the available tools if needed. "
             "Do not attempt to recreate the extracted methods. "
@@ -266,11 +337,6 @@ def verify_refactor_integrity(original_filepath, generated_files_dir, expected_f
     """
     Defensive Guardrail: Compares the AST components to ensure no logic is lost,
     and verifies all planned files from the blueprint exist.
-
-    NOTE:
-    The original root filename is intentionally INCLUDED in verification because
-    AST extraction may replace that file inside the sandbox with the refactored
-    version. Skipping it would incorrectly report root methods as missing.
     """
     original_filename = os.path.basename(original_filepath)
 
@@ -282,11 +348,6 @@ def verify_refactor_integrity(original_filepath, generated_files_dir, expected_f
         ]
 
         if missing_files:
-            # IMPORTANT:
-            # Only request ONE file at a time. The agent runtime/tool parser is
-            # expected to execute the XML tool call directly. Requesting multiple
-            # calls in one response makes it easy for the model to emit them as
-            # ordinary markdown instead of actual tool invocations.
             next_file = missing_files[0]
 
             return False, (
