@@ -70,13 +70,24 @@ def build_diagnose_system_prompt() -> str:
 
 
 class ModelSwitcher:
-    """Owns loading/unloading llama.cpp models so a second model can be swapped
-    in without both being resident in VRAM at once. Only one model is ever
-    loaded at a time; loading a different key unloads whatever is current."""
+    """
+    Owns at most one Llama model at a time.
+
+    Model lifetime is explicit:
+        current model
+            -> close()
+            -> GC
+            -> new model
+
+    We intentionally do NOT call llama_backend_init() / llama_backend_free().
+    Those are process/backend lifecycle operations, not model-switch reset
+    operations.
+    """
 
     def __init__(self, kv_quantization_type, models_dir: Path):
         self.kv_quantization_type = kv_quantization_type
         self.models_dir = models_dir
+
         self.current_key = None
         self.initializer = None
         self.llm = None
@@ -84,45 +95,76 @@ class ModelSwitcher:
         self.display_name = None
 
     def _unload(self):
-        if self.initializer is not None:
+        if self.initializer is None and self.llm is None:
+            return
+
+        if self.display_name:
             print(f"🗑️  Unloading {self.display_name}...")
+
+        initializer = self.initializer
+
+        # Clear switcher references first so there is no accidental
+        # retention through this object while cleanup runs.
         self.initializer = None
         self.llm = None
+        self.context_window = None
+        self.display_name = None
+        self.current_key = None
+
+        if initializer is not None:
+            try:
+                initializer.close()
+            except Exception as e:
+                print(
+                    f"⚠️ [ModelSwitcher] "
+                    f"Initializer cleanup failed: {e}"
+                )
+
+            del initializer
+
+        # Give Python a chance to release any other objects created by
+        # model/chat initialization.
         gc.collect()
-        # Empirically, giving the driver a beat before the next allocation
-        # attempt reduces spurious OOM/allocation failures on tight VRAM.
+
+        # A small delay gives CUDA/native teardown some breathing room.
         time.sleep(0.5)
 
-        # llama-cpp-python only calls llama_backend_init() once per process
-        # (internally guarded) and never calls llama_backend_free() itself.
-        # If the backend's global state (GPU context, thread pool, etc.) gets
-        # left in a bad spot after a teardown, that internal guard means the
-        # library will never re-init it for us on the next Llama() call.
-        # Force it explicitly here; load() forces the matching re-init before
-        # constructing the next model. Best-effort — wrapped in try/except
-        # since these are low-level calls this script doesn't otherwise touch.
-        try:
-            llama_backend.llama_backend_free()
-        except Exception as e:
-            print(f"⚠️  [ModelSwitcher] llama_backend_free() failed (continuing): {e}")
-
     def load(self, model_key: str):
-        if self.current_key == model_key and self.llm is not None:
+        if (
+            self.current_key == model_key
+            and self.llm is not None
+        ):
             return self.llm, self.context_window
 
+        # Different model: fully close current model first.
         self._unload()
-
-        try:
-            llama_backend.llama_backend_init()
-        except Exception as e:
-            print(f"⚠️  [ModelSwitcher] llama_backend_init() failed (continuing): {e}")
 
         config = MODEL_REGISTRY[model_key]
         target_path = self.models_dir / config["filename"]
         display_name = config["display_name"]
 
-        initializer = LLMInitializer(target_path, display_name, config, self.kv_quantization_type)
-        initializer.initialize_agent()
+        initializer = LLMInitializer(
+            target_path,
+            display_name,
+            config,
+            self.kv_quantization_type,
+        )
+
+        try:
+            initializer.initialize_agent()
+
+        except Exception:
+            # Make absolutely sure a partially initialized candidate is
+            # released before propagating the error.
+            try:
+                initializer.close()
+            except Exception:
+                pass
+
+            del initializer
+            gc.collect()
+
+            raise
 
         self.current_key = model_key
         self.initializer = initializer
@@ -133,12 +175,11 @@ class ModelSwitcher:
         return self.llm, self.context_window
 
     def unload_current(self):
-        """Fully releases the currently loaded model's resources without
-        loading a replacement. Needed before handing the GPU to another
-        process (e.g. the /diagnose reasoning worker) on VRAM-limited
-        hardware where only one ~7B model fits in VRAM at a time."""
+        """
+        Fully releases the current model before another process is started,
+        e.g. the /diagnose reasoning worker.
+        """
         self._unload()
-        self.current_key = None
 
 
 class ConsultantState:
@@ -428,12 +469,24 @@ def gather_context_for_diagnose(state, switcher, user_question):
 REASONING_WORKER_PATH = Path(__file__).resolve().parent / "consultant_reasoning_worker.py"
 
 
-def run_reasoning_subprocess(model_key, kv_quantization_type, models_dir, system_prompt, user_content):
-    """Runs one tool-free completion in a fresh subprocess and returns
-    (final_answer, error). Model-load progress and streamed tokens print
-    live to the inherited terminal; only the final answer comes back
-    structured, via a temp result file, to avoid scraping stdout."""
-    fd, result_path = tempfile.mkstemp(prefix="consult_diagnose_", suffix=".json")
+def run_reasoning_subprocess(
+    model_key,
+    kv_quantization_type,
+    models_dir,
+    system_prompt,
+    user_content,
+):
+    """
+    Run one reasoning completion in a fresh process.
+
+    The child process owns the reasoning model for its entire lifetime.
+    When it exits, the OS releases all of its native/CUDA resources.
+    """
+
+    fd, result_path = tempfile.mkstemp(
+        prefix="consult_diagnose_",
+        suffix=".json",
+    )
     os.close(fd)
 
     payload = json.dumps({
@@ -445,20 +498,46 @@ def run_reasoning_subprocess(model_key, kv_quantization_type, models_dir, system
     })
 
     try:
-        subprocess.run(
+        completed = subprocess.run(
             [sys.executable, str(REASONING_WORKER_PATH), result_path],
             input=payload,
             text=True,
             cwd=str(Path(__file__).resolve().parent),
+            check=False,
         )
+
+        if completed.returncode != 0:
+            # The worker should normally write an error result, but if it
+            # crashed before doing so, make that explicit.
+            if not os.path.exists(result_path):
+                return (
+                    None,
+                    f"Reasoning worker exited with code "
+                    f"{completed.returncode} without producing a result."
+                )
 
         try:
             with open(result_path, "r") as f:
                 result = json.load(f)
-        except Exception as e:
-            return None, f"Worker produced no readable result ({e}). It may have crashed — check the log above."
 
-        return result.get("content"), result.get("error")
+        except Exception as e:
+            return (
+                None,
+                f"Worker produced no readable result ({e}); "
+                f"exit code={completed.returncode}."
+            )
+
+        content = result.get("content")
+        error = result.get("error")
+
+        if completed.returncode != 0 and not error:
+            error = (
+                f"Reasoning worker exited with code "
+                f"{completed.returncode}."
+            )
+
+        return content, error
+
     finally:
         try:
             os.remove(result_path)
