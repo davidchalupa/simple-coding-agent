@@ -1,30 +1,20 @@
 import os
-import tempfile
 import shutil
-import subprocess
-import sys
+import tempfile
 from unittest.mock import patch
 import pytest
-
 import coding_consultant
-
+import zipfile
 
 def run_read_only_coding_task_test(
         input_queue,
         zip_file_path=None,
         repo_name=None,
         setup_sandbox_hook=None,
-        expected_file=None,
         target_file_path=None,
         check_for_change=False,
-        expected_new_files=None,
-        run_unittest_file=None,
-        run_script_file=None,
         max_calls_limit=50,
-        expected_keywords=None,
-        custom_output_validator=None,
-        custom_file_validator=None,
-        post_run_validator=None
+        working_directory=None,
 ):
     """
     Custom unified runner for read-only agent tasks. Extracts a repo or runs a setup hook,
@@ -49,10 +39,13 @@ def run_read_only_coding_task_test(
             setup_sandbox_hook(test_sandbox)
 
         # Target the repo directory OR default to the root sandbox
-        if repo_name:
-            repo_sandbox = os.path.join(test_sandbox, repo_name)
+        if working_directory:
+            repo_sandbox = working_directory
         else:
-            repo_sandbox = test_sandbox
+            if repo_name:
+                repo_sandbox = os.path.join(test_sandbox, repo_name)
+            else:
+                repo_sandbox = test_sandbox
 
         # Snapshot pristine file if we are checking for modifications
         pristine_contents = {}
@@ -63,15 +56,8 @@ def run_read_only_coding_task_test(
                     pristine_contents[sandbox_dest_path] = f.read()
 
         # State Injection
-        # coding_consultant.state.session_cwd = repo_sandbox
-        # coding_consultant.state.force_testing = True
-
-        # --- Guarantee pristine global state before the test starts ---
-        # if hasattr(coding_consultant, 'execution_state'):
-        #     coding_consultant.execution_state.is_split_mode = False
-        #     coding_consultant.execution_state.is_execute_mode = False
-        #     coding_consultant.execution_state.sandbox_directory = None
-        #     coding_consultant.execution_state.original_split_file = None
+        coding_consultant.state.session_cwd = repo_sandbox
+        coding_consultant.state.force_testing = True
 
         safety_counter = {"calls": 0, "max_calls": max_calls_limit}
 
@@ -98,7 +84,7 @@ def run_read_only_coding_task_test(
 
             return "/quit"
 
-        # Move execution directly into the repo folder
+        # Move execution directly into the repo folder (or execution directory)
         os.chdir(repo_sandbox)
 
         with patch("builtins.input", side_effect=smart_input_mocker):

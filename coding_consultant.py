@@ -28,7 +28,7 @@ THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 STRAY_TOKEN_RE = re.compile(r"<\|im_start\|>\s*assistant\s*|<\|im_end\|>|<\|im_start\|>")
 
 MAX_STATE2_VIOLATIONS_PER_TURN = 3
-DIAGNOSE_PREFIX = "/diagnose "
+DIAGNOSE_RE = re.compile(r'^/diagnose\b\s*(.*)', re.IGNORECASE | re.DOTALL)
 
 # Must match the tool names actually defined in build_consultant_system_prompt().
 # Anything outside this set is a hallucinated tool (e.g. "load_file") and gets
@@ -286,6 +286,21 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
     return combined_results, real_tool_calls_this_turn
 
 
+def build_cached_context_summary(state):
+    """Formats everything already read this session (state.consult_read_cache)
+    as context text. Used so /diagnose can see files loaded in *earlier* turns
+    even when this turn's gathering pass makes no fresh tool calls (because
+    the gathering model correctly recognizes it's all already cached)."""
+    if not state.consult_read_cache:
+        return ""
+    parts = []
+    for cache_key, result in state.consult_read_cache.items():
+        tool_name, filepath = cache_key[0], cache_key[1]
+        label = filepath or "(unknown path)"
+        parts.append(f"Cached {tool_name} result for {label}:\n{result}")
+    return "\n\n".join(parts)
+
+
 def gather_context_for_diagnose(state, switcher, user_question):
     """Runs the STATE 1 tool-calling loop on the primary (gathering) model
     only, never letting it produce a final natural-language answer. Returns
@@ -360,8 +375,11 @@ def run_diagnose_turn(state, switcher, user_question):
         llm, context_window = switcher.load(state.reasoning_model_key)
 
     analysis_system = build_diagnose_system_prompt()
-    context_block = gathered_text.strip() if gathered_text.strip() else \
-        "(No new context was retrieved this turn — use anything already loaded earlier in this session.)"
+
+    cached_summary = build_cached_context_summary(state)
+    combined_context = "\n\n".join(part for part in [gathered_text.strip(), cached_summary] if part.strip())
+    context_block = combined_context if combined_context.strip() else \
+        "(No context has been loaded yet this session — nothing to analyze.)"
 
     analysis_messages = [
         {"role": "system", "content": analysis_system},
@@ -398,7 +416,7 @@ def main(state):
     print(f"\n🔍 [Coding Consultant] {switcher.display_name} loaded. Read-only — write tools are disabled.")
     if state.reasoning_model_key is not None:
         reasoning_display = MODEL_REGISTRY[state.reasoning_model_key]["display_name"]
-        print(f"🧠 Diagnose mode available: prefix a question with '{DIAGNOSE_PREFIX}' to reason "
+        print(f"🧠 Diagnose mode available: prefix a question with '/diagnose' to reason "
               f"with {reasoning_display} over gathered context.")
     print()
 
@@ -408,10 +426,11 @@ def main(state):
         if handle_user_input(state, user_input, system_prompt):
             continue
 
-        if user_input.startswith(DIAGNOSE_PREFIX):
-            question = user_input[len(DIAGNOSE_PREFIX):].strip()
+        diagnose_match = DIAGNOSE_RE.match(user_input)
+        if diagnose_match:
+            question = diagnose_match.group(1).strip()
             if not question:
-                print("⚠️  Usage: /diagnose <your question>")
+                print("⚠️  Usage: /diagnose <your question> (question may be on the same line or below it)")
                 continue
             run_diagnose_turn(state, switcher, question)
             continue
