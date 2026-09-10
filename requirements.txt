@@ -1,11 +1,5 @@
-# Minimal requirements for the starter RAG script
-sentence-transformers>=2.2.0        # embedding model utility (pulls in PyTorch)
-llama-cpp-python>=0.1.0             # python bindings for llama.cpp (local LLM inference)
-numpy>=1.23.0
-huggingface_hub
+psutil
 tqdm
-pypdf2
 pytest
 prompt_toolkit
 requests
-psutil
