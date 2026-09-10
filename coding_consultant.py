@@ -4,8 +4,12 @@ import gc
 import json
 import re
 import time
+import subprocess
+import tempfile
 
 from pathlib import Path
+
+from llama_cpp import llama_cpp as llama_backend
 
 from common.llm_init import LLMInitializer
 
@@ -29,6 +33,7 @@ STRAY_TOKEN_RE = re.compile(r"<\|im_start\|>\s*assistant\s*|<\|im_end\|>|<\|im_s
 
 MAX_STATE2_VIOLATIONS_PER_TURN = 3
 DIAGNOSE_RE = re.compile(r'^/diagnose\b\s*(.*)', re.IGNORECASE | re.DOTALL)
+MAX_DIAGNOSE_GATHER_ROUNDS = 6
 
 # Must match the tool names actually defined in build_consultant_system_prompt().
 # Anything outside this set is a hallucinated tool (e.g. "load_file") and gets
@@ -88,11 +93,29 @@ class ModelSwitcher:
         # attempt reduces spurious OOM/allocation failures on tight VRAM.
         time.sleep(0.5)
 
+        # llama-cpp-python only calls llama_backend_init() once per process
+        # (internally guarded) and never calls llama_backend_free() itself.
+        # If the backend's global state (GPU context, thread pool, etc.) gets
+        # left in a bad spot after a teardown, that internal guard means the
+        # library will never re-init it for us on the next Llama() call.
+        # Force it explicitly here; load() forces the matching re-init before
+        # constructing the next model. Best-effort — wrapped in try/except
+        # since these are low-level calls this script doesn't otherwise touch.
+        try:
+            llama_backend.llama_backend_free()
+        except Exception as e:
+            print(f"⚠️  [ModelSwitcher] llama_backend_free() failed (continuing): {e}")
+
     def load(self, model_key: str):
         if self.current_key == model_key and self.llm is not None:
             return self.llm, self.context_window
 
         self._unload()
+
+        try:
+            llama_backend.llama_backend_init()
+        except Exception as e:
+            print(f"⚠️  [ModelSwitcher] llama_backend_init() failed (continuing): {e}")
 
         config = MODEL_REGISTRY[model_key]
         target_path = self.models_dir / config["filename"]
@@ -108,6 +131,14 @@ class ModelSwitcher:
         self.display_name = display_name
 
         return self.llm, self.context_window
+
+    def unload_current(self):
+        """Fully releases the currently loaded model's resources without
+        loading a replacement. Needed before handing the GPU to another
+        process (e.g. the /diagnose reasoning worker) on VRAM-limited
+        hardware where only one ~7B model fits in VRAM at a time."""
+        self._unload()
+        self.current_key = None
 
 
 class ConsultantState:
@@ -210,7 +241,7 @@ def extract_tool_requests(response_content):
     return tool_requests
 
 
-def process_tool_requests(state, response_content, tool_requests, real_tool_calls_this_turn):
+def process_tool_requests(state, response_content, tool_requests, real_tool_calls_this_turn, compact_cache_hits=False):
     combined_results = ""
 
     for tool_request in tool_requests:
@@ -245,9 +276,19 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
                 tool_args.get("start_line"), tool_args.get("max_lines")
             )
             if cache_key in state.consult_read_cache:
-                print(
-                    f"📎 [Consult Cache] Reusing cached result for {tool_name} on {tool_args.get('filepath')}.")
-                combined_results += f"Result for {tool_name}:\n[Note: Content already loaded in context history]\n{state.consult_read_cache[cache_key]}\n\n"
+                if compact_cache_hits:
+                    print(f"📎 [Consult Cache] {tool_name} on {tool_args.get('filepath')} already available "
+                          f"— not re-pasting into the gather transcript (it's already in context and will be "
+                          f"included in the analysis automatically).")
+                    combined_results += (
+                        f"Note: {tool_name} result for {tool_args.get('filepath')} is already available from "
+                        f"earlier in this session and will automatically be included in the analysis. "
+                        f"No need to request it again.\n\n"
+                    )
+                else:
+                    print(
+                        f"📎 [Consult Cache] Reusing cached result for {tool_name} on {tool_args.get('filepath')}.")
+                    combined_results += f"Result for {tool_name}:\n[Note: Content already loaded in context history]\n{state.consult_read_cache[cache_key]}\n\n"
                 continue
 
         if real_tool_calls_this_turn >= state.max_tool_calls_per_turn:
@@ -320,13 +361,17 @@ def gather_context_for_diagnose(state, switcher, user_question):
         "role": "user",
         "content": (
             f"{user_question}\n\n"
-            "[SYSTEM DIRECTIVE: Use tool calls to load any files or context needed to answer "
-            "this. Do not answer the question yourself — once you have what you need, or if "
-            "nothing further is needed, simply stop issuing tool calls.]"
+            "[SYSTEM DIRECTIVE: If the files or context you need are already visible above in this "
+            "conversation, use them as-is — do not re-list directories or re-read files to double-check. "
+            "Only call tools for things that are genuinely missing. Use tool calls to load any such "
+            "missing files or context needed to answer this. Do not answer the question yourself — once "
+            "you have what you need, or if nothing further is needed, simply stop issuing tool calls.]"
         )
     })
 
-    for _ in range(state.max_tool_calls_per_turn):
+    stagnant_rounds = 0
+    seen_call_signatures = set()
+    for round_num in range(MAX_DIAGNOSE_GATHER_ROUNDS):
         check_context_guardrail(state.messages, llm, context_window)
 
         response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
@@ -345,15 +390,33 @@ def gather_context_for_diagnose(state, switcher, user_question):
         state.messages.append({"role": "assistant", "content": perfect_history})
 
         combined_results, real_tool_calls_this_turn = process_tool_requests(
-            state, response_content, tool_requests, real_tool_calls_this_turn)
+            state, response_content, tool_requests, real_tool_calls_this_turn, compact_cache_hits=True)
+
+        # Detect a round that only repeats calls (same name + args) already
+        # made earlier this gather turn — that's the model looping rather
+        # than making progress (e.g. re-asking for a call that was already
+        # denied), regardless of whether earlier rounds were cache hits.
+        call_signatures = [
+            json.dumps({"name": r.get("name"), "args": r.get("args", {})}, sort_keys=True)
+            for r in tool_requests
+        ]
+        is_repeat_round = all(sig in seen_call_signatures for sig in call_signatures)
+        seen_call_signatures.update(call_signatures)
+        stagnant_rounds = stagnant_rounds + 1 if is_repeat_round else 0
 
         if combined_results.strip():
             gathered_text += combined_results
+            remaining = MAX_DIAGNOSE_GATHER_ROUNDS - round_num - 1
             state.messages.append({
                 "role": "user",
                 "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n"
-                           "[SYSTEM DIRECTIVE: Continue gathering if needed, or stop if you have enough.]"
+                           f"[SYSTEM DIRECTIVE: Continue gathering only if something is still genuinely "
+                           f"missing, or stop if you have enough. {remaining} gathering round(s) remain.]"
             })
+
+        if stagnant_rounds >= 2:
+            print("\n💬 [Consult] Gathering is repeating the same call(s) with no new progress — stopping early.")
+            break
 
         if real_tool_calls_this_turn >= state.max_tool_calls_per_turn:
             print("\n💬 [Consult] Tool call budget reached during gathering.")
@@ -362,48 +425,97 @@ def gather_context_for_diagnose(state, switcher, user_question):
     return gathered_text
 
 
+REASONING_WORKER_PATH = Path(__file__).resolve().parent / "consultant_reasoning_worker.py"
+
+
+def run_reasoning_subprocess(model_key, kv_quantization_type, models_dir, system_prompt, user_content):
+    """Runs one tool-free completion in a fresh subprocess and returns
+    (final_answer, error). Model-load progress and streamed tokens print
+    live to the inherited terminal; only the final answer comes back
+    structured, via a temp result file, to avoid scraping stdout."""
+    fd, result_path = tempfile.mkstemp(prefix="consult_diagnose_", suffix=".json")
+    os.close(fd)
+
+    payload = json.dumps({
+        "model_key": model_key,
+        "kv_quantization_type": kv_quantization_type,
+        "models_dir": str(models_dir),
+        "system_prompt": system_prompt,
+        "user_content": user_content,
+    })
+
+    try:
+        subprocess.run(
+            [sys.executable, str(REASONING_WORKER_PATH), result_path],
+            input=payload,
+            text=True,
+            cwd=str(Path(__file__).resolve().parent),
+        )
+
+        try:
+            with open(result_path, "r") as f:
+                result = json.load(f)
+        except Exception as e:
+            return None, f"Worker produced no readable result ({e}). It may have crashed — check the log above."
+
+        return result.get("content"), result.get("error")
+    finally:
+        try:
+            os.remove(result_path)
+        except OSError:
+            pass
+
+
 def run_diagnose_turn(state, switcher, user_question):
-    """Gathers context with the primary (tool-calling) model, then swaps to
-    the reasoning model for a tool-free analysis pass, then swaps back."""
+    """Gathers context with the primary (tool-calling) model in-process,
+    then runs the reasoning model in an isolated subprocess for the
+    tool-free analysis pass. The primary model is never unloaded for this —
+    only the reasoning model's process starts and exits per call."""
     gathered_text = gather_context_for_diagnose(state, switcher, user_question)
 
-    if state.reasoning_model_key is None:
-        print("⚠️  No --reasoning-model configured; running /diagnose with the primary model only.")
-        llm, context_window = switcher.load(state.primary_model_key)
-    else:
-        print(f"\n🔁 [Consult] Swapping to reasoning model for analysis...")
-        llm, context_window = switcher.load(state.reasoning_model_key)
-
     analysis_system = build_diagnose_system_prompt()
-
     cached_summary = build_cached_context_summary(state)
     combined_context = "\n\n".join(part for part in [gathered_text.strip(), cached_summary] if part.strip())
     context_block = combined_context if combined_context.strip() else \
         "(No context has been loaded yet this session — nothing to analyze.)"
+    analysis_user_content = f"Question:\n{user_question}\n\nRetrieved context:\n{context_block}"
 
-    analysis_messages = [
-        {"role": "system", "content": analysis_system},
-        {"role": "user", "content": f"Question:\n{user_question}\n\nRetrieved context:\n{context_block}"}
-    ]
+    if state.reasoning_model_key is None:
+        print("⚠️  No --reasoning-model configured; running /diagnose with the primary model only.")
+        llm, context_window = switcher.load(state.primary_model_key)
+        analysis_messages = [
+            {"role": "system", "content": analysis_system},
+            {"role": "user", "content": analysis_user_content}
+        ]
+        check_context_guardrail(analysis_messages, llm, context_window)
+        response_content, is_truncated, interrupted = stream_agent_response(llm, analysis_messages)
+        final_answer = sanitize_response(response_content) if not interrupted else None
+        error = "Analysis was interrupted." if interrupted else None
+    else:
+        print(f"\n🗑️  [Consult] Releasing GPU for the reasoning worker — your hardware fits one ~7B "
+              f"model in VRAM at a time, so {state.primary_model_key} needs to step aside temporarily...")
+        switcher.unload_current()
+        try:
+            print(f"\n🧠 [Consult] Running reasoning model in an isolated process...")
+            final_answer, error = run_reasoning_subprocess(
+                state.reasoning_model_key, state.kv_quantization_type, state.models_dir,
+                analysis_system, analysis_user_content
+            )
+        finally:
+            print(f"\n🔁 [Consult] Reloading {state.primary_model_key}...")
+            switcher.load(state.primary_model_key)
 
-    check_context_guardrail(analysis_messages, llm, context_window)
-
-    print("\n🧠 [Consult] Reasoning about the retrieved context...")
-    response_content, is_truncated, interrupted = stream_agent_response(llm, analysis_messages)
-
-    if not interrupted:
-        final_answer = sanitize_response(response_content)
+    if error:
+        print(f"\n⚠️  [Consult] Diagnose failed: {error}")
+    elif final_answer:
         print(f"\n[Consultant]: {final_answer}")
         state.messages.append({"role": "assistant", "content": final_answer})
     else:
-        print("\n⚠️  [Consult] Analysis interrupted.")
-
-    if state.reasoning_model_key is not None:
-        print(f"\n🔁 [Consult] Swapping back to {state.primary_model_key}...")
-        switcher.load(state.primary_model_key)
+        print("\n⚠️  [Consult] Diagnose produced no answer.")
 
     state.expect_plain_text = False
     state.state2_violations = 0
+    state.last_directive = None
 
 
 def main(state):
