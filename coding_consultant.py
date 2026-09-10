@@ -23,10 +23,7 @@ class ConsultantState:
     def __init__(self, parsed_args):
         self.messages = []
         self.session_cwd = os.getcwd()
-        self.consult_read_cache = {}  # {(tool_name, filepath, symbol_name, start_line, max_lines): tool_result}
-        # Tool names that must never be reachable from consult mode. Kept as a defense-in-depth
-        # guardrail just in case that the tool_call issued by the consultant ends up being a write operation
-        # for some reason.
+        self.consult_read_cache = {}
         self.forbidden_tools = frozenset({"write_file", "append_file", "patch_file", "replace_lines"})
         self.max_tool_calls_per_turn = 20
 
@@ -38,6 +35,20 @@ class ConsultantState:
 
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
 state = ConsultantState(parsed_args)
+
+
+def is_pure_load_request(user_input: str) -> bool:
+    """Checks if the user prompt is strictly requesting to load/read context without asking a task."""
+    lowered = user_input.strip().lower()
+    load_keywords = ("load ", "read ", "bring ", "fetch ", "show ")
+    task_keywords = ("how", "why", "change", "refactor", "modify", "add", "fix", "update", "draft", "write", "create",
+                     "implement", "start")
+
+    is_load_cmd = any(lowered.startswith(kw) or f" {kw}" in lowered for kw in load_keywords) or lowered.endswith(
+        "into context")
+    has_task_cmd = any(kw in lowered for kw in task_keywords) or "?" in lowered
+
+    return is_load_cmd and not has_task_cmd
 
 
 def handle_user_input(state, user_input, system_prompt):
@@ -63,7 +74,6 @@ def handle_user_input(state, user_input, system_prompt):
 
 
 def extract_tool_requests(response_content):
-    # --- 1. Regex extraction for <tool_call> tags ---
     raw_calls = re.findall(r'<tool_call>(.*?)</tool_call>', response_content, re.DOTALL)
     tool_requests = []
 
@@ -76,7 +86,6 @@ def extract_tool_requests(response_content):
             except json.JSONDecodeError:
                 continue
     else:
-        # --- 2. Fallback: Check if the model output a JSON array instead ---
         try:
             clean_content = response_content
             if "```json" in clean_content:
@@ -94,7 +103,6 @@ def extract_tool_requests(response_content):
         except Exception:
             pass
 
-        # --- 3. Ultimate Fallback: Fuzzy brace-counting extraction ---
         if not tool_requests:
             tool_requests = fuzzy_extract_tool_calls(response_content)
 
@@ -104,7 +112,6 @@ def extract_tool_requests(response_content):
 def process_tool_requests(state, response_content, tool_requests, real_tool_calls_this_turn):
     combined_results = ""
 
-    # --- PROCESS all extracted tools sequentially ---
     for tool_request in tool_requests:
         tool_name = tool_request.get("name")
         tool_args = tool_request.get("args", {})
@@ -122,7 +129,6 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
             if key in tool_args and not os.path.isabs(tool_args[key]):
                 tool_args[key] = os.path.abspath(os.path.join(state.session_cwd, tool_args[key]))
 
-        # --- CACHE INTERCEPT ---
         cache_key = None
         if tool_name in ("read_file", "read_symbol"):
             cache_key = (
@@ -132,15 +138,13 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
             if cache_key in state.consult_read_cache:
                 print(
                     f"📎 [Consult Cache] Reusing cached result for {tool_name} on {tool_args.get('filepath')}.")
-                combined_results += f"Result for {tool_name}:\n{state.consult_read_cache[cache_key]}\n\n"
+                combined_results += f"Result for {tool_name}:\n[Note: Content already loaded in context history]\n{state.consult_read_cache[cache_key]}\n\n"
                 continue
 
-        # --- MAX CALLS CHECK ---
         if real_tool_calls_this_turn >= state.max_tool_calls_per_turn:
             print("\n💬 [Consult] Tool call budget reached. Skipping remaining queued tools.")
             break
 
-        # --- EXECUTION ---
         print(f"\n⚠️  CONSULTANT REQUESTS EXECUTION: {tool_name}")
         print(f"Arguments: {tool_args}")
 
@@ -194,10 +198,8 @@ def main(state):
 
         state.messages.append({"role": "user", "content": user_input})
 
-        # --- Per-turn state ---
         real_tool_calls_this_turn = 0
 
-        # Internal Consultant Execution Loop
         while True:
             check_context_guardrail(state.messages, llm, context_window)
 
@@ -206,47 +208,49 @@ def main(state):
                 if interrupted:
                     break
 
-                # Save the model's output to history
                 state.messages.append({"role": "assistant", "content": response_content})
 
                 tool_requests = extract_tool_requests(response_content)
 
-                # HISTORY NORMALIZATION
                 if tool_requests:
-                    # Force the model's memory to look like perfect XML,
-                    # even if it hallucinated markdown blocks.
                     perfect_history = "\n".join(
                         [f'<tool_call>{json.dumps(req)}</tool_call>' for req in tool_requests])
                     state.messages.append({"role": "assistant", "content": perfect_history})
                 else:
-                    # Plain text reply — nothing left to do this turn.
-                    state.messages.append({"role": "assistant", "content": response_content})
                     print("\n💬 [Consult] Agent finished. Awaiting your next question.")
                     break
 
-                combined_results, real_tool_calls_this_turn = process_tool_requests(state, response_content, tool_requests, real_tool_calls_this_turn)
+                combined_results, real_tool_calls_this_turn = process_tool_requests(state, response_content,
+                                                                                    tool_requests,
+                                                                                    real_tool_calls_this_turn)
 
-                # --- FEEDBACK & LOOP CONTINUATION ---
                 if combined_results.strip():
+                    if is_pure_load_request(user_input):
+                        directive = (
+                            "[SYSTEM DIRECTIVE: Context loaded. Acknowledge to the user that "
+                            "the context is ready and ask what they would like to do next.]"
+                        )
+                    else:
+                        directive = (
+                            f'[SYSTEM DIRECTIVE: Context retrieved. Fulfill the user\'s explicit request now: '
+                            f'"{user_input}". Provide the complete solution or code draft directly. DO NOT output any tool calls.]'
+                        )
+
                     state.messages.append({
                         "role": "user",
-                        "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n[SYSTEM DIRECTIVE: Context loaded. If the user's original request was strictly to read or load a file/context, simply reply with 'Context loaded. What's next?'. However, if the user asked a question, requested a refactor, or wanted code tweaked, fulfill that specific request immediately right now. DO NOT output further tool calls.]"
+                        "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n{directive}"
                     })
 
-                # If we hit the budget, add a forceful prompt to make the model stop tooling and answer
                 if real_tool_calls_this_turn >= state.max_tool_calls_per_turn:
                     state.messages.append({
                         "role": "user",
                         "content": "Tool limit reached for this turn. Provide your final answer in plain text based on the retrieved context."
                     })
 
-                # The loop cycles back up to stream_agent_response() here
-                # so the LLM can generate text (or more tool calls) based on the combined_results!
-
             except json.JSONDecodeError as e:
                 print(f"\n❌ [Parser Interceptor] Halted syntax loop.")
                 state.messages.append({"role": "user",
-                                 "content": f"Formatting Failure: {e}\nRemember to use raw unescaped content, no extra wrapping."})
+                                       "content": f"Formatting Failure: {e}\nRemember to use raw unescaped content, no extra wrapping."})
                 break
             except Exception as e:
                 print(f"\n[Error during generation]: {e}")
