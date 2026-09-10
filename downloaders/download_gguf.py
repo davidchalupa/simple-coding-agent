@@ -26,6 +26,10 @@ models = {
         "repo_id": "NousResearch/Hermes-3-Llama-3.1-8B-GGUF",
         "filename": "Hermes-3-Llama-3.1-8B.Q4_K_M.gguf"
     },
+    "mistral-nemo-12b-iq4xs": {
+        "repo_id": "bartowski/Mistral-Nemo-Instruct-2407-GGUF",
+        "filename": "Mistral-Nemo-Instruct-2407-IQ4_XS.gguf"
+    },
     "mistral-nemo-12b": {
         "repo_id": "bartowski/Mistral-Nemo-Instruct-2407-GGUF",
         "filename": "Mistral-Nemo-Instruct-2407-Q3_K_S.gguf"

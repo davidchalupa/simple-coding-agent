@@ -2,16 +2,31 @@ import os
 import sys
 import psutil
 from llama_cpp import Llama, llama_cpp
+from enum import Enum
 
+class KVQuantizationType(Enum):
+    NONE = None
+    Q8_0 = "GGML_TYPE_Q8_0"
+    Q4_0 = "GGML_TYPE_Q4_0"
 
 class LLMInitializer:
-    def __init__(self, target_path, loaded_model_name, active_config, disable_quantization):
+    def __init__(self, target_path, loaded_model_name, active_config, kv_quantization_type):
         self.target_path = target_path
         self.loaded_model_name = loaded_model_name
         self.active_config = active_config
         self.llm = None
-        self.disable_quantization = disable_quantization
+        self.disable_quantization = kv_quantization_type == KVQuantizationType.NONE
         self.CONTEXT_WINDOW = None
+
+        self.type_k = None
+        self.type_v = None
+
+        if kv_quantization_type == KVQuantizationType.Q8_0:
+            self.type_k = llama_cpp.GGML_TYPE_Q8_0
+            self.type_v = llama_cpp.GGML_TYPE_Q8_0
+        elif kv_quantization_type == KVQuantizationType.Q4_0:
+            self.type_k = llama_cpp.GGML_TYPE_Q4_0
+            self.type_v = llama_cpp.GGML_TYPE_Q4_0
 
     def get_system_ram_gb(self):
         """Returns total system RAM in gigabytes."""
@@ -57,8 +72,8 @@ class LLMInitializer:
                             n_ctx=ctx_size,
                             n_threads=6,
                             n_batch=512,
-                            type_k=llama_cpp.GGML_TYPE_Q8_0 if not self.disable_quantization else None,
-                            type_v=llama_cpp.GGML_TYPE_Q8_0 if not self.disable_quantization else None,
+                            type_k=self.type_k,
+                            type_v=self.type_v,
                             n_gpu_layers=n_layers,
                             chat_format=self.active_config["chat_format"],
                             flash_attn=True,
@@ -82,6 +97,8 @@ class LLMInitializer:
                         n_ctx=ctx_size,
                         n_threads=6,
                         n_batch=512,
+                        type_k=self.type_k,
+                        type_v=self.type_v,
                         n_gpu_layers=0,
                         chat_format=self.active_config["chat_format"],
                         verbose=False

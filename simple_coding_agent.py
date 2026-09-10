@@ -33,7 +33,8 @@ class AgentState:
         self.allow_patch = parsed_args["allow_patch"]
         self.force_testing = parsed_args["force_testing"]
         self.self_verify_py_writes = parsed_args["self_verify_py_writes"]
-        self.disable_kv_quantization = parsed_args["disable_kv_quantization"]
+        self.kv_quantization_type = parsed_args["kv_quantization_type"]
+
 
         self.active_config = MODEL_REGISTRY[parsed_args["model"]]
 
@@ -363,8 +364,8 @@ def check_and_handle_loop_guardrail(tool_name, tool_args, agent_flags):
     return False
 
 
-def handle_self_verification_and_healing(state, execution_state, tool_name, tool_args, agent_flags,
-                                         tool_reinforcement, was_mod):
+def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flags,
+                                         tool_reinforcement, was_mod, tool_result):
     if state.self_verify_py_writes and was_mod and tool_name in ["write_file", "append_file",
                                                                  "patch_file", "replace_lines"]:
         fp = tool_args.get("filepath", "")
@@ -418,7 +419,7 @@ def handle_self_verification_and_healing(state, execution_state, tool_name, tool
 def main(state, execution_state):
     system_prompt = build_system_prompt()
 
-    initializer = LLMInitializer(state.target_path, state.loaded_model_name, state.active_config, state.disable_kv_quantization)
+    initializer = LLMInitializer(state.target_path, state.loaded_model_name, state.active_config, state.kv_quantization_type)
     initializer.initialize_agent()
     context_window = initializer.CONTEXT_WINDOW
     llm = initializer.llm
@@ -580,9 +581,9 @@ def main(state, execution_state):
                         print(f"   Result: {tool_result}")
 
                     # Self-Verification
-                    success, tool_reinforcement = handle_self_verification_and_healing(state, execution_state,
-                                                                                       tool_name, tool_args,
-                                                                                       agent_flags, tool_reinforcement, was_mod)
+                    success, tool_reinforcement = handle_self_verification_and_healing(state, tool_name, tool_args,
+                                                                                       agent_flags, tool_reinforcement, was_mod,
+                                                                                       tool_result)
                     if not success:
                         state.messages.append(
                             {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})

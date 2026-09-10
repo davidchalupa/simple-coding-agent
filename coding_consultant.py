@@ -29,7 +29,7 @@ class ConsultantState:
 
         self.active_config = MODEL_REGISTRY[parsed_args["model"]]
         self.loaded_model_name = self.active_config["display_name"]
-        self.disable_kv_quantization = parsed_args["disable_kv_quantization"]
+        self.kv_quantization_type = parsed_args["kv_quantization_type"]
         self.target_path = Path(__file__).resolve().parent / "models" / self.active_config["filename"]
 
 
@@ -181,7 +181,7 @@ def main(state):
     system_prompt = build_consultant_system_prompt()
 
     initializer = LLMInitializer(state.target_path, state.loaded_model_name, state.active_config,
-                                 state.disable_kv_quantization)
+                                 state.kv_quantization_type)
     initializer.initialize_agent()
     context_window = initializer.CONTEXT_WINDOW
     llm = initializer.llm

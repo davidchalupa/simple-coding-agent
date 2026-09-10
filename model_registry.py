@@ -34,6 +34,13 @@ MODEL_REGISTRY = {
         "max_context": 16384,
         "gpu_layers": [-1, 32, 24, 16]
     },
+    "mistral-nemo-12b-iq4xs": {
+        "filename": "Mistral-Nemo-Instruct-2407-IQ4_XS.gguf",
+        "display_name": "Mistral Nemo 12B Instruct (IQ4_XS)",
+        "chat_format": "chatml",
+        "max_context": 16384,
+        "gpu_layers": [-1, 32, 24, 16]  # Full offload if using Q8_0 or Q4_0 KV cache
+    },
     "mistral-nemo-12b": {
         "filename": "Mistral-Nemo-Instruct-2407-Q3_K_S.gguf",
         "display_name": "Mistral Nemo 12B Instruct (Q3_K_S)",
