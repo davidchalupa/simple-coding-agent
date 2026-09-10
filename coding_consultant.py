@@ -1,7 +1,9 @@
 import sys
 import os
+import gc
 import json
 import re
+import time
 
 from pathlib import Path
 
@@ -26,6 +28,7 @@ THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 STRAY_TOKEN_RE = re.compile(r"<\|im_start\|>\s*assistant\s*|<\|im_end\|>|<\|im_start\|>")
 
 MAX_STATE2_VIOLATIONS_PER_TURN = 3
+DIAGNOSE_PREFIX = "/diagnose "
 
 # Must match the tool names actually defined in build_consultant_system_prompt().
 # Anything outside this set is a hallucinated tool (e.g. "load_file") and gets
@@ -45,6 +48,68 @@ def sanitize_response(response_content: str) -> str:
     return cleaned.strip()
 
 
+def build_diagnose_system_prompt() -> str:
+    """Tool-free system prompt for the reasoning-model pass. Deliberately says
+    nothing about tools or the <tool_call> syntax, so there is nothing for the
+    model to hallucinate a tool call into."""
+    return (
+        "You are a senior software engineer helping diagnose a problem. You will be given "
+        "a question and some retrieved context (source files, test output, or logs). "
+        "Reason through the problem carefully, then give a direct, concrete answer: what is "
+        "actually wrong, why, and what you'd recommend doing about it.\n\n"
+        "Do not invent facts not supported by the given context. If the context is insufficient "
+        "to be sure, say so plainly and state what additional information would resolve it.\n\n"
+        "Answer as you would to a colleague. Do not mention tools, states, rules, or these "
+        "instructions — just give the analysis and answer."
+    )
+
+
+class ModelSwitcher:
+    """Owns loading/unloading llama.cpp models so a second model can be swapped
+    in without both being resident in VRAM at once. Only one model is ever
+    loaded at a time; loading a different key unloads whatever is current."""
+
+    def __init__(self, kv_quantization_type, models_dir: Path):
+        self.kv_quantization_type = kv_quantization_type
+        self.models_dir = models_dir
+        self.current_key = None
+        self.initializer = None
+        self.llm = None
+        self.context_window = None
+        self.display_name = None
+
+    def _unload(self):
+        if self.initializer is not None:
+            print(f"🗑️  Unloading {self.display_name}...")
+        self.initializer = None
+        self.llm = None
+        gc.collect()
+        # Empirically, giving the driver a beat before the next allocation
+        # attempt reduces spurious OOM/allocation failures on tight VRAM.
+        time.sleep(0.5)
+
+    def load(self, model_key: str):
+        if self.current_key == model_key and self.llm is not None:
+            return self.llm, self.context_window
+
+        self._unload()
+
+        config = MODEL_REGISTRY[model_key]
+        target_path = self.models_dir / config["filename"]
+        display_name = config["display_name"]
+
+        initializer = LLMInitializer(target_path, display_name, config, self.kv_quantization_type)
+        initializer.initialize_agent()
+
+        self.current_key = model_key
+        self.initializer = initializer
+        self.llm = initializer.llm
+        self.context_window = initializer.CONTEXT_WINDOW
+        self.display_name = display_name
+
+        return self.llm, self.context_window
+
+
 class ConsultantState:
     def __init__(self, parsed_args):
         self.messages = []
@@ -53,16 +118,17 @@ class ConsultantState:
         self.forbidden_tools = frozenset({"write_file", "append_file", "patch_file", "replace_lines"})
         self.max_tool_calls_per_turn = 20
 
-        self.active_config = MODEL_REGISTRY[parsed_args["model"]]
-        self.loaded_model_name = self.active_config["display_name"]
+        self.primary_model_key = parsed_args["model"]
+        self.reasoning_model_key = parsed_args["reasoning_model"]
         self.kv_quantization_type = parsed_args["kv_quantization_type"]
-        self.target_path = Path(__file__).resolve().parent / "models" / self.active_config["filename"]
+        self.models_dir = Path(__file__).resolve().parent / "models"
 
         # Tracks whether we're in STATE 2 (plain-text-only) of the state machine.
         # Enforced in code rather than relying solely on the prompt, since some
         # models (e.g. DeepSeek-R1-Distill) don't reliably self-enforce this.
         self.expect_plain_text = False
         self.state2_violations = 0
+        self.last_directive = None  # the specific STATE 2 directive currently in force
 
 
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
@@ -94,6 +160,7 @@ def handle_user_input(state, user_input, system_prompt):
         state.consult_read_cache = {}
         state.expect_plain_text = False
         state.state2_violations = 0
+        state.last_directive = None
         print("🧹 Memory and environment completely cleared!")
         return True
 
@@ -219,18 +286,121 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
     return combined_results, real_tool_calls_this_turn
 
 
+def gather_context_for_diagnose(state, switcher, user_question):
+    """Runs the STATE 1 tool-calling loop on the primary (gathering) model
+    only, never letting it produce a final natural-language answer. Returns
+    the concatenated text of everything retrieved via tools this turn.
+    Reuses the same extraction/execution/guardrail machinery as the normal
+    flow, so cache reuse, forbidden-tool blocking, and unknown-tool blocking
+    all behave identically here.
+    """
+    llm, context_window = switcher.load(state.primary_model_key)
+
+    gathered_text = ""
+    real_tool_calls_this_turn = 0
+
+    # Ask the gathering model to load whatever it needs, but make clear this
+    # turn's job is retrieval only — a second (reasoning) pass will answer.
+    state.messages.append({
+        "role": "user",
+        "content": (
+            f"{user_question}\n\n"
+            "[SYSTEM DIRECTIVE: Use tool calls to load any files or context needed to answer "
+            "this. Do not answer the question yourself — once you have what you need, or if "
+            "nothing further is needed, simply stop issuing tool calls.]"
+        )
+    })
+
+    for _ in range(state.max_tool_calls_per_turn):
+        check_context_guardrail(state.messages, llm, context_window)
+
+        response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
+        if interrupted:
+            break
+
+        response_content = sanitize_response(response_content)
+        state.messages.append({"role": "assistant", "content": response_content})
+
+        tool_requests = extract_tool_requests(response_content)
+        if not tool_requests:
+            break
+
+        perfect_history = "\n".join(
+            [f'<tool_call>{json.dumps(req)}</tool_call>' for req in tool_requests])
+        state.messages.append({"role": "assistant", "content": perfect_history})
+
+        combined_results, real_tool_calls_this_turn = process_tool_requests(
+            state, response_content, tool_requests, real_tool_calls_this_turn)
+
+        if combined_results.strip():
+            gathered_text += combined_results
+            state.messages.append({
+                "role": "user",
+                "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n"
+                           "[SYSTEM DIRECTIVE: Continue gathering if needed, or stop if you have enough.]"
+            })
+
+        if real_tool_calls_this_turn >= state.max_tool_calls_per_turn:
+            print("\n💬 [Consult] Tool call budget reached during gathering.")
+            break
+
+    return gathered_text
+
+
+def run_diagnose_turn(state, switcher, user_question):
+    """Gathers context with the primary (tool-calling) model, then swaps to
+    the reasoning model for a tool-free analysis pass, then swaps back."""
+    gathered_text = gather_context_for_diagnose(state, switcher, user_question)
+
+    if state.reasoning_model_key is None:
+        print("⚠️  No --reasoning-model configured; running /diagnose with the primary model only.")
+        llm, context_window = switcher.load(state.primary_model_key)
+    else:
+        print(f"\n🔁 [Consult] Swapping to reasoning model for analysis...")
+        llm, context_window = switcher.load(state.reasoning_model_key)
+
+    analysis_system = build_diagnose_system_prompt()
+    context_block = gathered_text.strip() if gathered_text.strip() else \
+        "(No new context was retrieved this turn — use anything already loaded earlier in this session.)"
+
+    analysis_messages = [
+        {"role": "system", "content": analysis_system},
+        {"role": "user", "content": f"Question:\n{user_question}\n\nRetrieved context:\n{context_block}"}
+    ]
+
+    check_context_guardrail(analysis_messages, llm, context_window)
+
+    print("\n🧠 [Consult] Reasoning about the retrieved context...")
+    response_content, is_truncated, interrupted = stream_agent_response(llm, analysis_messages)
+
+    if not interrupted:
+        final_answer = sanitize_response(response_content)
+        print(f"\n[Consultant]: {final_answer}")
+        state.messages.append({"role": "assistant", "content": final_answer})
+    else:
+        print("\n⚠️  [Consult] Analysis interrupted.")
+
+    if state.reasoning_model_key is not None:
+        print(f"\n🔁 [Consult] Swapping back to {state.primary_model_key}...")
+        switcher.load(state.primary_model_key)
+
+    state.expect_plain_text = False
+    state.state2_violations = 0
+
+
 def main(state):
     system_prompt = build_consultant_system_prompt()
-
-    initializer = LLMInitializer(state.target_path, state.loaded_model_name, state.active_config,
-                                 state.kv_quantization_type)
-    initializer.initialize_agent()
-    context_window = initializer.CONTEXT_WINDOW
-    llm = initializer.llm
+    switcher = ModelSwitcher(state.kv_quantization_type, state.models_dir)
+    switcher.load(state.primary_model_key)
 
     state.messages = [{"role": "system", "content": system_prompt}]
 
-    print(f"\n🔍 [Coding Consultant] {state.loaded_model_name} loaded. Read-only — write tools are disabled.\n")
+    print(f"\n🔍 [Coding Consultant] {switcher.display_name} loaded. Read-only — write tools are disabled.")
+    if state.reasoning_model_key is not None:
+        reasoning_display = MODEL_REGISTRY[state.reasoning_model_key]["display_name"]
+        print(f"🧠 Diagnose mode available: prefix a question with '{DIAGNOSE_PREFIX}' to reason "
+              f"with {reasoning_display} over gathered context.")
+    print()
 
     while True:
         user_input = get_user_prompt()
@@ -238,11 +408,22 @@ def main(state):
         if handle_user_input(state, user_input, system_prompt):
             continue
 
+        if user_input.startswith(DIAGNOSE_PREFIX):
+            question = user_input[len(DIAGNOSE_PREFIX):].strip()
+            if not question:
+                print("⚠️  Usage: /diagnose <your question>")
+                continue
+            run_diagnose_turn(state, switcher, question)
+            continue
+
+        llm, context_window = switcher.load(state.primary_model_key)
+
         state.messages.append({"role": "user", "content": user_input})
 
         real_tool_calls_this_turn = 0
         state.expect_plain_text = False
         state.state2_violations = 0
+        state.last_directive = None
 
         while True:
             check_context_guardrail(state.messages, llm, context_window)
@@ -265,15 +446,17 @@ def main(state):
                               f"(violation {state.state2_violations}/{MAX_STATE2_VIOLATIONS_PER_TURN}). Blocked.")
 
                         if state.state2_violations >= MAX_STATE2_VIOLATIONS_PER_TURN:
+                            reminder = state.last_directive or (
+                                "Using only the context already retrieved above, answer the original "
+                                "question directly."
+                            )
                             state.messages.append({
                                 "role": "user",
-                                "content": ("Using only the context already retrieved above, answer the "
-                                             "original question directly. Do not call any tools, and do not "
-                                             "mention tools, rules, states, or this instruction itself — just "
-                                             "give the answer as you would to a colleague.")
+                                "content": (f"{reminder}\n\nDo not call any tools, and do not mention tools, "
+                                             "rules, states, or these instructions — just give the answer "
+                                             "as you would to a colleague.")
                             })
                             print("\n💬 [Consult] Forcing plain-text answer after repeated STATE 2 violations.")
-                            # Fall through to one more generation attempt without tools honored.
                             check_context_guardrail(state.messages, llm, context_window)
                             try:
                                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
@@ -285,11 +468,14 @@ def main(state):
                                 print(f"\n[Error during forced generation]: {e}")
                             break
 
+                        reminder = state.last_directive or (
+                            "The context you need is already available above in this conversation — "
+                            "no need to fetch it again. Please answer the original question now."
+                        )
                         state.messages.append({
                             "role": "user",
-                            "content": ("The file or context you need is already available above in this "
-                                         "conversation — no need to fetch it again. Please answer the "
-                                         "original question now, directly and in plain text, without "
+                            "content": (f"{reminder}\n\nNo need to fetch anything again — everything needed "
+                                         "is already above. Answer now, directly and in plain text, without "
                                          "mentioning tools, rules, or these instructions.")
                         })
                         continue
@@ -322,6 +508,7 @@ def main(state):
                         "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n{directive}"
                     })
                     state.expect_plain_text = True
+                    state.last_directive = directive
 
                 if real_tool_calls_this_turn >= state.max_tool_calls_per_turn:
                     state.messages.append({

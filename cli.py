@@ -15,6 +15,10 @@ def parse_cli_arguments(model_registry_keys):
     parser = argparse.ArgumentParser(description="Coding Agent CLI")
     parser.add_argument("--model", type=str, default="qwen2.5-7b", choices=model_registry_keys,
                         help="Select the model to run from the registry.")
+    parser.add_argument("--reasoning-model", type=str, default=None, choices=model_registry_keys,
+                        help="Optional second model used for /diagnose in the consultant. "
+                             "Loaded in place of --model at the State 1 -> State 2 transition, "
+                             "then unloaded and swapped back. Omit to disable /diagnose.")
     parser.add_argument("--disable-replace", action="store_true",
                         help="Disable the patch_file tool (forces full file rewrites).")
     parser.add_argument("--force-testing", action="store_true",
@@ -30,6 +34,7 @@ def parse_cli_arguments(model_registry_keys):
 
     # Derived configuration variables
     model = args.model
+    reasoning_model = args.reasoning_model
     allow_patch = not args.disable_replace
     force_testing = args.force_testing
     self_verify_py_writes = not args.disable_self_verify
@@ -37,6 +42,7 @@ def parse_cli_arguments(model_registry_keys):
 
     return {
         "model": model,
+        "reasoning_model": reasoning_model,
         "allow_patch": allow_patch,
         "force_testing": force_testing,
         "self_verify_py_writes": self_verify_py_writes,
