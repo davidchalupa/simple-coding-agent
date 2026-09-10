@@ -19,6 +19,32 @@ from cli import parse_cli_arguments
 from model_registry import MODEL_REGISTRY
 
 
+# --- Sanitization for models that emit reasoning traces / chat-template leakage ---
+# (e.g. DeepSeek-R1-Distill-Qwen). No-op for models that never produce these,
+# such as Qwen2.5-Coder, so behavior there is unchanged.
+THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+STRAY_TOKEN_RE = re.compile(r"<\|im_start\|>\s*assistant\s*|<\|im_end\|>|<\|im_start\|>")
+
+MAX_STATE2_VIOLATIONS_PER_TURN = 3
+
+# Must match the tool names actually defined in build_consultant_system_prompt().
+# Anything outside this set is a hallucinated tool (e.g. "load_file") and gets
+# rejected the same way forbidden_tools are, rather than reaching execute_tool.
+KNOWN_TOOLS = frozenset({"list_tree", "search_codebase", "read_file", "read_symbol", "run_cmd"})
+
+
+def sanitize_response(response_content: str) -> str:
+    """Strip reasoning blocks and leaked chat-template tokens before the
+    content is parsed for tool calls or stored in message history."""
+    cleaned = THINK_BLOCK_RE.sub("", response_content)
+    if "<think>" in cleaned and "</think>" not in cleaned:
+        # Truncated mid-thought (e.g. hit a stop condition) — drop everything
+        # from the opening <think> tag onward, since it's unfinished reasoning.
+        cleaned = cleaned.split("<think>")[0]
+    cleaned = STRAY_TOKEN_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
 class ConsultantState:
     def __init__(self, parsed_args):
         self.messages = []
@@ -31,6 +57,12 @@ class ConsultantState:
         self.loaded_model_name = self.active_config["display_name"]
         self.kv_quantization_type = parsed_args["kv_quantization_type"]
         self.target_path = Path(__file__).resolve().parent / "models" / self.active_config["filename"]
+
+        # Tracks whether we're in STATE 2 (plain-text-only) of the state machine.
+        # Enforced in code rather than relying solely on the prompt, since some
+        # models (e.g. DeepSeek-R1-Distill) don't reliably self-enforce this.
+        self.expect_plain_text = False
+        self.state2_violations = 0
 
 
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
@@ -60,6 +92,8 @@ def handle_user_input(state, user_input, system_prompt):
         state.messages = [{"role": "system", "content": system_prompt}]
         state.session_cwd = os.getcwd()
         state.consult_read_cache = {}
+        state.expect_plain_text = False
+        state.state2_violations = 0
         print("🧹 Memory and environment completely cleared!")
         return True
 
@@ -119,6 +153,14 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
         if tool_name in state.forbidden_tools:
             print(f"🛑 [Consult Guardrail] Blocked disallowed tool `{tool_name}`.")
             combined_results += f"System Alert: Tool `{tool_name}` is strictly disabled.\n\n"
+            continue
+
+        if tool_name not in KNOWN_TOOLS:
+            print(f"🛑 [Consult Guardrail] Blocked unknown tool `{tool_name}` (not a real tool).")
+            combined_results += (
+                f"System Alert: `{tool_name}` is not a valid tool. "
+                f"Valid tools are: {', '.join(sorted(KNOWN_TOOLS))}.\n\n"
+            )
             continue
 
         if tool_name in ("read_file", "run_cmd") and "<payload>" in response_content:
@@ -199,6 +241,8 @@ def main(state):
         state.messages.append({"role": "user", "content": user_input})
 
         real_tool_calls_this_turn = 0
+        state.expect_plain_text = False
+        state.state2_violations = 0
 
         while True:
             check_context_guardrail(state.messages, llm, context_window)
@@ -208,11 +252,48 @@ def main(state):
                 if interrupted:
                     break
 
+                response_content = sanitize_response(response_content)
+
                 state.messages.append({"role": "assistant", "content": response_content})
 
                 tool_requests = extract_tool_requests(response_content)
 
                 if tool_requests:
+                    if state.expect_plain_text:
+                        state.state2_violations += 1
+                        print(f"\n🛑 [Consult Guardrail] Model attempted tool call(s) in STATE 2 "
+                              f"(violation {state.state2_violations}/{MAX_STATE2_VIOLATIONS_PER_TURN}). Blocked.")
+
+                        if state.state2_violations >= MAX_STATE2_VIOLATIONS_PER_TURN:
+                            state.messages.append({
+                                "role": "user",
+                                "content": ("Using only the context already retrieved above, answer the "
+                                             "original question directly. Do not call any tools, and do not "
+                                             "mention tools, rules, states, or this instruction itself — just "
+                                             "give the answer as you would to a colleague.")
+                            })
+                            print("\n💬 [Consult] Forcing plain-text answer after repeated STATE 2 violations.")
+                            # Fall through to one more generation attempt without tools honored.
+                            check_context_guardrail(state.messages, llm, context_window)
+                            try:
+                                response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
+                                if not interrupted:
+                                    response_content = sanitize_response(response_content)
+                                    state.messages.append({"role": "assistant", "content": response_content})
+                                    print("\n💬 [Consult] Agent finished (forced). Awaiting your next question.")
+                            except Exception as e:
+                                print(f"\n[Error during forced generation]: {e}")
+                            break
+
+                        state.messages.append({
+                            "role": "user",
+                            "content": ("The file or context you need is already available above in this "
+                                         "conversation — no need to fetch it again. Please answer the "
+                                         "original question now, directly and in plain text, without "
+                                         "mentioning tools, rules, or these instructions.")
+                        })
+                        continue
+
                     perfect_history = "\n".join(
                         [f'<tool_call>{json.dumps(req)}</tool_call>' for req in tool_requests])
                     state.messages.append({"role": "assistant", "content": perfect_history})
@@ -240,12 +321,14 @@ def main(state):
                         "role": "user",
                         "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n{directive}"
                     })
+                    state.expect_plain_text = True
 
                 if real_tool_calls_this_turn >= state.max_tool_calls_per_turn:
                     state.messages.append({
                         "role": "user",
                         "content": "Tool limit reached for this turn. Provide your final answer in plain text based on the retrieved context."
                     })
+                    state.expect_plain_text = True
 
             except json.JSONDecodeError as e:
                 print(f"\n❌ [Parser Interceptor] Halted syntax loop.")
