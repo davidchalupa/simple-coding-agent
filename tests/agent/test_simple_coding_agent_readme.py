@@ -3,11 +3,11 @@ import shutil
 
 import pytest
 
-from tests.test_utils.test_runner import run_automated_coding_task_test
+from tests.agent.test_utils.test_runner import run_automated_coding_task_test
 
 
 # Project root directory (parent of the tests/ folder)
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 TESTS_DIR = os.path.dirname(__file__)
 
 

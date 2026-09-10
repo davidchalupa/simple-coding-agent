@@ -3,7 +3,7 @@ import shutil
 import py_compile
 import pytest
 
-from tests.test_utils.test_runner import run_automated_coding_task_test
+from tests.agent.test_utils.test_runner import run_automated_coding_task_test
 
 
 def setup_invcalc_sandbox(sandbox_dir):

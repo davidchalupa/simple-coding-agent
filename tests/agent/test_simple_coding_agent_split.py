@@ -1,7 +1,7 @@
 import os
 import shutil
 
-from tests.test_utils.test_runner import run_automated_coding_task_test, validate_all_python_files_importable
+from tests.agent.test_utils.test_runner import run_automated_coding_task_test, validate_all_python_files_importable
 
 
 def setup_split_fixture(target_file, validation_test=None):

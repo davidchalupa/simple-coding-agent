@@ -1,4 +1,4 @@
-from tests.test_utils.test_runner import run_automated_coding_task_test
+from tests.agent.test_utils.test_runner import run_automated_coding_task_test
 
 
 def test_agent_workflow_two_sum():
