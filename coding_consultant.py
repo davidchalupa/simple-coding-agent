@@ -246,6 +246,22 @@ class ConsultantState:
         self.state2_violations = 0
         self.last_directive = None  # the specific STATE 2 directive currently in force
 
+    def reset(self):
+        self.messages = []
+        self.session_cwd = os.getcwd()
+        self.consult_read_cache = {}
+        self.forbidden_tools = frozenset({"write_file", "append_file", "patch_file", "replace_lines"})
+        self.max_tool_calls_per_turn = 20
+
+        self.models_dir = Path(__file__).resolve().parent / "models"
+
+        # Tracks whether we're in STATE 2 (plain-text-only) of the state machine.
+        # Enforced in code rather than relying solely on the prompt, since some
+        # models (e.g. DeepSeek-R1-Distill) don't reliably self-enforce this.
+        self.expect_plain_text = False
+        self.state2_violations = 0
+        self.last_directive = None  # the specific STATE 2 directive currently in force
+
 
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
 state = ConsultantState(parsed_args)
