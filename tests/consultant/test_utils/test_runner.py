@@ -26,9 +26,6 @@ def run_read_only_coding_task_test(
     test_sandbox = tempfile.mkdtemp(prefix="agent_coding_sandbox_")
 
     try:
-        # Clear the consult cache before each test run
-        coding_consultant.state.consult_read_cache.clear()
-
         # --- Environment Setup ---
         if zip_file_path:
             # os.path.join safely uses absolute paths if zip_file_path is already absolute

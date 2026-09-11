@@ -143,10 +143,17 @@ def main():
                 stream_agent_response(
                     initializer.llm,
                     messages,
+                    agent_label="\n🧠 [Reasoning]: ",
                 )
             )
 
         except Exception as e:
+            print(
+                f"\n❌ [Reasoning Worker] Generation failed: {e}",
+                file=sys.stderr,
+                flush=True,
+            )
+
             write_result(
                 result_path,
                 None,
@@ -168,6 +175,11 @@ def main():
             result_path,
             final_answer,
             None,
+        )
+
+        print(
+            "\n🧠 [Reasoning Worker] Done.",
+            flush=True,
         )
 
         # Explicit cleanup before process exit. The OS will also clean up

@@ -3,9 +3,21 @@ import hashlib
 
 from common.guardrail_tools import _detect_repetition, _extract_completed_payloads
 
+# Catches a single character (digit, letter, punctuation — anything) repeated
+# this many times consecutively with no newline in between. This is
+# deliberately independent of the newline-gated _detect_repetition() check
+# below: a pathological run like a single long line of "0000...0" has no
+# newlines in it at all, so the line-based check structurally cannot see it
+# no matter how long it runs. This check runs on every chunk, unconditionally.
+_CHAR_RUN_RE = re.compile(r"(.)\1{49,}")
+# How many trailing characters of `content` to scan each time. Small and
+# cheap — this runs once per streamed chunk — but large enough to catch a
+# run that started slightly before the current chunk.
+_CHAR_RUN_SCAN_WINDOW = 300
 
-def stream_agent_response(llm, messages, stop=None, temperature=0.1):
-    print(f"\n[Agent]: ", end="", flush=True)
+
+def stream_agent_response(llm, messages, stop=None, temperature=0.1, repeat_penalty=1.15, agent_label="\n[Agent]: "):
+    print(agent_label, end="", flush=True)
     content, finish_reason = "", None
     seen_payload_hashes = set()
 
@@ -14,6 +26,7 @@ def stream_agent_response(llm, messages, stop=None, temperature=0.1):
                 messages=messages,
                 stream=True,
                 temperature=temperature,
+                repeat_penalty=repeat_penalty,
                 max_tokens=4096,
                 stop=stop or []
         ):
@@ -23,6 +36,16 @@ def stream_agent_response(llm, messages, stop=None, temperature=0.1):
                 new_text = delta['content']
                 print(new_text, end="", flush=True)
                 content += new_text
+
+                # --- NEWLINE-INDEPENDENT CHARACTER-RUN CHECK ---
+                # Runs every chunk, regardless of newlines or formatting.
+                # Catches degenerate single-character runaway generation
+                # (e.g. a wall of repeated digits) that the line-based and
+                # JSON-block checks below cannot see by construction.
+                if _CHAR_RUN_RE.search(content[-_CHAR_RUN_SCAN_WINDOW:]):
+                    print("\n\n🛑 [System]: Runaway character repetition detected. Forcing halt.")
+                    finish_reason = "repetition_loop"
+                    break
 
                 is_real_newline = '\n' in new_text
                 is_escaped_newline = '\\n' in new_text or (
