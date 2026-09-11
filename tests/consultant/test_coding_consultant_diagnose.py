@@ -8,14 +8,14 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
 def test_consultant_workflow_consultant_agent_diagnose():
     input_queue = [
-        "Load `coding_consultant.py` into context.",
+        # "Load `coding_consultant.py` into context.",
+        # "/send",
+
+        "Load `main()` function from `coding_consultant.py` into context.",
         "/send",
 
-        # "Load `main()` function from `coding_consultant.py` into context.",
-        # "/send",
-        #
-        # "Load `ConsultantState` from `coding_consultant.py` into context.",
-        # "/send",
+        "Load `ConsultantState` from `coding_consultant.py` into context.",
+        "/send",
 
         "Load `tests/consultant/test_utils/test_runner.py` into context.",
         "/send",
