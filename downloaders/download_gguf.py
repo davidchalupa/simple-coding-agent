@@ -22,10 +22,6 @@ models = {
         "repo_id": "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
         "filename": "DeepSeek-R1-Distill-Qwen-7B-Q6_K.gguf"
     },
-    "deepseek-r1-distill-qwen-14b-iq3m": {
-        "repo_id": "bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF",
-        "filename": "DeepSeek-R1-Distill-Qwen-14B-IQ3_M.gguf"
-    },
     "deepseek-r1-distill-qwen-14b-q3ks": {
         "repo_id": "bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF",
         "filename": "DeepSeek-R1-Distill-Qwen-14B-Q3_K_S.gguf"
