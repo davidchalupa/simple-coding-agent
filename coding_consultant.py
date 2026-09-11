@@ -246,36 +246,58 @@ class ConsultantState:
         self.state2_violations = 0
         self.last_directive = None  # the specific STATE 2 directive currently in force
 
-    def reset(self):
-        self.messages = []
-        self.session_cwd = os.getcwd()
-        self.consult_read_cache = {}
-        self.forbidden_tools = frozenset({"write_file", "append_file", "patch_file", "replace_lines"})
-        self.max_tool_calls_per_turn = 20
-
-        self.models_dir = Path(__file__).resolve().parent / "models"
-
-        # Tracks whether we're in STATE 2 (plain-text-only) of the state machine.
-        # Enforced in code rather than relying solely on the prompt, since some
-        # models (e.g. DeepSeek-R1-Distill) don't reliably self-enforce this.
-        self.expect_plain_text = False
-        self.state2_violations = 0
-        self.last_directive = None  # the specific STATE 2 directive currently in force
-
 
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
 state = ConsultantState(parsed_args)
 
 
+def summarize_loaded_targets(tool_requests):
+    """Human-readable summary of what a round of tool calls just loaded, used
+    to synthesize a deterministic acknowledgment for pure-load requests
+    instead of asking the model to generate one (see is_pure_load_request)."""
+    parts = []
+    for req in tool_requests:
+        name = req.get("name")
+        args = req.get("args", {}) or {}
+        filepath = args.get("filepath")
+        symbol = args.get("symbol_name")
+        dirpath = args.get("dir_path")
+        if name == "read_symbol" and filepath and symbol:
+            parts.append(f"`{symbol}` from `{os.path.basename(filepath)}`")
+        elif filepath:
+            parts.append(f"`{os.path.basename(filepath)}`")
+        elif dirpath:
+            parts.append(f"the directory listing for `{dirpath}`")
+
+    seen = set()
+    unique_parts = []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            unique_parts.append(p)
+
+    return ", ".join(unique_parts) if unique_parts else "the requested content"
+
+
+BACKTICK_SPAN_RE = re.compile(r'`[^`]*`')
+
+
 def is_pure_load_request(user_input: str) -> bool:
     """Checks if the user prompt is strictly requesting to load/read context without asking a task."""
-    lowered = user_input.strip().lower()
+    # Strip backtick-quoted spans (filenames, symbols, paths) before keyword
+    # matching. Otherwise a quoted identifier that happens to contain a task
+    # word — e.g. `test_..._refactor.py` — falsely triggers the task-keyword
+    # check and misclassifies a plain load request as a task request, which
+    # then tells the model to "provide the complete solution directly" and
+    # it dumps the whole file back instead of just acknowledging the load.
+    stripped = BACKTICK_SPAN_RE.sub(' ', user_input)
+    lowered = stripped.strip().lower()
     load_keywords = ("load ", "read ", "bring ", "fetch ", "show ")
     task_keywords = ("how", "why", "change", "refactor", "modify", "add", "fix", "update", "draft", "write", "create",
                      "implement", "start")
 
-    is_load_cmd = any(lowered.startswith(kw) or f" {kw}" in lowered for kw in load_keywords) or lowered.endswith(
-        "into context")
+    is_load_cmd = any(lowered.startswith(kw) or f" {kw}" in lowered for kw in load_keywords) or (
+        "into context" in lowered)
     has_task_cmd = any(kw in lowered for kw in task_keywords) or "?" in lowered
 
     return is_load_cmd and not has_task_cmd
@@ -945,8 +967,22 @@ def main(state):
                                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
                                 if not interrupted:
                                     response_content = sanitize_response(response_content)
-                                    state.messages.append({"role": "assistant", "content": response_content})
-                                    print("\n💬 [Consult] Agent finished (forced). Awaiting your next question.")
+                                    if extract_tool_requests(response_content):
+                                        # Never let a raw tool-call string become the
+                                        # visible "answer" — even the forced attempt
+                                        # tried to call a tool again.
+                                        fallback = (
+                                            "I wasn't able to produce a plain-text answer after "
+                                            "repeated attempts. The context should already be loaded "
+                                            "above — try rephrasing your request."
+                                        )
+                                        print(f"\n[Agent]: {fallback}")
+                                        state.messages.append({"role": "assistant", "content": fallback})
+                                        print("\n⚠️  [Consult] Forced attempt still tried to call a tool "
+                                              "— used a fallback message instead.")
+                                    else:
+                                        state.messages.append({"role": "assistant", "content": response_content})
+                                        print("\n💬 [Consult] Agent finished (forced). Awaiting your next question.")
                             except Exception as e:
                                 print(f"\n[Error during forced generation]: {e}")
                             break
@@ -976,15 +1012,33 @@ def main(state):
 
                 if combined_results.strip():
                     if is_pure_load_request(user_input):
-                        directive = (
-                            "[SYSTEM DIRECTIVE: Context loaded. Acknowledge to the user that "
-                            "the context is ready and ask what they would like to do next.]"
+                        # Deterministic case: we already know exactly what
+                        # the acknowledgment should say, so synthesize it
+                        # directly instead of asking the model to produce
+                        # one. This is the fix for a real pathology: on a
+                        # pure "load X into context" turn, Qwen would often
+                        # just re-emit the same tool call instead of
+                        # acknowledging, sometimes even after being forced —
+                        # skipping generation for this narrow, boilerplate
+                        # case removes that failure mode entirely rather
+                        # than just reducing it.
+                        summary = summarize_loaded_targets(tool_requests)
+                        synthesized_answer = (
+                            f"Context loaded — {summary} is now available. "
+                            f"What would you like to do next?"
                         )
-                    else:
-                        directive = (
-                            f'[SYSTEM DIRECTIVE: Context retrieved. Fulfill the user\'s explicit request now: '
-                            f'"{user_input}". Provide the complete solution or code draft directly. DO NOT output any tool calls.]'
-                        )
+                        print(f"\n[Agent]: {synthesized_answer}")
+                        state.messages.append({"role": "assistant", "content": synthesized_answer})
+                        print("\n💬 [Consult] Agent finished. Awaiting your next question.")
+                        state.expect_plain_text = False
+                        state.state2_violations = 0
+                        state.last_directive = None
+                        break
+
+                    directive = (
+                        f'[SYSTEM DIRECTIVE: Context retrieved. Fulfill the user\'s explicit request now: '
+                        f'"{user_input}". Provide the complete solution or code draft directly. DO NOT output any tool calls.]'
+                    )
 
                     state.messages.append({
                         "role": "user",
