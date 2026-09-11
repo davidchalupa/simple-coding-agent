@@ -113,4 +113,18 @@ MODEL_REGISTRY = {
         "max_context": 24576,
         "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
+    "deepseek-r1-distill-qwen-14b-iq3m": {
+        "filename": "DeepSeek-R1-Distill-Qwen-14B-IQ3_M.gguf",
+        "display_name": "DeepSeek R1 Distill Qwen 14B (IQ3_M)",
+        "chat_format": "chatml",
+        "max_context": 16384,
+        "gpu_layers": [-1, 32, 24, 16],  # try full, then progressively more CPU spillover
+    },
+    "deepseek-r1-distill-qwen-14b-q3ks": {
+        "filename": "DeepSeek-R1-Distill-Qwen-14B-Q3_K_S.gguf",
+        "display_name": "DeepSeek R1 Distill Qwen 14B (Q3_K_S)",
+        "chat_format": "chatml",
+        "max_context": 16384,
+        "gpu_layers": [-1, 32, 24, 16],  # try full, then progressively more CPU spillover
+    },
 }

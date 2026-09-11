@@ -56,6 +56,7 @@ def run_read_only_coding_task_test(
                     pristine_contents[sandbox_dest_path] = f.read()
 
         # State Injection
+        coding_consultant.state.consult_read_cache.clear()
         coding_consultant.state.session_cwd = repo_sandbox
         coding_consultant.state.force_testing = True
 
