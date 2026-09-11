@@ -7,12 +7,6 @@ from enum import Enum
 from llama_cpp import Llama, llama_cpp
 
 
-class KVQuantizationType(Enum):
-    NONE = None
-    Q8_0 = "GGML_TYPE_Q8_0"
-    Q4_0 = "GGML_TYPE_Q4_0"
-
-
 class LLMInitializer:
     """
     Owns one Llama instance and all configuration needed to construct it.
@@ -32,11 +26,11 @@ class LLMInitializer:
         self.type_k = None
         self.type_v = None
 
-        if kv_quantization_type == KVQuantizationType.Q8_0:
+        if kv_quantization_type == "GGML_TYPE_Q8_0":
             self.type_k = llama_cpp.GGML_TYPE_Q8_0
             self.type_v = llama_cpp.GGML_TYPE_Q8_0
 
-        elif kv_quantization_type == KVQuantizationType.Q4_0:
+        elif kv_quantization_type == "GGML_TYPE_Q4_0":
             self.type_k = llama_cpp.GGML_TYPE_Q4_0
             self.type_v = llama_cpp.GGML_TYPE_Q4_0
 
@@ -180,7 +174,7 @@ class LLMInitializer:
 
                         print(
                             f"🚀 Loaded on GPU [{label}] "
-                            f"(Context: {self.CONTEXT_WINDOW})."
+                            f"(Context: {self.CONTEXT_WINDOW}; KV quantization type: {self.type_k}, {self.type_v})."
                         )
 
                         return

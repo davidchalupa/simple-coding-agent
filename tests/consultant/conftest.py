@@ -19,6 +19,12 @@ def pytest_addoption(parser):
         default="qwen2.5-7b",
         help="Specify model key from MODEL_REGISTRY (e.g. deepseek-r1-distill-qwen-7b)."
     )
+    parser.addoption(
+        "--kv-quantization-type",
+        action="store",
+        default="GGML_TYPE_Q8_0",
+        help="Specify KV cache quantization type (e.g. None, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0)."
+    )
 
 
 @pytest.fixture(autouse=True)
