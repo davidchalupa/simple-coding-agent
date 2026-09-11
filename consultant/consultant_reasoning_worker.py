@@ -13,8 +13,18 @@ Contract:
           "kv_quantization_type": str | null,
           "models_dir": str,
           "system_prompt": str,
-          "user_content": str
+          "question": str,
+          "gathered_text": str,
+          "cached_entries": [{"tool_name": str, "label": str, "content": str}, ...]
       }
+
+  question/gathered_text/cached_entries arrive separately (not as one
+  pre-assembled prompt) because the context-budget trimming can only be done
+  correctly AFTER the model is loaded here — this is the only place the real
+  CONTEXT_WINDOW and a working tokenizer are available. A model can land on a
+  smaller context than its registry max (e.g. 10240 instead of 32768 if
+  larger sizes fail to allocate), so trimming decided in the parent process
+  would be guessing against the wrong number.
 
 Result:
   {"content": "<final answer>", "error": null}
@@ -93,12 +103,15 @@ def main():
         from model_registry import MODEL_REGISTRY
         from common.llm_init import LLMInitializer
         from common.output_handler import stream_agent_response
+        from consultant.guardrail_tools import build_trimmed_evidence_block
 
         model_key = payload["model_key"]
         kv_quantization_type = payload.get("kv_quantization_type")
         models_dir = Path(payload["models_dir"])
         system_prompt = payload["system_prompt"]
-        user_content = payload["user_content"]
+        question = payload["question"]
+        gathered_text = payload.get("gathered_text", "")
+        cached_entries = payload.get("cached_entries", [])
 
         config = MODEL_REGISTRY[model_key]
 
@@ -121,6 +134,27 @@ def main():
                 "Model failed to load.",
             )
             sys.exit(1)
+
+        # Trim evidence to fit the ACTUAL loaded context window (which may
+        # be smaller than the registry's max_context if larger sizes failed
+        # to allocate) — must happen here, after load, not in the parent.
+        user_content, budget_note = build_trimmed_evidence_block(
+            initializer.llm,
+            initializer.CONTEXT_WINDOW,
+            question,
+            system_prompt,
+            gathered_text,
+            cached_entries,
+        )
+
+        if user_content is None:
+            # Fresh evidence alone doesn't fit — refuse rather than attempt
+            # a truncated, mid-file analysis.
+            write_result(result_path, None, budget_note)
+            sys.exit(1)
+
+        if budget_note:
+            print(f"\nℹ️  [Reasoning Worker] {budget_note}", flush=True)
 
         messages = [
             {

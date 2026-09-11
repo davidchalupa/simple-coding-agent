@@ -92,6 +92,13 @@ MODEL_REGISTRY = {
         "max_context": 32768,
         "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
+    "qwen3.5-9b": {
+        "filename": "bartowski/Qwen3.5-9B-Instruct-GGUF",
+        "display_name": "Qwen 3.5 9B",
+        "chat_format": "chatml",
+        "max_context": 32768,
+        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
+    },
     "deepseek-r1-distill-qwen-7b": {
         "filename": "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
         "display_name": "DeepSeek R1 Distill Qwen 7B (Q4_K_M)",

@@ -70,11 +70,11 @@ models = {
         "repo_id": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
         "filename": "Qwen2.5-Coder-7B-Instruct-Q6_K.gguf"
     },
-    "qwen-3.5-9b": {
+    "qwen3.5-9b": {
         "repo_id": "bartowski/Qwen3.5-9B-Instruct-GGUF",
         "filename": "Qwen3.5-9B-Instruct-Q4_K_M.gguf"
     },
-    "qwen-3-8b": {
+    "qwen3-8b": {
         "repo_id": "bartowski/Qwen3-8B-Instruct-GGUF",
         "filename": "Qwen3-8B-Instruct-Q4_K_M.gguf"
     },
