@@ -16,7 +16,7 @@ _CHAR_RUN_RE = re.compile(r"(.)\1{49,}")
 _CHAR_RUN_SCAN_WINDOW = 300
 
 
-def stream_agent_response(llm, messages, stop=None, temperature=0.1, repeat_penalty=1.15, agent_label="\n[Agent]: "):
+def stream_agent_response(llm, messages, stop=None, temperature=0.1, repeat_penalty=1.1, agent_label="\n[Agent]: "):
     print(agent_label, end="", flush=True)
     content, finish_reason = "", None
     seen_payload_hashes = set()

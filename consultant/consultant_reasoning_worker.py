@@ -177,6 +177,15 @@ def main():
                 stream_agent_response(
                     initializer.llm,
                     messages,
+                    # Higher than the shared default: this call site does long
+                    # free-text reasoning generation, which is where the
+                    # degenerate character-repetition runaway was observed.
+                    # NOT used elsewhere (agent tool-calling, consultant
+                    # normal flow, gather phase) because it measurably
+                    # corrupts short, meaningful token repeats like the
+                    # quote pair in `''.join(...)` — see the lcs.py
+                    # regression this caused when it was the shared default.
+                    repeat_penalty=1.15,
                     agent_label="\n🧠 [Reasoning]: ",
                 )
             )

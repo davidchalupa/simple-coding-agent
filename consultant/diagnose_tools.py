@@ -12,7 +12,6 @@ from common.guardrail_tools import check_context_guardrail
 from consultant.system_prompt_builder import build_diagnose_system_prompt
 from consultant.guardrail_tools import sanitize_response, build_trimmed_evidence_block
 from consultant.tool_parser import extract_tool_requests
-from consultant.tool_processor import process_tool_requests
 
 
 MAX_DIAGNOSE_GATHER_ROUNDS = 6
@@ -349,6 +348,12 @@ def run_diagnose_turn(state, switcher, user_question):
                 stream_agent_response(
                     llm,
                     analysis_messages,
+                    # Same rationale as consultant_reasoning_worker.py: this
+                    # is long free-text reasoning, not tool-calling, so the
+                    # higher repeat_penalty used to guard against degenerate
+                    # repetition is appropriate here specifically — not as
+                    # the shared default (see output_handler.py).
+                    repeat_penalty=1.15,
                     agent_label="\n🧠 [Diagnose]: ",
                 )
             )
