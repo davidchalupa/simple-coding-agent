@@ -71,12 +71,12 @@ models = {
         "filename": "Qwen2.5-Coder-7B-Instruct-Q6_K.gguf"
     },
     "qwen3.5-9b": {
-        "repo_id": "bartowski/Qwen3.5-9B-Instruct-GGUF",
-        "filename": "Qwen3.5-9B-Instruct-Q4_K_M.gguf"
+        "repo_id": "unsloth/Qwen3.5-9B-GGUF",
+        "filename": "Qwen3.5-9B-Q5_K_M.gguf"
     },
     "qwen3-8b": {
-        "repo_id": "bartowski/Qwen3-8B-Instruct-GGUF",
-        "filename": "Qwen3-8B-Instruct-Q4_K_M.gguf"
+        "repo_id": "bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF",
+        "filename": "Qwen_Qwen3-VL-8B-Instruct-Q5_K_M.gguf"
     },
     "starcoder": {
         "repo_id": "QuantFactory/starcoder2-7b-instruct-GGUF",

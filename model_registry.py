@@ -34,6 +34,20 @@ MODEL_REGISTRY = {
         "max_context": 16384,
         "gpu_layers": [-1, 32, 24, 16]
     },
+    "qwen3-8b": {
+        "filename": "Qwen_Qwen3-VL-8B-Instruct-Q5_K_M.gguf",
+        "display_name": "Qwen 3 8B (Q5_K_M)",
+        "chat_format": "chatml",
+        "max_context": 32768,
+        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
+    },
+    "qwen3.5-9b": {
+        "filename": "Qwen3.5-9B-Q5_K_M.gguf",
+        "display_name": "Qwen 3.5 9B (Q5_K_M)",
+        "chat_format": "chatml",
+        "max_context": 32768,
+        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
+    },
     "mistral-nemo-12b-iq4xs": {
         "filename": "Mistral-Nemo-Instruct-2407-IQ4_XS.gguf",
         "display_name": "Mistral Nemo 12B Instruct (IQ4_XS)",
@@ -84,20 +98,6 @@ MODEL_REGISTRY = {
         "chat_format": "llama-2",  # CodeLlama uses Llama-2 [INST] prompt formatting
         "max_context": 16384,
         "gpu_layers": [-1, 32, 24, 16],  # try full, then progressively more CPU spillover
-    },
-    "qwen3-8b": {
-        "filename": "Qwen_Qwen3-8B-Q4_K_M.gguf",
-        "display_name": "Qwen 3 8B",
-        "chat_format": "chatml",
-        "max_context": 32768,
-        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
-    },
-    "qwen3.5-9b": {
-        "filename": "bartowski/Qwen3.5-9B-Instruct-GGUF",
-        "display_name": "Qwen 3.5 9B",
-        "chat_format": "chatml",
-        "max_context": 32768,
-        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
     "deepseek-r1-distill-qwen-7b": {
         "filename": "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",

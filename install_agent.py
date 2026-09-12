@@ -1,4 +1,5 @@
 import curses
+import os
 
 from model_registry import MODEL_REGISTRY
 from downloaders.download_gguf import download_model
@@ -7,10 +8,25 @@ from downloaders.download_gguf import download_model
 def main(stdscr):
     curses.curs_set(0)  # Hide the cursor
 
-    # Initialize model states
+    # Initialize model states based on existing models in ./models/
     model_states = {model: False for model in MODEL_REGISTRY}
+
+    # Path to models directory
+    MODELS_DIR = "./models/"
+
+    def check_model_exists(model_name):
+        """Returns True if model file exists, else False."""
+        return os.path.exists(os.path.join(MODELS_DIR, model_name))
+
+    # Pre-check existing models — mark with [X] if found
+    for model, metadata in MODEL_REGISTRY.items():
+        if check_model_exists(metadata["filename"]):
+            model_states[model] = True
+
+    # Default activation (if needed)
     model_names = list(MODEL_REGISTRY.keys())
-    model_states["qwen2.5-7b"] = True  # Default activation
+    # You can keep "qwen2.5-7b" as default or remove it — depends on your use case
+    # model_states["qwen2.5-7b"] = True  # Uncomment if you want to enforce this
 
     def show_current_menu(chosen_model_index):
         stdscr.clear()
@@ -19,9 +35,8 @@ def main(stdscr):
 
         y = 3
         cursor_y = y + chosen_model_index
-        for model, details in MODEL_REGISTRY.items():
-            display_name = details["display_name"]
-
+        for model in MODEL_REGISTRY:
+            display_name = MODEL_REGISTRY[model]["display_name"]
             checkbox = "[X]" if model_states[model] else "[ ]"
 
             stdscr.addstr(y, 0, f"{checkbox} {display_name}", curses.A_NORMAL)
@@ -74,7 +89,8 @@ def main(stdscr):
                 continue
             chosen_model_index -= 1
         elif key == ord(' '):
-            model_states[model_names[chosen_model_index]] = not model_states[model_names[chosen_model_index]]
+            model = list(MODEL_REGISTRY.keys())[chosen_model_index]
+            model_states[model] = not model_states[model]
             continue
 
 curses.wrapper(main)
