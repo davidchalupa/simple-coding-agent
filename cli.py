@@ -17,7 +17,7 @@ def parse_cli_arguments(model_registry_keys):
                         help="Select the model to run from the registry.")
     parser.add_argument("--reasoning-model", type=str, default=None, choices=model_registry_keys,
                         help="Optional second model used for /diagnose in the consultant. "
-                             "Loaded in place of --model at the State 1 -> State 2 transition, "
+                             "Loaded in place of --model at the Reading -> Answering transition, "
                              "then unloaded and swapped back. Omit to disable /diagnose.")
     parser.add_argument("--disable-replace", action="store_true",
                         help="Disable the patch_file tool (forces full file rewrites).")

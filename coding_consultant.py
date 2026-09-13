@@ -20,7 +20,7 @@ from cli import parse_cli_arguments
 from model_registry import MODEL_REGISTRY
 
 
-MAX_STATE2_VIOLATIONS_PER_TURN = 3
+MAX_ANSWERING_VIOLATIONS_PER_TURN = 3
 DIAGNOSE_RE = re.compile(r'^/diagnose\b\s*(.*)', re.IGNORECASE | re.DOTALL)
 
 class ConsultantState:
@@ -36,12 +36,12 @@ class ConsultantState:
         self.kv_quantization_type = parsed_args["kv_quantization_type"]
         self.models_dir = Path(__file__).resolve().parent / "models"
 
-        # Tracks whether we're in STATE 2 (plain-text-only) of the state machine.
+        # Tracks whether we're in Answering Mode (plain-text-only).
         # Enforced in code rather than relying solely on the prompt, since some
         # models (e.g. DeepSeek-R1-Distill) don't reliably self-enforce this.
         self.expect_plain_text = False
-        self.state2_violations = 0
-        self.last_directive = None  # the specific STATE 2 directive currently in force
+        self.answering_violations = 0
+        self.last_directive = None  # the specific Answering Mode directive currently in force
 
 
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
@@ -86,7 +86,7 @@ def handle_user_input(state, user_input, system_prompt):
         state.session_cwd = os.getcwd()
         state.consult_read_cache = {}
         state.expect_plain_text = False
-        state.state2_violations = 0
+        state.answering_violations = 0
         state.last_directive = None
         print("🧹 Memory and environment completely cleared!")
         return True
@@ -136,7 +136,7 @@ def main(state):
 
         real_tool_calls_this_turn = 0
         state.expect_plain_text = False
-        state.state2_violations = 0
+        state.answering_violations = 0
         state.last_directive = None
 
         while True:
@@ -155,11 +155,11 @@ def main(state):
 
                 if tool_requests:
                     if state.expect_plain_text:
-                        state.state2_violations += 1
-                        print(f"\n🛑 [Consult Guardrail] Model attempted tool call(s) in STATE 2 "
-                              f"(violation {state.state2_violations}/{MAX_STATE2_VIOLATIONS_PER_TURN}). Blocked.")
+                        state.answering_violations += 1
+                        print(f"\n🛑 [Consult Guardrail] Model attempted tool call(s) in Answering Mode "
+                              f"(violation {state.answering_violations}/{MAX_ANSWERING_VIOLATIONS_PER_TURN}). Blocked.")
 
-                        if state.state2_violations >= MAX_STATE2_VIOLATIONS_PER_TURN:
+                        if state.answering_violations >= MAX_ANSWERING_VIOLATIONS_PER_TURN:
                             reminder = state.last_directive or (
                                 "Using only the context already retrieved above, answer the original "
                                 "question directly."
@@ -170,7 +170,7 @@ def main(state):
                                              "rules, states, or these instructions — just give the answer "
                                              "as you would to a colleague.")
                             })
-                            print("\n💬 [Consult] Forcing plain-text answer after repeated STATE 2 violations.")
+                            print("\n💬 [Consult] Forcing plain-text answer after repeated Answering Mode violations.")
                             check_context_guardrail(state.messages, llm, context_window)
                             try:
                                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
@@ -224,13 +224,7 @@ def main(state):
                         # Deterministic case: we already know exactly what
                         # the acknowledgment should say, so synthesize it
                         # directly instead of asking the model to produce
-                        # one. This is the fix for a real pathology: on a
-                        # pure "load X into context" turn, Qwen would often
-                        # just re-emit the same tool call instead of
-                        # acknowledging, sometimes even after being forced —
-                        # skipping generation for this narrow, boilerplate
-                        # case removes that failure mode entirely rather
-                        # than just reducing it.
+                        # one.
                         summary = summarize_loaded_targets(tool_requests)
                         synthesized_answer = (
                             f"Context loaded — {summary} is now available. "
@@ -240,7 +234,7 @@ def main(state):
                         state.messages.append({"role": "assistant", "content": synthesized_answer})
                         print("\n💬 [Consult] Agent finished. Awaiting your next question.")
                         state.expect_plain_text = False
-                        state.state2_violations = 0
+                        state.answering_violations = 0
                         state.last_directive = None
                         break
 
