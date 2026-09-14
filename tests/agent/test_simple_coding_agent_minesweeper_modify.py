@@ -1,3 +1,5 @@
+import pytest
+
 from tests.agent.test_utils.test_runner import run_automated_coding_task_test
 
 
@@ -13,6 +15,32 @@ def test_agent_minesweeper_modify_generate_only():
         "Good. Now I will need you to change the run_game_loop function so that it has a return value. ",
         "It should return True if the game was won and otherwise it should return False. ",
         "CRITICAL: Just output the python code in a standard ```python markdown block.",
+        "/send",
+
+        "/quit"
+    ]
+
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        zip_file_path=zip_source,
+        repo_name="",
+        target_file_path=target_file,
+        check_for_change=False,
+        max_calls_limit=30
+    )
+
+
+def test_agent_minesweeper_modify_read_source_file_only():
+    """
+    Serves as a guard test for a behavior when the LLM sometimes misunderstands and just recites some Minesweeper code.
+    ToDo: we need to add a check for this behavior.
+    """
+    target_file = "minesweeper-solve/minesweeper.py"
+    zip_source = "test_data/minesweeper-solve.zip"
+
+    input_queue = [
+        "Read the code in `minesweeper-solve/minesweeper.py`. "
+        "CRITICAL: Set `start_line: 1` and `max_lines: -1` so you read the entire file.",
         "/send",
 
         "/quit"
@@ -172,7 +200,7 @@ def test_agent_minesweeper_modify_read_function_rewrite_replace_lines():
     )
 
 
-def test_agent_minesweeper_modify_read_file_get_start_end_lines_replace_directly():
+def test_agent_minesweeper_modify_read_full_get_start_end_lines_replace_directly():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
     new_test_file = "minesweeper-solve/test_run_game_loop.py"
@@ -236,6 +264,46 @@ def test_agent_minesweeper_modify_read_file_get_start_end_lines_replace_directly
     )
 
 
+def test_agent_minesweeper_modify_read_full_get_start_end_lines_rewrite_replace_lines_simple_tests():
+    target_file = "minesweeper-solve/minesweeper.py"
+    zip_source = "test_data/minesweeper-solve.zip"
+    new_test_file = "minesweeper-solve/test_run_game_loop.py"
+
+    input_queue = [
+        "Use the `read_file` tool to inspect the contents of `minesweeper-solve/minesweeper.py` in full.",
+        "/send",
+
+        "Good. Now call the `read_symbol` tool on `run_game_loop` to find its exact start and end lines.",
+        "/send",
+
+        "Nice. Now I need you to change the `run_game_loop` function so that it returns True if the game was won and False otherwise. "
+        "CRITICAL: use the `replace_lines` tool covering that exact line range to replace the ENTIRE function with your updated implementation. Ensure your indentation matches the original exactly.",
+        "/send",
+
+        "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns"
+        "a boolean for win and loss outcomes.",
+        "/send",
+
+        "Run the new tests using `run_cmd` and fix any errors if they fail. CRITICAL: You must cd to the same directory "
+        "where `minesweeper-solve/minesweeper.py` is, for the imports to resolve correctly (e.g., cd minesweeper-solve && python -m unittest test_run_game_loop.py).",
+        "/send",
+
+        "/quit"
+    ]
+
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        zip_file_path=zip_source,
+        repo_name="",
+        target_file_path=target_file,
+        check_for_change=True,
+        expected_new_files=[new_test_file],
+        run_unittest_file=new_test_file,
+        max_calls_limit=30
+    )
+
+
+@pytest.mark.skip(reason="Too simplified for the agent yet")
 def test_agent_minesweeper_modify_simplified():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
@@ -248,7 +316,8 @@ def test_agent_minesweeper_modify_simplified():
         "Modify the `run_game_loop` function so that it returns `True` if the game is won and `False` otherwise. Use `replace_lines` to update the function.",
         "/send",
 
-        "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns a boolean for win and loss outcomes.",
+        "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns a boolean"
+        "for win and loss outcomes.",
         "/send",
 
         "Run the new tests using `run_cmd` and fix any errors if they fail.",

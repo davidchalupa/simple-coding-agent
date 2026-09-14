@@ -341,28 +341,38 @@ def check_and_handle_identical_write(tool_args, state, agent_flags, content_key)
         return False
 
 
-def check_and_handle_loop_guardrail(tool_name, tool_args, agent_flags):
+def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
     """
-    Checks if the same tool call has been attempted recently and blocks it if it has.
-    If the same tool call is repeated more than twice, it triggers a circuit breaker.
+    Checks if the same tool call has been attempted recently and blocks it.
+    Returns (intercepted: bool, should_break: bool)
     """
-    curr_sig = f"{tool_name}:{str(tool_args)}"
+    curr_sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
     agent_flags.recent_tool_signatures.append(curr_sig)
-    agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-6:]  # keep a short rolling window
+    agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-6:]  # short rolling window
 
     repeat_count = agent_flags.recent_tool_signatures.count(curr_sig)
     if repeat_count >= 2:
         agent_flags.consecutive_errors += 1
+
         if agent_flags.consecutive_errors >= 3:
-            print("🛑 [Circuit Breaker] Agent loop. Forcing turn end.")
-            return True
-        state.messages.append({"role": "user",
-                               "content": f"System Alert: This exact tool call has been attempted {repeat_count} times "
-                                          f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
-                                          f"underlying issue (e.g. re-check content/context requirements) or try a "
-                                          f"different approach."})
-        return True
-    return False
+            print("🛑 [Circuit Breaker] Agent loop detected. Forcing turn end.")
+            alert_msg = (
+                f"🛑 CRITICAL SYSTEM INTERVENTION: You have attempted the exact same '{tool_name}' tool call "
+                f"{repeat_count} times without changing parameters or fixing errors. Tool execution is HALTED.\n"
+                f"DO NOT issue another tool call. Stop calling tools now and explain in plain text what went wrong and what step you will take next."
+            )
+            state.messages.append({"role": "user", "content": alert_msg})
+            return True, True  # (intercepted=True, should_break=True)
+
+        alert_msg = (
+            f"System Alert: This exact tool call has been attempted {repeat_count} times "
+            f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
+            f"underlying issue (e.g. re-check content/context requirements) or try a different approach."
+        )
+        state.messages.append({"role": "user", "content": alert_msg})
+        return True, False  # (intercepted=True, should_break=False)
+
+    return False, False
 
 
 def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flags,
@@ -538,7 +548,10 @@ def main(state, execution_state):
                 if check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_flags):
                     continue
 
-                if check_and_handle_loop_guardrail(tool_name, tool_args, agent_flags):
+                intercepted, should_break = check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags)
+                if intercepted:
+                    if should_break:
+                        break
                     continue
 
                 # --- EXECUTION ---
