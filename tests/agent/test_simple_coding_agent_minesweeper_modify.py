@@ -28,7 +28,7 @@ def test_agent_minesweeper_modify_generate_only():
     )
 
 
-def test_agent_minesweeper_modify_with_replace_lines():
+def test_agent_minesweeper_modify_very_detailed():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
     new_test_file = "minesweeper-solve/test_run_game_loop.py"
@@ -106,17 +106,16 @@ def test_agent_minesweeper_modify_with_replace_lines():
     )
 
 
-def test_agent_minesweeper_modify_with_ablated_tools_multi_stage():
+def test_agent_minesweeper_modify_read_function_rewrite_replace_lines():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
     new_test_file = "minesweeper-solve/test_run_game_loop.py"
 
     input_queue = [
-        "Use the `read_symbol` tool to load `run_game_loop` function of `minesweeper-solve/minesweeper.py` into context "
-        "and get its exact start and end lines.",
+        "Use the `read_symbol` tool to load `run_game_loop` function of `minesweeper-solve/minesweeper.py` into context. "
+        "CRITICAL: Remember its exact start and end lines, you will need them later.",
         "/send",
 
-        # --- ABLATED PROMPTS: Tool hand-holding removed but in two stages - first write code, then apply `replace_lines` ---
         "Good. Now I will need you to change the run_game_loop function so that it has a return value. ",
         "It should return True if the game was won and otherwise it should return False. ",
         "CRITICAL: Just output the python code in a standard ```python markdown block.",
@@ -173,22 +172,21 @@ def test_agent_minesweeper_modify_with_ablated_tools_multi_stage():
     )
 
 
-def test_agent_minesweeper_modify_with_ablated_tools():
+def test_agent_minesweeper_modify_read_file_get_start_end_lines_replace_directly():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
     new_test_file = "minesweeper-solve/test_run_game_loop.py"
 
     input_queue = [
-        # "Read the code in `minesweeper-solve/minesweeper.py`. "
-        # "CRITICAL: Set `start_line: 1` and `max_lines: -1` so you read the entire file.",
-        "Use the `read_file` tool to inspect the contents of `minesweeper-solve/minesweeper.py` in full."
+        "Use the `read_file` tool to inspect the contents of `minesweeper-solve/minesweeper.py` in full.",
         "/send",
 
-        # --- ABLATED PROMPT: Tool hand-holding removed ---
-        "Good. Now I need you to change the `run_game_loop` function so that it returns True if the game was won and False otherwise.\n\n"
-        "CRITICAL STEPS:\n"
-        "1. FIRST, call the `read_symbol` tool on `run_game_loop` to find its exact start and end lines.\n"
-        "2. SECOND, use the `replace_lines` tool covering that exact line range to replace the ENTIRE function with your updated implementation. Ensure your indentation matches the original exactly.",
+        "Good. Now call the `read_symbol` tool on `run_game_loop` to find its exact start and end lines.",
+        "/send",
+
+        # # --- ABLATED PROMPT: Tool hand-holding removed ---
+        "Nice. Now I need you to change the `run_game_loop` function so that it returns True if the game was won and False otherwise. "
+        "CRITICAL: use the `replace_lines` tool covering that exact line range to replace the ENTIRE function with your updated implementation. Ensure your indentation matches the original exactly.",
         "/send",
 
         # --- RETAINED PROMPT: Domain logic and testing hints kept intact ---
