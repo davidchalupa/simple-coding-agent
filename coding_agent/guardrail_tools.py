@@ -99,3 +99,44 @@ def run_self_verification(filepath):
         # Failsafe: never let a linter crash take down the agent loop.
         print(f"⚠️ [Self-Verification] Linter itself raised an error, skipping check: {e}")
         return None
+
+
+def check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_flags):
+    """
+    Prevents replace_lines from executing if the file was not inspected
+    in recent turns via read_file or read_symbol.
+    """
+    if tool_name != "replace_lines":
+        return False
+
+    target_fp = tool_args.get("filepath", "")
+    target_filename = os.path.basename(target_fp)
+
+    # Check the last 8 messages for a read_file/read_symbol call on this file
+    recent_messages = state.messages[-8:]
+    file_was_read = False
+
+    for msg in recent_messages:
+        content_str = str(msg.get("content", ""))
+
+        # Check if an assistant message issued a read call for this file
+        if msg.get("role") in ("assistant", "model"):
+            if ("read_file" in content_str or "read_symbol" in content_str) and target_filename in content_str:
+                file_was_read = True
+                break
+
+    if not file_was_read:
+        print(f"🛡️  [Guardrail] Blocked replace_lines on '{target_filename}' — file was not read recently.")
+        agent_flags.consecutive_errors += 1
+
+        state.messages.append({
+            "role": "user",
+            "content": (
+                f"System Alert: `replace_lines` on '{target_fp}' was BLOCKED because you have not inspected "
+                f"this file recently. You MUST call `read_symbol` or `read_file` first to get exact, updated "
+                f"line numbers and anchor snippets before making edits."
+            )
+        })
+        return True
+
+    return False

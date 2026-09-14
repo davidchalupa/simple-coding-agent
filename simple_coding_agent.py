@@ -18,7 +18,8 @@ from coding_agent.system_prompt_builder import build_system_prompt
 from coding_agent.native_helpers import (get_repo_structure, generate_requirements_native, gather_deep_context,
                                          gather_deep_context_ast)
 from coding_agent.guardrail_tools import (verify_sandbox_health, auto_heal_newline_escaping,
-                                          find_last_code_block, run_self_verification)
+                                          find_last_code_block, run_self_verification,
+                                          check_and_handle_unread_replace_lines)
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import split_tools
 from coding_agent import payload_parser
@@ -533,6 +534,9 @@ def main(state, execution_state):
                         if tool_name == "write_file":
                             if check_and_handle_identical_write(tool_args, state, agent_flags, content_key):
                                 continue
+
+                if check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_flags):
+                    continue
 
                 if check_and_handle_loop_guardrail(tool_name, tool_args, agent_flags):
                     continue
