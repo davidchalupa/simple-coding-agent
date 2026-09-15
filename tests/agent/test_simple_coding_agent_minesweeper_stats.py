@@ -109,6 +109,6 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
         expected_file="benchmark.py",
         run_script_file="benchmark.py",
         expected_keywords=["import"],
-        custom_output_validator=check_benchmark_success_rates,
+        script_output_validator=check_benchmark_success_rates,
         max_calls_limit=60
     )

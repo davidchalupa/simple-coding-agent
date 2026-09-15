@@ -31,9 +31,16 @@ def test_agent_minesweeper_modify_generate_only():
 
 
 def test_agent_minesweeper_modify_read_source_file_only():
+    def check_regurgitation(stdout: str):
+        """
+        We must verify the agent didn't just dump code.
+        If the agent's output contained a markdown block with 'class Minesweeper', it failed to follow instructions properly.
+        """
+        if "```python" in stdout and "class Minesweeper:" in stdout:
+            raise AssertionError("FAIL: Agent regurgitated source code instead of performing the requested action.")
+
     """
     Serves as a guard test for a behavior when the LLM sometimes misunderstands and just recites some Minesweeper code.
-    ToDo: we need to add a check for this behavior.
     """
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
@@ -52,8 +59,10 @@ def test_agent_minesweeper_modify_read_source_file_only():
         repo_name="",
         target_file_path=target_file,
         check_for_change=False,
-        max_calls_limit=30
+        max_calls_limit=30,
+        agent_output_validator=check_regurgitation,
     )
+
 
 
 def test_agent_minesweeper_modify_very_detailed():

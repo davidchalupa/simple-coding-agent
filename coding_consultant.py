@@ -38,7 +38,7 @@ class ConsultantState:
 
         # Tracks whether we're in Answering Mode (plain-text-only).
         # Enforced in code rather than relying solely on the prompt, since some
-        # models (e.g. DeepSeek-R1-Distill) don't reliably self-enforce this.
+        # models don't reliably self-enforce this.
         self.expect_plain_text = False
         self.answering_violations = 0
         self.last_directive = None  # the specific Answering Mode directive currently in force

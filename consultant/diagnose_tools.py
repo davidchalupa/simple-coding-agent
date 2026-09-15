@@ -12,6 +12,7 @@ from common.guardrail_tools import check_context_guardrail
 from consultant.system_prompt_builder import build_diagnose_system_prompt
 from consultant.guardrail_tools import sanitize_response, build_trimmed_evidence_block
 from consultant.tool_parser import extract_tool_requests
+from consultant.tool_processor import process_tool_requests
 
 
 MAX_DIAGNOSE_GATHER_ROUNDS = 6

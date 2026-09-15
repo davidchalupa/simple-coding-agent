@@ -1,10 +1,12 @@
 import os
+import io
 import tempfile
 import shutil
 import zipfile
 import subprocess
 import sys
 from unittest.mock import patch
+from contextlib import redirect_stdout, redirect_stderr
 import pytest
 
 import simple_coding_agent
@@ -63,6 +65,24 @@ def validate_all_python_files_importable(repo_sandbox, exclude_files=None):
     print(f"✅ All generated .py files import cleanly.", flush=True)
 
 
+class TeeStream:
+    """Duplicates stream writes to both the console and an in-memory buffer in real-time."""
+    def __init__(self, original_stream):
+        self.original_stream = original_stream
+        self.buffer = io.StringIO()
+
+    def write(self, data):
+        self.original_stream.write(data)
+        self.buffer.write(data)
+
+    def flush(self):
+        self.original_stream.flush()
+        self.buffer.flush()
+
+    def getvalue(self):
+        return self.buffer.getvalue()
+
+
 def run_automated_coding_task_test(
         input_queue,
         zip_file_path=None,
@@ -76,13 +96,15 @@ def run_automated_coding_task_test(
         run_script_file=None,
         max_calls_limit=50,
         expected_keywords=None,
-        custom_output_validator=None,
+        agent_output_validator=None,      # Validates the Agent's conversational/CLI output
+        script_output_validator=None,     # Validates the stdout of the executed Python script
         custom_file_validator=None,
         post_run_validator=None
 ):
     """
     Custom unified runner for agent tasks. Extracts a repo or runs a setup hook,
-    runs the agent, validates modifications, unittests, and output files.
+    runs the agent, captures agent CLI output live, validates modifications,
+    unittests, and output files.
     """
     print(f"🧪 Starting Automated Agent Coding Task Test...", flush=True)
 
@@ -92,7 +114,6 @@ def run_automated_coding_task_test(
     try:
         # --- Environment Setup ---
         if zip_file_path:
-            # os.path.join safely uses absolute paths if zip_file_path is already absolute
             source_zip_path = os.path.abspath(os.path.join(original_cwd, zip_file_path))
             if not os.path.exists(source_zip_path):
                 pytest.fail(f"Real target zip file not found at: {source_zip_path}")
@@ -155,11 +176,27 @@ def run_automated_coding_task_test(
         # Move execution directly into the repo folder
         os.chdir(repo_sandbox)
 
-        with patch("builtins.input", side_effect=smart_input_mocker):
+        # --- Intercept output while maintaining real-time streaming ---
+        tee_stdout = TeeStream(sys.stdout)
+        tee_stderr = TeeStream(sys.stderr)
+
+        with patch("builtins.input", side_effect=smart_input_mocker), \
+             redirect_stdout(tee_stdout), \
+             redirect_stderr(tee_stderr):
             try:
                 simple_coding_agent.main(simple_coding_agent.state, simple_coding_agent.execution_state)
             except SystemExit:
                 pass
+
+        # Complete captured stdout from the agent run
+        agent_terminal_output = tee_stdout.getvalue()
+
+        # Phase 0: Validate Agent Behavior/Pathologies
+        if agent_output_validator:
+            print("\n" + "=" * 60, flush=True)
+            print("🤖 Phase 0: Agent Console Output Validation", flush=True)
+            agent_output_validator(agent_terminal_output)
+            print("✅ SUCCESS: Agent output validation passed.")
 
         # --- Phase 1: Modification & File Generation Verification ---
         print("\n" + "=" * 60, flush=True)
@@ -264,8 +301,8 @@ def run_automated_coding_task_test(
                 if result.returncode != 0:
                     pytest.fail(f"❌ FAILED: Script execution crashed:\n{result.stderr}")
 
-                if custom_output_validator:
-                    custom_output_validator(result.stdout)
+                if script_output_validator:
+                    script_output_validator(result.stdout)
             except subprocess.TimeoutExpired:
                 pytest.fail("❌ FAILED: Script execution timed out.")
 
