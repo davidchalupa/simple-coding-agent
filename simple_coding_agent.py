@@ -19,7 +19,8 @@ from coding_agent.native_helpers import (get_repo_structure, generate_requiremen
                                          gather_deep_context_ast)
 from coding_agent.guardrail_tools import (verify_sandbox_health, auto_heal_newline_escaping,
                                           find_last_code_block, run_self_verification,
-                                          check_and_handle_unread_replace_lines)
+                                          check_and_handle_unread_replace_lines,
+                                          check_return_consistency)
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import split_tools
 from coding_agent import payload_parser
@@ -380,7 +381,17 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
     if state.self_verify_py_writes and was_mod and tool_name in ["write_file", "append_file",
                                                                  "patch_file", "replace_lines"]:
         fp = tool_args.get("filepath", "")
-        if linter_error := run_self_verification(fp):
+        linter_error = run_self_verification(fp)
+
+        # NEW: only meaningful once syntax is valid
+        return_warnings = []
+        if not linter_error:
+            line_range = None
+            if tool_name == "replace_lines":
+                line_range = (tool_args.get("start_line"), tool_args.get("end_line"))
+            return_warnings = check_return_consistency(fp, line_range)
+
+        if linter_error:
             # --- AUTO-HEALER FOR JSON NEWLINE ESCAPING ---
             if "unterminated string literal" in linter_error:
                 try:
@@ -419,11 +430,23 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
                 state.messages.append(
                     {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
                 return False, tool_reinforcement
+
+        elif return_warnings:
+            agent_flags.consecutive_lint_failures += 1
+            msg = "\n".join(return_warnings)
+            print(f"🚨 [Self-Verification] Inconsistent return paths in {os.path.basename(fp)}:\n{msg}")
+            tool_reinforcement += f"\n\nSystem Alert: Possible inconsistent return values:\n{msg}\nFix it."
+            if agent_flags.consecutive_lint_failures >= 3:
+                print("🛑 [Circuit Breaker] Repeated return-consistency failures. Forcing turn end.")
+                state.messages.append(
+                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
+                return False, tool_reinforcement
         else:
-            if agent_flags.consecutive_lint_failures > 0: print(
-                f"✅ {os.path.basename(fp)} now passes checks.")
+            if agent_flags.consecutive_lint_failures > 0:
+                print(f"✅ {os.path.basename(fp)} now passes checks.")
             agent_flags.consecutive_lint_failures, agent_flags.last_verification_failure = 0, None
             return True, tool_reinforcement
+
     return True, tool_reinforcement
 
 

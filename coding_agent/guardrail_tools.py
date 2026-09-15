@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import ast
 
 from coding_agent import split_tools
 from coding_agent import native_linter
@@ -140,3 +141,96 @@ def check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_fla
         return True
 
     return False
+
+
+import ast
+
+def _stmt_list_falls_through(stmts):
+    """True if control can reach past the end of this statement list without
+    hitting a guaranteed return/raise."""
+    for stmt in stmts:
+        if _stmt_terminates(stmt):
+            return False
+    return True
+
+
+def _stmt_terminates(stmt):
+    """True if this statement guarantees control never proceeds to whatever follows it."""
+    if isinstance(stmt, (ast.Return, ast.Raise)):
+        return True
+    if isinstance(stmt, ast.If):
+        if not stmt.orelse:
+            return False
+        return (not _stmt_list_falls_through(stmt.body)
+                and not _stmt_list_falls_through(stmt.orelse))
+    if isinstance(stmt, ast.Try):
+        body_ok = not _stmt_list_falls_through(stmt.body)
+        handlers_ok = all(not _stmt_list_falls_through(h.body) for h in stmt.handlers) if stmt.handlers else body_ok
+        if stmt.finalbody and not _stmt_list_falls_through(stmt.finalbody):
+            return True
+        return body_ok and handlers_ok
+    if isinstance(stmt, ast.With):
+        return not _stmt_list_falls_through(stmt.body)
+    if isinstance(stmt, ast.While):
+        is_infinite = isinstance(stmt.test, ast.Constant) and stmt.test.value is True
+        if is_infinite and not _contains_break(stmt.body):
+            return True  # loop only exits via return/raise inside it
+        return False  # exits via condition-false or break -> falls through after loop
+    return False  # For-loops, match, etc: conservatively assume they can fall through
+
+
+def _contains_break(stmts):
+    for stmt in stmts:
+        if isinstance(stmt, ast.Break):
+            return True
+        if isinstance(stmt, (ast.While, ast.For)):
+            continue  # a break here belongs to the nested loop, not this one
+        for child in ast.iter_child_nodes(stmt):
+            if isinstance(child, ast.stmt) and _contains_break([child]):
+                return True
+    return False
+
+
+def check_return_consistency(filepath, line_range=None):
+    """
+    Returns a list of human-readable warnings for functions that mix explicit
+    non-None return values with a path that falls through to an implicit
+    `return None` (or a bare `return`). This is the class of bug where an
+    edit adds `return True`/`return False` to some branches but misses one.
+
+    line_range: optional (start, end) to only check functions overlapping
+    an edit, e.g. from a replace_lines/patch_file call. Pass None to check
+    the whole file (use for write_file/append_file).
+    """
+    try:
+        tree = ast.parse(open(filepath, "r", encoding="utf-8").read())
+    except Exception:
+        return []  # let run_self_verification report syntax errors; don't duplicate
+
+    warnings = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if line_range and not (node.lineno <= line_range[1] and node.end_lineno >= line_range[0]):
+            continue
+
+        returns = [n for n in ast.walk(node)
+                   if isinstance(n, ast.Return)
+                   and not any(n in ast.walk(inner) for inner in ast.walk(node)
+                               if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and inner is not node)]
+        has_explicit_value = any(r.value is not None and not
+                                  (isinstance(r.value, ast.Constant) and r.value.value is None)
+                                  for r in returns)
+        has_bare_or_none = any(r.value is None or
+                                (isinstance(r.value, ast.Constant) and r.value.value is None)
+                                for r in returns)
+        falls_through = _stmt_list_falls_through(node.body)
+
+        if has_explicit_value and (has_bare_or_none or falls_through):
+            reason = "a bare `return`/`return None`" if has_bare_or_none else "falling off the end of the function"
+            warnings.append(
+                f"Function '{node.name}' (line {node.lineno}) returns an explicit value on some "
+                f"paths but has another path that ends via {reason}, which implicitly returns None. "
+                f"If every path is meant to return the same type, add an explicit return on that path."
+            )
+    return warnings
