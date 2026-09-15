@@ -49,7 +49,7 @@ def test_agent_workflow_lcs():
         # --- PHASE 2: Invariant-Driven Testing with Trivial Constructions ---
         "Excellent. Now write unit tests for lcs.py and save them to test_lcs.py using the unittest framework. "
         "CRITICAL INSTRUCTION: Since multiple valid longest subsequences can exist, do not assert exact string matches. "
-        "Instead, write a helper function `is_subsequence(sub, s)`. "
+        "Instead, write a test helper function `is_subsequence(sub, s)`. "
         "Furthermore, to avoid miscalculating expected lengths, strictly use these 3 trivial constructions for your test cases: "
         "1. Identical strings (e.g., s1='abc', s2='abc', expected_length=3) "
         "2. Empty string (e.g., s1='abc', s2='', expected_length=0) "

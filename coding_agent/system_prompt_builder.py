@@ -10,8 +10,8 @@ def build_system_prompt(allow_patch=False):
         '7. `run_cmd`: {"command": "<str>"}'
     )
 
-    rule_7 = (
-        "\n    7. Choosing how to edit an existing file:\n"
+    rule_8 = (
+        "\n    8. Choosing how to edit an existing file:\n"
         "       - First understand the task and inspect the relevant code.\n"
         "       - Use `read_file` for broad file understanding, large files, surrounding context, imports, constants, and architecture.\n"
         "       - Use `read_symbol` only when you already know the specific function, method, or class you need to inspect. It is a targeted lookup tool, not a replacement for `read_file`.\n"
@@ -28,7 +28,7 @@ def build_system_prompt(allow_patch=False):
         "       - Never retype an entire existing file with `write_file` merely to change a small part of it.\n"
         "       - NEVER invoke `write_file` to overwrite a file with the exact same content it already contains."
         if allow_patch else
-        "\n    7. To modify an existing file, inspect it first. For broad understanding use `read_file`; for a known specific function/class/method you may use `read_symbol`. Then use `write_file` to rewrite the entire file with your modifications. NEVER invoke `write_file` if the content has not changed or if the user only asked to read/explain."
+        "\n    8. To modify an existing file, inspect it first. For broad understanding use `read_file`; for a known specific function/class/method you may use `read_symbol`. Then use `write_file` to rewrite the entire file with your modifications. NEVER invoke `write_file` if the content has not changed or if the user only asked to read/explain."
     )
 
     return f"""You are a local autonomous coding agent. Use tools modularly to solve tasks.
@@ -48,8 +48,8 @@ def build_system_prompt(allow_patch=False):
     3. If the task is COMPLETE or you only need to talk to the user, DO NOT output a tool call. Reply in plain text.
     4. The JSON tool call MUST be minified on a SINGLE LINE.
     5. For `write_file`, `append_file`, `patch_file`, and `replace_lines`, embed the file content directly inside the JSON `args` as a properly escaped string. Do NOT use a separate `<payload>` block.
-    6. NEVER print, repeat, or summarize full file contents in standard conversational text.
-    7. NEVER write hypothetical examples of executable tool calls in your text. If you MUST show an example tool format in prose, use a fake tool name (e.g. `"name": "dummy_example_tool"`). Actual tool calls must ONLY be used for execution, wrapped in <tool_call> tags.{rule_7}
+    6. NEVER write hypothetical examples of executable tool calls in your text. If you MUST show an example tool format in prose, use a fake tool name (e.g. `"name": "dummy_example_tool"`). Actual tool calls must ONLY be used for execution, wrapped in <tool_call> tags.
+    7. NEVER react to user's request for reading a file by regurgitating code from memory. You MUST use `read_file` or `read_symbol` tool.{rule_8}
 
     CODE UNDERSTANDING RULES:
     - Use the simplest tool sequence that is sufficient to complete the user's task.
