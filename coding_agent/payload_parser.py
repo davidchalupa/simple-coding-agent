@@ -3,56 +3,27 @@ import re
 
 
 def _is_example_context(text: str, match_start: int) -> bool:
-    """
-    Safety heuristic to detect if the LLM is providing an educational example.
-    Expanded window and enhanced regex to catch chatty models.
-    """
-    # Increased lookback window to 300 characters to catch longer conversational setups
     prefix = text[max(0, match_start - 300):match_start].lower()
-
-    # Relaxed patterns to catch more variations of example introductions
     patterns = [
-        r'\bfor example\b',
-        r'\bfor instance\b',
-        r'\ban example\b',
-        r'\bhypothetical\b',
-        r'\bfollowing\b.*\b(json|command|tool|call|format)\b',
-        r'\byou can use\b',
-        r'\bhere is how\b',
-        r'\bhere\'s how\b',
-        r'\blike this\b',
-        r'\bas follows\b'
+        r'\bfor example\b', r'\bfor instance\b', r'\ban example\b',
+        r'\bhypothetical\b', r'\bfollowing\b.*\b(json|command|tool|call|format)\b',
+        r'\byou can use\b', r'\bhere is how\b', r'\bhere\'s how\b',
+        r'\blike this\b', r'\bas follows\b'
     ]
     return any(re.search(p, prefix) for p in patterns)
 
 
 def _has_trailing_prose(text: str, match_end: int) -> bool:
-    """
-    VETO CHECK: Real tool calls usually end the agent's turn.
-    If the agent keeps talking after the code block, it's almost certainly
-    showing an example, not requesting an execution.
-    """
     suffix = text[match_end:].strip()
     if not suffix:
         return False
-
-    # Strip out valid trailing structures that belong to a real execution
-    # 1. Remove valid <payload> blocks
     suffix = re.sub(r"<payload>.*?(?:</payload>|$)", "", suffix, flags=re.DOTALL)
-    # 2. Remove other trailing code blocks (in case it drafted multiple tools)
     suffix = re.sub(r"```.*?```", "", suffix, flags=re.DOTALL)
-    # 3. Remove loose markdown backticks
     suffix = re.sub(r"`+", "", suffix)
-
-    # If there are actual words/letters left over, it's conversational prose!
-    if re.search(r'[a-zA-Z0-9]', suffix):
-        return True
-
-    return False
+    return bool(re.search(r'[a-zA-Z0-9]', suffix))
 
 
 def _normalize_double_escaped_content(text):
-    # [Keep existing implementation]
     if not isinstance(text, str):
         return text
     if '\n' in text:
@@ -68,14 +39,10 @@ def _normalize_double_escaped_content(text):
 
 
 def _clean_over_escaped_quotes(text):
-    # [Keep existing implementation]
-    if not isinstance(text, str):
-        return text
-    return text.replace('\\"', '"')
+    return text.replace('\\"', '"') if isinstance(text, str) else text
 
 
 def _extract_balanced_json_object(text, start_idx=0):
-    # [Keep existing implementation]
     start = text.find('{', start_idx)
     if start == -1:
         return None
@@ -86,7 +53,6 @@ def _extract_balanced_json_object(text, start_idx=0):
 
     for i in range(start, len(text)):
         ch = text[i]
-
         if in_string:
             if escape:
                 escape = False
@@ -108,290 +74,306 @@ def _extract_balanced_json_object(text, start_idx=0):
     return None
 
 
+def _raw_string_arg(text, key):
+    m = re.search(
+        rf'"{re.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"',
+        text,
+        re.DOTALL,
+    )
+    return m.group(1) if m else None
+
+
+def _decode_inline_content(raw):
+    """
+    Decode JSON content while fixing the 7B-model pattern where source
+    line breaks are emitted as \\n at an extra escape level.
+
+    Outside source strings:
+        \\n -> newline
+
+    Inside source strings:
+        \\n stays literal \\n
+
+    Other escapes are left alone.
+    """
+    if raw is None:
+        return ""
+
+    out = []
+    in_string = False
+    i = 0
+
+    while i < len(raw):
+        if raw.startswith(r'\"', i):
+            in_string = not in_string
+            out.append(r'\"')
+            i += 2
+            continue
+
+        if raw.startswith(r'\\n', i):
+            out.append(r'\\n' if in_string else r'\n')
+            i += 3
+            continue
+
+        out.append(raw[i])
+        i += 1
+
+    try:
+        return json.loads(f'"{"".join(out)}"')
+    except json.JSONDecodeError:
+        return raw
+
+
 def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict | None:
     tool_json_str = None
     search_start = 0
 
-    # 1. Primary extraction: Explicitly tagged executions bypass conversational filters
-    tool_match = re.search(r"<tool_call>(.*?)</tool_call>", response_content, re.DOTALL)
-    if tool_match:
-        tool_json_str = tool_match.group(1).strip()
-        search_start = tool_match.end()
+    m = re.search(r"<tool_call>(.*?)</tool_call>", response_content, re.DOTALL)
+    if m:
+        tool_json_str = m.group(1).strip()
+        search_start = m.end()
     else:
-        # 2. Fallback: ```json block
-        for md_match in re.finditer(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL):
-            candidate = md_match.group(1).strip()
-            if '"name"' in candidate:
-
-                # VETO 1: Is this introduced as an example?
-                if _is_example_context(response_content, md_match.start()):
-                    continue
-
-                    # VETO 2: Did the agent keep talking after this block?
-                if _has_trailing_prose(response_content, md_match.end()):
-                    continue
-
-                tool_json_str = candidate
-                search_start = md_match.end()
-                break
+        for m in re.finditer(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL):
+            candidate = m.group(1).strip()
+            if '"name"' not in candidate:
+                continue
+            if _is_example_context(response_content, m.start()):
+                continue
+            if _has_trailing_prose(response_content, m.end()):
+                continue
+            tool_json_str = candidate
+            search_start = m.end()
+            break
 
     if not tool_json_str:
-        # 3. Fallback: Naked JSON (Heavily restricted)
-        naked_start_match = re.search(r'\{\s*"name"\s*:\s*"[^"]+"', response_content, re.DOTALL)
-        if naked_start_match:
-            if not _is_example_context(response_content, naked_start_match.start()):
-                balanced = _extract_balanced_json_object(response_content, naked_start_match.start())
-                if balanced:
-                    match_end = naked_start_match.start() + len(balanced)
-
-                    # Apply trailing prose veto to naked JSON as well
-                    if not _has_trailing_prose(response_content, match_end):
-                        tool_json_str = balanced.strip()
-                        search_start = match_end
+        m = re.search(r'\{\s*"name"\s*:\s*"[^"]+"', response_content, re.DOTALL)
+        if m and not _is_example_context(response_content, m.start()):
+            balanced = _extract_balanced_json_object(response_content, m.start())
+            if balanced:
+                end = m.start() + len(balanced)
+                if not _has_trailing_prose(response_content, end):
+                    tool_json_str = balanced.strip()
+                    search_start = end
 
     if not tool_json_str:
         return None
 
-    return parse_robust_tool_call(response_content, tool_json_str, allow_patch=allow_patch, search_start=search_start)
+    return parse_robust_tool_call(
+        response_content,
+        tool_json_str,
+        allow_patch=allow_patch,
+        search_start=search_start,
+    )
 
 
-# --- HYPER-ROBUST PAYLOAD PARSER ---
-def parse_robust_tool_call(response_content, tool_json_str, allow_patch=True, search_start=0):
+def parse_robust_tool_call(
+    response_content,
+    tool_json_str,
+    allow_patch=True,
+    search_start=0,
+):
     remainder = response_content[search_start:]
 
-    payload_match = re.search(r"<payload>(.*?)(?:</payload>|$)", remainder, re.DOTALL)
-    raw_payload = payload_match.group(1).strip('\r\n') if payload_match else None
+    payload_match = re.search(
+        r"<payload>(.*?)(?:</payload>|$)",
+        remainder,
+        re.DOTALL,
+    )
+    raw_payload = (
+        payload_match.group(1).strip('\r\n')
+        if payload_match else None
+    )
 
-    # NEW: the model sometimes embeds <payload> inside the same fence as the tool call
-    # itself, so the outer search_start-anchored lookup finds nothing. Check tool_json_str too.
     if raw_payload is None:
-        inline_payload_match = re.search(r"<payload>(.*?)(?:</payload>|$)", tool_json_str, re.DOTALL)
-        if inline_payload_match:
-            raw_payload = inline_payload_match.group(1).strip('\r\n')
+        payload_match = re.search(
+            r"<payload>(.*?)(?:</payload>|$)",
+            tool_json_str,
+            re.DOTALL,
+        )
+        if payload_match:
+            raw_payload = payload_match.group(1).strip('\r\n')
 
     if not raw_payload:
-        md_block_match = re.search(r"```[a-zA-Z]*\n(.*?)\n```", remainder, re.DOTALL)
-        if md_block_match:
-            raw_payload = md_block_match.group(1)
+        m = re.search(r"```[a-zA-Z]*\n(.*?)\n```", remainder, re.DOTALL)
+        if m:
+            raw_payload = m.group(1)
 
-    json_clean = re.sub(r"<payload>.*?(?:</payload>|$)", "", tool_json_str, flags=re.DOTALL).strip()
+    json_clean = re.sub(
+        r"<payload>.*?(?:</payload>|$)",
+        "",
+        tool_json_str,
+        flags=re.DOTALL,
+    ).strip()
 
-    # print(f"\n🔬 [DEBUG] json_clean repr (first 500 chars):\n{json_clean[:500]!r}\n")
+    # For file-content tools, decode the raw content field ourselves.
+    # This preserves literal source "\\n" while fixing extra-escaped line breaks.
+    raw_content = _raw_string_arg(json_clean, "content")
 
     try:
         data = json.loads(json_clean, strict=False)
+
         if "name" not in data or data.get("name") is None:
             raise json.JSONDecodeError(
-                "Parsed JSON has no 'name' field — likely matched the wrong block.",
-                json_clean, 0
+                "Parsed JSON has no 'name' field.",
+                json_clean,
+                0,
             )
+
         if "args" not in data:
             data["args"] = {}
 
-        needs_content = data.get("name") in ["write_file", "append_file", "replace_lines"]
-        has_inline_content = (
-            needs_content
-            and isinstance(data["args"].get("content"), str)
-            and data["args"]["content"] != ""
-        )
+        name = data["name"]
 
-        if needs_content and not has_inline_content:
-            data["args"]["content"] = raw_payload if raw_payload is not None else ""
+        if name in ("write_file", "append_file", "replace_lines"):
+            if raw_content is not None:
+                data["args"]["content"] = _decode_inline_content(raw_content)
+            elif not data["args"].get("content") and raw_payload is not None:
+                data["args"]["content"] = raw_payload
 
         for key in ("content", "old_content", "new_content"):
             if key in data["args"]:
-                data["args"][key] = _normalize_double_escaped_content(data["args"][key])
                 data["args"][key] = _clean_over_escaped_quotes(data["args"][key])
 
         return data
+
     except json.JSONDecodeError:
-        # print("🔬 [DEBUG] json.loads FAILED, falling through to regex parser")
         pass
 
     cleaned = json_clean.strip()
+    allowed = (
+        "write_file|append_file|replace_lines|read_file|run_cmd|patch_file|"
+        "extract_code_blocks|list_tree|search_codebase|read_symbol"
+        if allow_patch else
+        "write_file|append_file|read_file|run_cmd|extract_code_blocks|"
+        "list_tree|search_codebase|read_symbol"
+    )
 
-    allowed_tools = "write_file|append_file|replace_lines|read_file|run_cmd|patch_file|extract_code_blocks|list_tree|search_codebase|read_symbol" if allow_patch else "write_file|append_file|read_file|run_cmd|extract_code_blocks|list_tree|search_codebase|read_symbol"
+    m = re.search(fr'"name"\s*:\s*"({allowed})"', cleaned)
+    if not m:
+        raise json.JSONDecodeError(
+            "Could not isolate tool name signature from model string.",
+            json_clean,
+            0,
+        )
 
-    name_match = re.search(fr'"name"\s*:\s*"({allowed_tools})"', cleaned)
-
-    if not name_match:
-        raise json.JSONDecodeError("Could not isolate tool name signature from model string.", json_clean, 0)
-
-    tool_name = name_match.group(1)
+    tool_name = m.group(1)
     args = {}
 
-    if tool_name in ["write_file", "append_file"]:
-        fp_match = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
-        if fp_match:
-            args["filepath"] = fp_match.group(1)
+    if tool_name in ("write_file", "append_file"):
+        fp = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
+        if fp:
+            args["filepath"] = fp.group(1)
 
-        content_match = re.search(r'"content"\s*:\s*"', cleaned)
-        if content_match:
-            start_idx = content_match.end()
-            end_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
-            if end_match:
-                raw_content_slice = cleaned[start_idx:end_match.start()]
-            else:
-                raw_tail = cleaned[start_idx:].rstrip(' \n\t}')
-                if raw_tail.endswith('"'): raw_tail = raw_tail[:-1]
-                raw_content_slice = raw_tail
+        raw = _raw_string_arg(cleaned, "content")
+        if raw is not None:
+            args["content"] = _decode_inline_content(raw)
+        elif raw_payload is not None:
+            args["content"] = raw_payload
+        else:
+            args["content"] = ""
 
-            try:
-                # json.loads does the ONE correct decode pass. Do NOT run
-                # _normalize_double_escaped_content or _clean_over_escaped_quotes
-                # after this -- they would re-process already-correct content and
-                # corrupt legitimate \n escapes meant to stay literal in the source.
-                args["content"] = json.loads(f'"{raw_content_slice}"')
-            except json.JSONDecodeError:
-                # Only use the manual replace + normalization path if the slice
-                # wasn't valid standalone JSON-string content.
-                args["content"] = (
-                    raw_content_slice
-                    .replace('\\"', '"')
+        return {"name": tool_name, "args": args}
+
+    if tool_name == "replace_lines":
+        fp = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
+        sl = re.search(r'"start_line"\s*:\s*(\d+)', cleaned)
+        el = re.search(r'"end_line"\s*:\s*(\d+)', cleaned)
+
+        if fp:
+            args["filepath"] = fp.group(1)
+        if sl:
+            args["start_line"] = int(sl.group(1))
+        if el:
+            args["end_line"] = int(el.group(1))
+
+        for key in ("expected_start_snippet", "expected_end_snippet"):
+            value = _raw_string_arg(cleaned, key)
+            if value is not None:
+                args[key] = (
+                    value.replace('\\"', '"')
                     .replace('\\\\', '\\')
                 )
-                args["content"] = _normalize_double_escaped_content(args["content"])
-                args["content"] = _clean_over_escaped_quotes(args["content"])
+
+        raw = _raw_string_arg(cleaned, "content")
+        if raw is not None:
+            args["content"] = _decode_inline_content(raw)
         elif raw_payload is not None:
             args["content"] = raw_payload
         else:
             args["content"] = ""
 
-        if "filepath" in args:
-            return {"name": tool_name, "args": args}
-
-    elif tool_name == "replace_lines":
-        fp_match = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
-        if fp_match: args["filepath"] = fp_match.group(1)
-        sl_match = re.search(r'"start_line"\s*:\s*(\d+)', cleaned)
-        if sl_match: args["start_line"] = int(sl_match.group(1))
-        el_match = re.search(r'"end_line"\s*:\s*(\d+)', cleaned)
-        if el_match: args["end_line"] = int(el_match.group(1))
-        snip_match = re.search(r'"expected_start_snippet"\s*:\s*"(.*?)"', cleaned)
-        if snip_match:
-            args["expected_start_snippet"] = snip_match.group(1).replace('\\"', '"').replace('\\\\', '\\')
-        end_snip_match = re.search(r'"expected_end_snippet"\s*:\s*"(.*?)"', cleaned)
-        if end_snip_match:
-            args["expected_end_snippet"] = end_snip_match.group(1).replace('\\"', '"').replace('\\\\', '\\')
-
-        content_match = re.search(r'"content"\s*:\s*"', cleaned)
-        if content_match:
-            start_idx = content_match.end()
-            end_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
-            if end_match:
-                raw_content_slice = cleaned[start_idx:end_match.start()]
-            else:
-                raw_tail = cleaned[start_idx:].rstrip(' \n\t}')
-                if raw_tail.endswith('"'): raw_tail = raw_tail[:-1]
-                raw_content_slice = raw_tail
-
-            # raw_content_slice is still-encoded JSON string content (never passed
-            # through json.loads). Decode it properly as a JSON string instead of
-            # hand-rolled sequential replaces, which mishandle multi-level escaping.
-            try:
-                args["content"] = json.loads(f'"{raw_content_slice}"')
-            except json.JSONDecodeError:
-                import codecs
-                # Safely decode the raw slice exactly as Python parses string escapes
-                try:
-                    args["content"] = codecs.decode(raw_content_slice, 'unicode_escape')
-                except Exception:
-                    args["content"] = raw_content_slice
-            args["content"] = _normalize_double_escaped_content(args["content"])
-            args["content"] = _clean_over_escaped_quotes(args["content"])
-        elif raw_payload is not None:
-            args["content"] = raw_payload
-        else:
-            args["content"] = ""
-
-        if "filepath" in args and "start_line" in args and "end_line" in args:
-            return {"name": tool_name, "args": args}
-
-    elif tool_name == "patch_file":
-        fp_match = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
-        if fp_match:
-            args["filepath"] = fp_match.group(1)
-
-        oc_match = re.search(r'"old_content"\s*:\s*"', cleaned)
-        if oc_match:
-            start_oc = oc_match.end()
-            end_oc_match = re.search(r'",\s*"new_content"', cleaned)
-            if end_oc_match:
-                args["old_content"] = cleaned[start_oc:end_oc_match.start()]
-            else:
-                args["old_content"] = cleaned[start_oc:].split('",')[0]
-            args["old_content"] = args["old_content"].replace('\\"', '"').replace('\\\\', '\\').replace('\\n', '\n')
-
-        nc_match = re.search(r'"new_content"\s*:\s*"', cleaned)
-        if nc_match:
-            start_nc = nc_match.end()
-            end_nc_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
-            if end_nc_match:
-                args["new_content"] = cleaned[start_nc:end_nc_match.start()]
-            else:
-                raw_tail = cleaned[start_nc:].rstrip(' \n\t}')
-                if raw_tail.endswith('"'): raw_tail = raw_tail[:-1]
-                args["new_content"] = raw_tail
-            args["new_content"] = args["new_content"].replace('\\"', '"').replace('\\\\', '\\').replace('\\n', '\n')
-
-        if "filepath" in args and "old_content" in args and "new_content" in args:
-            return {"name": tool_name, "args": args}
-
-    elif tool_name == "run_cmd":
-        cmd_match = re.search(r'"command"\s*:\s*"', cleaned)
-        if cmd_match:
-            start_idx = cmd_match.end()
-            end_match = re.search(r'"\s*\}\s*\}\s*$', cleaned) or re.search(r'"\s*\}\s*$', cleaned)
-            if end_match:
-                args["command"] = cleaned[start_idx:end_match.start()].replace('\\"', '"').replace('\\\\', '\\')
-            else:
-                raw_tail = cleaned[start_idx:].rstrip(' \n\t}')
-                if raw_tail.endswith('"'): raw_tail = raw_tail[:-1]
-                args["command"] = raw_tail.replace('\\"', '"').replace('\\\\', '\\')
-            return {"name": tool_name, "args": args}
-
-    elif tool_name == "read_file":
-        fp_match = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
-        if fp_match: args["filepath"] = fp_match.group(1)
-        sl_match = re.search(r'"start_line"\s*:\s*(\d+)', cleaned)
-        if sl_match: args["start_line"] = int(sl_match.group(1))
-        ml_match = re.search(r'"max_lines"\s*:\s*(\d+)', cleaned)
-        if ml_match: args["max_lines"] = int(ml_match.group(1))
         return {"name": tool_name, "args": args}
 
-    elif tool_name == "list_tree":
-        dp_match = re.search(r'"dir_path"\s*:\s*"(.*?)"', cleaned)
-        if dp_match: args["dir_path"] = dp_match.group(1)
-        md_match = re.search(r'"max_depth"\s*:\s*(\d+)', cleaned)
-        if md_match: args["max_depth"] = int(md_match.group(1))
-        return {"name": tool_name, "args": args}
+    if tool_name == "patch_file":
+        fp = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
+        old = _raw_string_arg(cleaned, "old_content")
+        new = _raw_string_arg(cleaned, "new_content")
 
-    elif tool_name == "search_codebase":
-        dp_match = re.search(r'"dir_path"\s*:\s*"(.*?)"', cleaned)
-        if dp_match: args["dir_path"] = dp_match.group(1)
-        q_match = re.search(r'"query"\s*:\s*"(.*?)"', cleaned)
-        if q_match: args["query"] = q_match.group(1).replace('\\"', '"').replace('\\\\', '\\')
-        re_match = re.search(r'"is_regex"\s*:\s*(true|false)', cleaned, re.IGNORECASE)
-        if re_match: args["is_regex"] = re_match.group(1).lower() == 'true'
-        mm_match = re.search(r'"max_matches"\s*:\s*(\d+)', cleaned)
-        if mm_match: args["max_matches"] = int(mm_match.group(1))
-        return {"name": tool_name, "args": args}
-
-    elif tool_name == "extract_code_blocks":
-        try:
-            return {"name": tool_name, "args": json.loads(cleaned).get("args", {})}
-        except json.JSONDecodeError:
-            raise json.JSONDecodeError("Failed to parse extract_code_blocks arguments.", cleaned, 0)
-
-    elif tool_name == "read_symbol":
-        fp_match = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
-        if fp_match:
-            args["filepath"] = fp_match.group(1)
-
-        sym_match = re.search(r'"symbol_name"\s*:\s*"(.*?)"', cleaned)
-        if sym_match:
-            args["symbol_name"] = sym_match.group(1).replace('\\"', '"').replace('\\\\', '\\')
+        if fp:
+            args["filepath"] = fp.group(1)
+        if old is not None:
+            args["old_content"] = json.loads(f'"{old}"')
+        if new is not None:
+            args["new_content"] = json.loads(f'"{new}"')
 
         return {"name": tool_name, "args": args}
 
-    raise json.JSONDecodeError("Fallback pattern parser extraction failed.", json_clean, 0)
+    if tool_name == "run_cmd":
+        value = _raw_string_arg(cleaned, "command")
+        if value is not None:
+            args["command"] = json.loads(f'"{value}"')
+        return {"name": tool_name, "args": args}
+
+    if tool_name == "read_file":
+        fp = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
+        sl = re.search(r'"start_line"\s*:\s*(\d+)', cleaned)
+        ml = re.search(r'"max_lines"\s*:\s*(\d+)', cleaned)
+        if fp:
+            args["filepath"] = fp.group(1)
+        if sl:
+            args["start_line"] = int(sl.group(1))
+        if ml:
+            args["max_lines"] = int(ml.group(1))
+        return {"name": tool_name, "args": args}
+
+    if tool_name == "list_tree":
+        dp = re.search(r'"dir_path"\s*:\s*"(.*?)"', cleaned)
+        md = re.search(r'"max_depth"\s*:\s*(\d+)', cleaned)
+        if dp:
+            args["dir_path"] = dp.group(1)
+        if md:
+            args["max_depth"] = int(md.group(1))
+        return {"name": tool_name, "args": args}
+
+    if tool_name == "search_codebase":
+        dp = re.search(r'"dir_path"\s*:\s*"(.*?)"', cleaned)
+        q = _raw_string_arg(cleaned, "query")
+        rg = re.search(r'"is_regex"\s*:\s*(true|false)', cleaned, re.I)
+        mm = re.search(r'"max_matches"\s*:\s*(\d+)', cleaned)
+        if dp:
+            args["dir_path"] = dp.group(1)
+        if q is not None:
+            args["query"] = json.loads(f'"{q}"')
+        if rg:
+            args["is_regex"] = rg.group(1).lower() == "true"
+        if mm:
+            args["max_matches"] = int(mm.group(1))
+        return {"name": tool_name, "args": args}
+
+    if tool_name == "extract_code_blocks":
+        return {"name": tool_name, "args": json.loads(cleaned).get("args", {})}
+
+    if tool_name == "read_symbol":
+        fp = re.search(r'"filepath"\s*:\s*"(.*?)"', cleaned)
+        sym = _raw_string_arg(cleaned, "symbol_name")
+        if fp:
+            args["filepath"] = fp.group(1)
+        if sym is not None:
+            args["symbol_name"] = json.loads(f'"{sym}"')
+        return {"name": tool_name, "args": args}
+
+    raise json.JSONDecodeError(
+        "Fallback pattern parser extraction failed.",
+        json_clean,
+        0,
+    )
