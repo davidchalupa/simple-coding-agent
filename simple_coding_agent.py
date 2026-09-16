@@ -30,6 +30,9 @@ from cli import parse_cli_arguments
 from model_registry import MODEL_REGISTRY
 
 
+READ_ONLY_TOOLS = {"read_file", "read_symbol", "search_codebase", "list_tree"}
+
+
 class AgentState:
     def __init__(self, parsed_args):
         self.allow_patch = parsed_args["allow_patch"]
@@ -631,9 +634,16 @@ def main(state, execution_state):
 
                     tool_reinforcement += f"\n\nSystem Alert: Tool executed successfully."
 
-                    state.messages.append(
-                        {"role": "user", "content": f"Tool Execution Result:\n{tool_result}{tool_reinforcement}"})
+                    # --- IMPORTANT GUARDRAIL: inject reminder right after read-only tool results ---
+                    INSPECT_REMINDER = (
+                        "\n\n[System note: the above was a read-only inspection result. Only call "
+                        "write_file, append_file, patch_file, or replace_lines if the user explicitly "
+                        "asked for a code change in their most recent message. Otherwise, respond now "
+                        "in plain text summarizing what you found — do not emit a tool call.]"
+                    )
 
+                    if tool_name in READ_ONLY_TOOLS:
+                        tool_reinforcement += INSPECT_REMINDER
                 elif approval == 'edit':
                     tool_result = f"User denied and provided feedback: {input('Feedback: ')}"
                 else:
