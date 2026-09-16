@@ -492,6 +492,7 @@ def main(state, execution_state):
                 self.consecutive_lint_failures = 0  # Track repeated self-verification failures on the same turn
                 self.last_verification_failure = None  # Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
                 self.recent_tool_signatures = []  # Loop Guardrail: track recent signatures, not just the immediately previous one
+                self.awaiting_fix = False  # set when a run_cmd failure needs a follow-up fix
 
         agent_flags = AgentFlags()
         tool_args = {}  # Very important: this must exist in the first iteration
@@ -567,9 +568,9 @@ def main(state, execution_state):
                             state.messages.append({"role": "user", "content": msg})
                             continue
 
-                        if tool_name == "write_file":
-                            if check_and_handle_identical_write(tool_args, state, agent_flags, content_key):
-                                continue
+                    if tool_name == "write_file":
+                        if check_and_handle_identical_write(tool_args, state, agent_flags, content_key):
+                            continue
 
                 if check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_flags):
                     continue
@@ -612,6 +613,9 @@ def main(state, execution_state):
                 if approval == 'y':
                     tool_result, tool_reinforcement, was_mod = execute_tool(tool_name, tool_args, execution_state.is_split_mode)
                     agent_flags.file_was_modified = agent_flags.file_was_modified or was_mod
+                    # Reset awaiting fix flag
+                    if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"] and was_mod:
+                        agent_flags.awaiting_fix = False
                     print(f"⚙️  Tool execution finished.")
 
                     # Auxiliary output of the tool_result, useful for debugging
@@ -634,16 +638,37 @@ def main(state, execution_state):
 
                     tool_reinforcement += f"\n\nSystem Alert: Tool executed successfully."
 
-                    # --- IMPORTANT GUARDRAIL: inject reminder right after read-only tool results ---
-                    INSPECT_REMINDER = (
-                        "\n\n[System note: the above was a read-only inspection result. Only call "
-                        "write_file, append_file, patch_file, or replace_lines if the user explicitly "
-                        "asked for a code change in their most recent message. Otherwise, respond now "
-                        "in plain text summarizing what you found — do not emit a tool call.]"
-                    )
+
+                    FAILURE_SIGNALS = ("Traceback", "Error", "FAILED", "SyntaxError", "Exception")
 
                     if tool_name in READ_ONLY_TOOLS:
-                        tool_reinforcement += INSPECT_REMINDER
+                        if agent_flags.awaiting_fix:
+                            FIX_CONTEXT_REMINDER = (
+                                "\n\n[System note: you are still resolving the command failure from earlier in this "
+                                "turn. If this read confirmed the cause, apply the fix now with a real "
+                                "write_file/patch_file/replace_lines call — target whichever file actually has the "
+                                "bug (the source file or a test file you wrote). Then re-run the command to verify.]"
+                            )
+                            tool_reinforcement += FIX_CONTEXT_REMINDER
+                        else:
+                            # --- IMPORTANT GUARDRAIL: inject reminder right after read-only tool results ---
+                            INSPECT_REMINDER = (
+                                "\n\n[System note: the above was a read-only inspection result. Only call "
+                                "write_file, append_file, patch_file, or replace_lines if the user explicitly "
+                                "asked for a code change in their most recent message. Otherwise, respond now "
+                                "in plain text summarizing what you found — do not emit a tool call.]"
+                            )
+                            tool_reinforcement += INSPECT_REMINDER
+                    elif tool_name == "run_cmd" and any(sig in tool_result for sig in FAILURE_SIGNALS):
+                        # A nudge for immediate fix if tests are failing
+                        tool_reinforcement += (
+                            "\n\n[System note: the command failed. If you know the fix, apply it now with a "
+                            "real write_file/patch_file/replace_lines tool call — do not describe the fix in "
+                            "a markdown code block. Do not call run_cmd again until the fix has actually been "
+                            "applied via a tool call.]"
+                        )
+                        agent_flags.awaiting_fix = True
+
                 elif approval == 'edit':
                     tool_result = f"User denied and provided feedback: {input('Feedback: ')}"
                 else:
@@ -662,6 +687,13 @@ def main(state, execution_state):
                     f"Hint: In JSON, you cannot escape single quotes like \\'. To put a literal backslash "
                     f"and a quote in Python code via JSON, you must double-escape the backslash: \\\\', "
                     f"or avoid illegal JSON escape sequences. Please fix your JSON and try again."
+                )
+                # more directive retry message
+                error_msg += (
+                    "\n\nDo NOT explain this error in prose. Do NOT tell the user to run any command "
+                    "manually — you have a `run_cmd` tool for that and must use it yourself. "
+                    "Immediately retry with a single corrected <tool_call>{...}</tool_call> block "
+                    "and nothing else."
                 )
                 state.messages.append({"role": "user", "content": error_msg})
 
