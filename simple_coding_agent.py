@@ -20,7 +20,7 @@ from coding_agent.native_helpers import (get_repo_structure, generate_requiremen
 from coding_agent.guardrail_tools import (verify_sandbox_health, auto_heal_newline_escaping,
                                           find_last_code_block, run_self_verification,
                                           check_and_handle_unread_replace_lines,
-                                          check_return_consistency)
+                                          check_return_consistency, check_import_resolution)
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import split_tools
 from coding_agent import payload_parser
@@ -330,6 +330,22 @@ def check_and_handle_identical_write(tool_args, state, agent_flags, content_key)
                     if "unterminated string literal" in agent_flags.last_verification_failure.get(
                             "error", ""):
                         alert_msg += "\nHint: If you used '\\n' inside a Python string, the JSON parser converted it to a real newline. Avoid using '\\n' in string literals (e.g. use multiple prints) or quadruple-escape it as `\\\\n`."
+                elif getattr(agent_flags, "awaiting_fix", False) and getattr(agent_flags, "last_run_cmd_error", None):
+                    alert_msg = (
+                        f"System Alert: `write_file` blocked — the content is IDENTICAL to the file that just "
+                        f"failed with this error:\n{agent_flags.last_run_cmd_error}\n\n"
+                        f"The file is NOT fixed and the task is NOT complete. Do not claim success or say the "
+                        f"file 'already contains the correct content' — it does not, or the command above would "
+                        f"not have failed. Diagnose the actual cause of the error and make a REAL change.")
+                    if any(sig in agent_flags.last_run_cmd_error for sig in ("ModuleNotFoundError", "ImportError")):
+                        alert_msg += (
+                            "\nHint: this is a missing-module error. Do not guess a module name by analogy to a "
+                            "function name (e.g. assuming `foo_get_action` lives in `action_foo_agent.py`). "
+                            "If you search the codebase for the function name, use a query like `def random_get_action` "
+                            "(not just the bare name) to find the DEFINITION site specifically — a bare name search "
+                            "will also match your own broken import line and may hide the real result. Also use a "
+                            "higher max_matches (e.g. 5) since the same name can appear in multiple places."
+                        )
                 else:
                     alert_msg = (
                         f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk. "
@@ -387,12 +403,16 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
         linter_error = run_self_verification(fp)
 
         # NEW: only meaningful once syntax is valid
+        import_errors = []
         return_warnings = []
         if not linter_error:
-            line_range = None
-            if tool_name == "replace_lines":
-                line_range = (tool_args.get("start_line"), tool_args.get("end_line"))
-            return_warnings = check_return_consistency(fp, line_range)
+            import_errors = check_import_resolution(fp, state.session_cwd)
+
+            if not import_errors:
+                line_range = None
+                if tool_name == "replace_lines":
+                    line_range = (tool_args.get("start_line"), tool_args.get("end_line"))
+                return_warnings = check_return_consistency(fp, line_range)
 
         if linter_error:
             # --- AUTO-HEALER FOR JSON NEWLINE ESCAPING ---
@@ -430,6 +450,32 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
 
             if agent_flags.consecutive_lint_failures >= 3:
                 print("🛑 [Circuit Breaker] Repeated lint failures. Forcing turn end.")
+                state.messages.append(
+                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
+                return False, tool_reinforcement
+
+        elif import_errors:
+            agent_flags.consecutive_lint_failures += 1
+            msg = "\n".join(import_errors)
+            print(f"🚨 [Self-Verification] Unresolved import(s) in {os.path.basename(fp)}:\n{msg}")
+            tool_reinforcement += (
+                f"\n\nSystem Alert: The following import(s) do not resolve to any file in "
+                f"{state.session_cwd}:\n{msg}\n"
+                f"Do NOT just add a comment claiming this is fixed — the module name is still "
+                f"wrong. Use search_codebase or list_tree to find the ACTUAL file that defines "
+                f"the symbol, then correct the import to match its real filename."
+            )
+
+            # Same amnesia patch as the lint-failure path, to avoid the model
+            # re-deriving its wrong guess from its own prior assistant message.
+            if state.messages and state.messages[-1].get("role") == "assistant":
+                old_content = state.messages[-1].get("content", "")
+                if len(old_content) > 50:
+                    state.messages[-1][
+                        "content"] = f"[Action logged: {tool_name} to {fp}. Full JSON payload redacted to prevent repetition collapse.]"
+
+            if agent_flags.consecutive_lint_failures >= 3:
+                print("🛑 [Circuit Breaker] Repeated import-resolution failures. Forcing turn end.")
                 state.messages.append(
                     {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
                 return False, tool_reinforcement
@@ -493,6 +539,7 @@ def main(state, execution_state):
                 self.last_verification_failure = None  # Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
                 self.recent_tool_signatures = []  # Loop Guardrail: track recent signatures, not just the immediately previous one
                 self.awaiting_fix = False  # set when a run_cmd failure needs a follow-up fix
+                self.last_run_cmd_error = None
 
         agent_flags = AgentFlags()
         tool_args = {}  # Very important: this must exist in the first iteration
@@ -668,6 +715,7 @@ def main(state, execution_state):
                             "applied via a tool call.]"
                         )
                         agent_flags.awaiting_fix = True
+                        agent_flags.last_run_cmd_error = tool_result
 
                 elif approval == 'edit':
                     tool_result = f"User denied and provided feedback: {input('Feedback: ')}"

@@ -102,6 +102,29 @@ def run_self_verification(filepath):
         return None
 
 
+import sys
+
+def check_import_resolution(filepath, session_cwd):
+    import ast
+    with open(filepath, "r", encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=filepath)
+
+    search_dir = os.path.dirname(os.path.abspath(filepath))
+    stdlib_names = getattr(sys, "stdlib_module_names", set())
+
+    errors = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            top_level = node.module.split(".")[0]
+            if top_level in stdlib_names:
+                continue
+            module_file = os.path.join(search_dir, top_level + ".py")
+            module_pkg = os.path.join(search_dir, top_level, "__init__.py")
+            if not os.path.isfile(module_file) and not os.path.isfile(module_pkg):
+                errors.append(f"from {node.module} import ... — no file '{top_level}.py' found in {search_dir}")
+    return errors
+
+
 def check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_flags):
     """
     Prevents replace_lines from executing if the file was not inspected
