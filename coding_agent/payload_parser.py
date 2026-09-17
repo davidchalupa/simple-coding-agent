@@ -133,17 +133,32 @@ def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict |
         tool_json_str = m.group(1).strip()
         search_start = m.end()
     else:
+        candidates = []
         for m in re.finditer(r"```json\s*\n(.*?)\n```", response_content, re.DOTALL):
             candidate = m.group(1).strip()
             if '"name"' not in candidate:
                 continue
             if _is_example_context(response_content, m.start()):
                 continue
-            if _has_trailing_prose(response_content, m.end()):
-                continue
-            tool_json_str = candidate
-            search_start = m.end()
-            break
+            candidates.append((candidate, m.start(), m.end()))
+
+        if candidates:
+            if len(candidates) > 1:
+                print(
+                    f"⚠️  [Parser] {len(candidates)} JSON tool-call blocks found in one response; "
+                    f"executing the FIRST only and ignoring the rest. The model should emit ONE "
+                    f"tool call per turn."
+                )
+            # Only apply the trailing-prose check when there's a single candidate — its job is to
+            # tell a real call apart from a documentation snippet, not to choose between two
+            # otherwise-valid real calls. With multiple candidates, always prefer the first.
+            if len(candidates) == 1:
+                candidate, start, end = candidates[0]
+                if not _has_trailing_prose(response_content, end):
+                    tool_json_str, search_start = candidate, end
+            else:
+                candidate, start, end = candidates[0]
+                tool_json_str, search_start = candidate, end
 
     if not tool_json_str:
         m = re.search(r'\{\s*"name"\s*:\s*"[^"]+"', response_content, re.DOTALL)

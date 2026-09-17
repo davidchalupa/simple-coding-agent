@@ -381,8 +381,8 @@ def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_with_n
     )
 
 
-@pytest.mark.skip(reason="Unstable for now")
-def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests():
+# @pytest.mark.skip(reason="Unstable for now")
+def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_random_ai_action():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
     new_test_file = "minesweeper-solve/test_run_game_loop.py"
@@ -399,9 +399,15 @@ def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests():
         "Use the `read_symbol` tool to inspect the `ai_get_action` function of `minesweeper-solve/action_ai_agent.py`.",
         "/send",
 
-        "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns"
+        "Use the `read_symbol` tool to inspect the `random_get_action` function of `minesweeper-solve/action_ai_agent.py`.",
+        "/send",
+
+        "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns "
         "a boolean for win and loss outcomes. "
-        "CRITICAL: make sure that the board_size and mines_count in your test match `minesweeper-solve/minesweeper.py`!",
+        "CRITICAL: make sure that the board_size and mines_count in your test match `minesweeper-solve/minesweeper.py`! "
+        "HINTS: ",
+        "For the loss test, you must place mines_count mines on the board and use `random_get_action` you have read to lose the game for you. ",
+        "For the win test, you must place exactly one mine on the board and use `ai_get_action` to win the game for you.",
         "/send",
 
         "Run the new tests using `run_cmd` and fix any errors if they fail. CRITICAL: You must cd to the same directory "
@@ -440,7 +446,8 @@ def test_agent_minesweeper_modify_read_full_get_start_end_lines_rewrite_replace_
         "/send",
 
         "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns"
-        "a boolean for win and loss outcomes.",
+        "a boolean for win and loss outcomes. "
+        "CRITICAL: make sure that the board_size and mines_count in your test match `minesweeper-solve/minesweeper.py`!",
         "/send",
 
         "Run the new tests using `run_cmd` and fix any errors if they fail. CRITICAL: You must cd to the same directory "
