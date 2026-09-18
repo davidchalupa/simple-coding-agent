@@ -20,7 +20,7 @@ from coding_agent.native_helpers import (get_repo_structure, generate_requiremen
 from coding_agent.guardrail_tools import (verify_sandbox_health, auto_heal_newline_escaping,
                                           find_last_code_block, run_self_verification,
                                           check_and_handle_unread_replace_lines,
-                                          check_return_consistency, check_import_resolution)
+                                          check_return_consistency, check_import_resolution, check_callback_arity)
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import split_tools
 from coding_agent import payload_parser
@@ -404,9 +404,16 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
 
         # NEW: only meaningful once syntax is valid
         import_errors = []
+        arity_errors = []
         return_warnings = []
         if not linter_error:
             import_errors = check_import_resolution(fp, state.session_cwd)
+            arity_errors = check_callback_arity(fp, state.session_cwd)
+            if not arity_errors:
+                line_range = None
+                if tool_name == "replace_lines":
+                    line_range = (tool_args.get("start_line"), tool_args.get("end_line"))
+                return_warnings = check_return_consistency(fp, line_range)
 
             if not import_errors:
                 line_range = None
@@ -476,6 +483,17 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
 
             if agent_flags.consecutive_lint_failures >= 3:
                 print("🛑 [Circuit Breaker] Repeated import-resolution failures. Forcing turn end.")
+                state.messages.append(
+                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
+                return False, tool_reinforcement
+
+        elif arity_errors:
+            agent_flags.consecutive_lint_failures += 1
+            msg = "\n".join(arity_errors)
+            print(f"🚨 [Self-Verification] Lambda arity mismatch in {os.path.basename(fp)}:\n{msg}")
+            tool_reinforcement += f"\n\nSystem Alert: Lambda arity error:\n{msg}\nFix it."
+            if agent_flags.consecutive_lint_failures >= 3:
+                print("🛑 [Circuit Breaker] Repeated arity failures. Forcing turn end.")
                 state.messages.append(
                     {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
                 return False, tool_reinforcement

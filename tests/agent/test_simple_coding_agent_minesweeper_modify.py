@@ -336,8 +336,8 @@ def test_agent_minesweeper_modify_read_full_replace_directly():
     )
 
 
-@pytest.mark.skip(reason="Unstable for now")
-def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_with_nudge():
+# @pytest.mark.skip(reason="Unstable for now")
+def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai_action_static_loss():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
     new_test_file = "minesweeper-solve/test_run_game_loop.py"
@@ -354,12 +354,12 @@ def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_with_n
         "Use the `read_symbol` tool to inspect the `ai_get_action` function of `minesweeper-solve/action_ai_agent.py`.",
         "/send",
 
-        "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns"
-        "a boolean for win and loss outcomes. Don't rely on the real AI actually winning or losing a full game — set up "
-        "the board state directly instead. For the loss test, place a mine at a known location and have the action "
-        "click it. For the win test, set up the revealed grid so all non-mine cells are already revealed before calling "
-        "the function. "
-        "CRITICAL: make sure that the board_size and mines_count in your test match `minesweeper-solve/minesweeper.py`!",
+        "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns "
+        "a boolean for win and loss outcomes. "
+        "CRITICAL: make sure that the board_size and mines_count in your test match `minesweeper-solve/minesweeper.py`! "
+        "HINTS: ",
+        "For the win test, you must make sure that the board has exactly one mine and use `ai_get_action` to win the game for you. "
+        "For the loss test, you must place a mine at a known location and have a custom action click it.",
         "/send",
 
         "Run the new tests using `run_cmd` and fix any errors if they fail. CRITICAL: You must cd to the same directory "
@@ -406,8 +406,8 @@ def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ra
         "a boolean for win and loss outcomes. "
         "CRITICAL: make sure that the board_size and mines_count in your test match `minesweeper-solve/minesweeper.py`! "
         "HINTS: ",
-        "For the loss test, you must place mines_count mines on the board and use `random_get_action` you have read to lose the game for you. ",
-        "For the win test, you must place exactly one mine on the board and use `ai_get_action` to win the game for you.",
+        "For the loss test, you must place mines_count mines on the board and use `random_get_action` you have read to lose the game for you. "
+        "For the win test, you must make sure that the board has exactly one mine and use `ai_get_action` to win the game for you.",
         "/send",
 
         "Run the new tests using `run_cmd` and fix any errors if they fail. CRITICAL: You must cd to the same directory "

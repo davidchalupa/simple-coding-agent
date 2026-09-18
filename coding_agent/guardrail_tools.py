@@ -257,3 +257,79 @@ def check_return_consistency(filepath, line_range=None):
                 f"If every path is meant to return the same type, add an explicit return on that path."
             )
     return warnings
+
+
+def check_callback_arity(test_filepath, session_cwd):
+    """
+    Generic check: for every function call in test_filepath, if an argument passed is a lambda
+    or a locally-defined function, and that same parameter position (by name, via the callee's
+    own signature) is invoked as a call somewhere in the codebase, verify the lambda's arity
+    matches how it's actually called.
+    """
+    import ast
+
+    search_dir = os.path.dirname(os.path.abspath(test_filepath))
+
+    # 1. Build a small index: for every function defined anywhere in search_dir,
+    #    record its own parameter names, so we know e.g. run_game_loop's 5th
+    #    parameter is called `get_action`.
+    func_params = {}   # func_name -> [param_names]
+    call_arities = {}  # param_name (as used INSIDE a function body) -> observed call arity
+
+    for fname in os.listdir(search_dir):
+        if not fname.endswith(".py"):
+            continue
+        fpath = os.path.join(search_dir, fname)
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=fpath)
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                func_params[node.name] = [a.arg for a in node.args.args]
+                # look for calls to any of this function's OWN parameters inside its body
+                # (i.e. it treats one of its params as a callback and invokes it)
+                for inner in ast.walk(node):
+                    if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                            and inner.func.id in node.args.args):
+                        arity = len(inner.args) + len(inner.keywords)
+                        call_arities[inner.func.id] = arity  # last-writer wins; fine for single-callback-name codebases
+
+    if not call_arities:
+        return []
+
+    # 2. In the test file, find calls where a lambda/function is passed for a parameter
+    #    name matching one of the callback names we found being invoked.
+    with open(test_filepath, "r", encoding="utf-8") as f:
+        test_tree = ast.parse(f.read(), filename=test_filepath)
+
+    errors = []
+    for node in ast.walk(test_tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            callee_params = func_params.get(node.func.id)
+            if not callee_params:
+                continue
+
+            # match positional args to callee's declared param names
+            for i, arg in enumerate(node.args):
+                if isinstance(arg, ast.Lambda) and i < len(callee_params):
+                    pname = callee_params[i]
+                    if pname in call_arities and len(arg.args.args) != call_arities[pname]:
+                        errors.append(
+                            f"Line {arg.lineno}: lambda passed for '{pname}' takes "
+                            f"{len(arg.args.args)} argument(s), but '{pname}' is invoked "
+                            f"with {call_arities[pname]} argument(s) inside {node.func.id}. "
+                            f"Adjust the lambda's parameter count to match."
+                        )
+            for kw in node.keywords:
+                if isinstance(kw.value, ast.Lambda) and kw.arg in call_arities:
+                    if len(kw.value.args.args) != call_arities[kw.arg]:
+                        errors.append(
+                            f"Line {kw.value.lineno}: lambda passed for '{kw.arg}=' takes "
+                            f"{len(kw.value.args.args)} argument(s), but '{kw.arg}' is invoked "
+                            f"with {call_arities[kw.arg]} argument(s) inside {node.func.id}. "
+                            f"Adjust the lambda's parameter count to match."
+                        )
+    return errors
