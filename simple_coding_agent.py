@@ -20,7 +20,8 @@ from coding_agent.native_helpers import (get_repo_structure, generate_requiremen
 from coding_agent.guardrail_tools import (verify_sandbox_health, auto_heal_newline_escaping,
                                           find_last_code_block, run_self_verification,
                                           check_and_handle_unread_replace_lines,
-                                          check_return_consistency, check_import_resolution, check_callback_arity)
+                                          check_return_consistency, check_import_resolution, check_callback_arity,
+                                          check_constant_closures, check_and_handle_drastic_shrinkage, check_test_coverage_regression)
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import split_tools
 from coding_agent import payload_parser
@@ -32,6 +33,23 @@ from model_registry import MODEL_REGISTRY
 
 READ_ONLY_TOOLS = {"read_file", "read_symbol", "search_codebase", "list_tree"}
 
+TOOL_REQUIRED_FIELDS = {
+    "read_file": {"filepath"},
+    "read_symbol": {"filepath", "symbol_name"},
+    "write_file": {"filepath", "content"},
+    "append_file": {"filepath", "content"},
+    "patch_file": {"filepath", "old_content", "new_content"},
+    "replace_lines": {"filepath", "start_line", "end_line", "content"},
+    "search_codebase": {"dir_path", "query"},
+    "list_tree": {"dir_path"},
+    "run_cmd": {"command"},
+}
+
+# Fields that belong to a DIFFERENT tool — presence signals the model picked the wrong tool
+TOOL_FORBIDDEN_FIELDS = {
+    "patch_file": {"start_line", "end_line"},
+    "replace_lines": {"old_content", "new_content"},
+}
 
 class AgentState:
     def __init__(self, parsed_args):
@@ -402,26 +420,44 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
         fp = tool_args.get("filepath", "")
         linter_error = run_self_verification(fp)
 
-        # NEW: only meaningful once syntax is valid
+        fn = os.path.basename(fp).lower()
+        is_test_file = fn.startswith("test_") or fn.endswith("_test.py")
+
         import_errors = []
         arity_errors = []
+        constant_closure_errors = []
         return_warnings = []
+        coverage_errors = []
+
         if not linter_error:
             import_errors = check_import_resolution(fp, state.session_cwd)
             arity_errors = check_callback_arity(fp, state.session_cwd)
-            if not arity_errors:
+            constant_closure_errors = check_constant_closures(fp)
+            if is_test_file:
+                coverage_errors = check_test_coverage_regression(fp)
+
+            # return_consistency is the lowest-severity signal (style/robustness, not a
+            # functional bug) — only compute/report it once everything else is clean, so
+            # it never buries a real bug in the same message.
+            if not (import_errors or arity_errors or constant_closure_errors):
                 line_range = None
                 if tool_name == "replace_lines":
                     line_range = (tool_args.get("start_line"), tool_args.get("end_line"))
                 return_warnings = check_return_consistency(fp, line_range)
 
-            if not import_errors:
-                line_range = None
-                if tool_name == "replace_lines":
-                    line_range = (tool_args.get("start_line"), tool_args.get("end_line"))
-                return_warnings = check_return_consistency(fp, line_range)
+        def _amnesia_patch():
+            # Redacts the model's own prior assistant message to prevent it re-deriving
+            # a wrong guess (e.g. a hallucinated module name) from its own prior turn.
+            if state.messages and state.messages[-1].get("role") == "assistant":
+                old_content = state.messages[-1].get("content", "")
+                if len(old_content) > 50:
+                    state.messages[-1]["content"] = (
+                        f"[Action logged: {tool_name} to {fp}. Full JSON payload redacted "
+                        f"to prevent repetition collapse.]"
+                    )
 
         if linter_error:
+            agent_flags.repair_required = True
             # --- AUTO-HEALER FOR JSON NEWLINE ESCAPING ---
             if "unterminated string literal" in linter_error:
                 try:
@@ -435,6 +471,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
                         if not linter_error:
                             print(
                                 f"🔧 [Auto-Healer] Successfully repaired JSON newline escaping artifact in {os.path.basename(fp)}!")
+                            agent_flags.repair_required = False
                             agent_flags.consecutive_lint_failures = 0
                             agent_flags.last_verification_failure = None
                             # Skip the rest of the failure block since it's fixed!
@@ -447,13 +484,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
             print(f"🚨 [Self-Verification] FAILED on {os.path.basename(fp)}:\n{linter_error}")
 
             tool_reinforcement += f"\n\nSystem Alert: Syntax check failed:\n{linter_error}\nFix it."
-
-            # Amnesia patch to prevent repetition loops
-            if state.messages and state.messages[-1].get("role") == "assistant":
-                old_content = state.messages[-1].get("content", "")
-                if len(old_content) > 50:
-                    state.messages[-1][
-                        "content"] = f"[Action logged: write_file to {fp}. Full JSON payload redacted to prevent repetition collapse.]"
+            _amnesia_patch()
 
             if agent_flags.consecutive_lint_failures >= 3:
                 print("🛑 [Circuit Breaker] Repeated lint failures. Forcing turn end.")
@@ -461,48 +492,47 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
                     {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
                 return False, tool_reinforcement
 
-        elif import_errors:
+        elif import_errors or arity_errors or constant_closure_errors or coverage_errors:
+            agent_flags.repair_required = True
             agent_flags.consecutive_lint_failures += 1
-            msg = "\n".join(import_errors)
-            print(f"🚨 [Self-Verification] Unresolved import(s) in {os.path.basename(fp)}:\n{msg}")
-            tool_reinforcement += (
-                f"\n\nSystem Alert: The following import(s) do not resolve to any file in "
-                f"{state.session_cwd}:\n{msg}\n"
-                f"Do NOT just add a comment claiming this is fixed — the module name is still "
-                f"wrong. Use search_codebase or list_tree to find the ACTUAL file that defines "
-                f"the symbol, then correct the import to match its real filename."
-            )
 
-            # Same amnesia patch as the lint-failure path, to avoid the model
-            # re-deriving its wrong guess from its own prior assistant message.
-            if state.messages and state.messages[-1].get("role") == "assistant":
-                old_content = state.messages[-1].get("content", "")
-                if len(old_content) > 50:
-                    state.messages[-1][
-                        "content"] = f"[Action logged: {tool_name} to {fp}. Full JSON payload redacted to prevent repetition collapse.]"
+            sections = []
+            if import_errors:
+                sections.append(
+                    f"Unresolved import(s) — do NOT just add a comment claiming this is fixed, "
+                    f"the module name is still wrong. Use search_codebase or list_tree to find "
+                    f"the ACTUAL file that defines the symbol, then correct the import:\n"
+                    + "\n".join(import_errors)
+                )
+            if arity_errors:
+                sections.append("Lambda/callback arity mismatch(es):\n" + "\n".join(arity_errors))
+            if constant_closure_errors:
+                sections.append(
+                    "Callback(s) that ignore their arguments and always return the same "
+                    "result — this can cause an infinite loop if used as a repeated callback:\n"
+                    + "\n".join(constant_closure_errors)
+                )
+            if coverage_errors:
+                sections.append("Test coverage regression:\n" + "\n".join(coverage_errors))
+
+            msg = "\n\n".join(sections)
+            print(f"🚨 [Self-Verification] Issues found in {os.path.basename(fp)}:\n{msg}")
+            tool_reinforcement += f"\n\nSystem Alert: The following issues were found:\n{msg}\nFix ALL of the above."
+            _amnesia_patch()
 
             if agent_flags.consecutive_lint_failures >= 3:
-                print("🛑 [Circuit Breaker] Repeated import-resolution failures. Forcing turn end.")
-                state.messages.append(
-                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
-                return False, tool_reinforcement
-
-        elif arity_errors:
-            agent_flags.consecutive_lint_failures += 1
-            msg = "\n".join(arity_errors)
-            print(f"🚨 [Self-Verification] Lambda arity mismatch in {os.path.basename(fp)}:\n{msg}")
-            tool_reinforcement += f"\n\nSystem Alert: Lambda arity error:\n{msg}\nFix it."
-            if agent_flags.consecutive_lint_failures >= 3:
-                print("🛑 [Circuit Breaker] Repeated arity failures. Forcing turn end.")
+                print("🛑 [Circuit Breaker] Repeated verification failures. Forcing turn end.")
                 state.messages.append(
                     {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
                 return False, tool_reinforcement
 
         elif return_warnings:
+            agent_flags.repair_required = True
             agent_flags.consecutive_lint_failures += 1
             msg = "\n".join(return_warnings)
             print(f"🚨 [Self-Verification] Inconsistent return paths in {os.path.basename(fp)}:\n{msg}")
             tool_reinforcement += f"\n\nSystem Alert: Possible inconsistent return values:\n{msg}\nFix it."
+
             if agent_flags.consecutive_lint_failures >= 3:
                 print("🛑 [Circuit Breaker] Repeated return-consistency failures. Forcing turn end.")
                 state.messages.append(
@@ -558,6 +588,7 @@ def main(state, execution_state):
                 self.recent_tool_signatures = []  # Loop Guardrail: track recent signatures, not just the immediately previous one
                 self.awaiting_fix = False  # set when a run_cmd failure needs a follow-up fix
                 self.last_run_cmd_error = None
+                self.repair_required = False
 
         agent_flags = AgentFlags()
         tool_args = {}  # Very important: this must exist in the first iteration
@@ -590,6 +621,36 @@ def main(state, execution_state):
 
                 tool_name = tool_request.get("name")
                 tool_args = tool_request.get("args", {})
+
+                # --- SCHEMA VALIDATION: catch malformed calls the parser extracted but didn't validate ---
+                required = TOOL_REQUIRED_FIELDS.get(tool_name, set())
+                missing = required - tool_args.keys()
+                forbidden_present = TOOL_FORBIDDEN_FIELDS.get(tool_name, set()) & tool_args.keys()
+
+                if missing or forbidden_present:
+                    parts = []
+                    if forbidden_present:
+                        other_tool = next(
+                            (t for t, fields in TOOL_REQUIRED_FIELDS.items()
+                             if forbidden_present & fields and t != tool_name),
+                            None
+                        )
+                        parts.append(
+                            f"field(s) {sorted(forbidden_present)} belong to `{other_tool}`, not `{tool_name}`"
+                            if other_tool else f"unexpected field(s) {sorted(forbidden_present)} for `{tool_name}`"
+                        )
+                    if missing:
+                        parts.append(f"missing required field(s) {sorted(missing)} for `{tool_name}`")
+
+                    state.messages.append({"role": "user", "content":
+                        f"System Alert: `{tool_name}` call rejected — {'; '.join(parts)}. "
+                        f"Check the tool's exact argument names and retry with the correct shape."})
+
+                    agent_flags.consecutive_errors += 1
+                    if agent_flags.consecutive_errors >= 3:
+                        print("🛑 [Circuit Breaker] Agent stuck sending malformed tool calls. Forcing turn end.")
+                        break
+                    continue
 
                 # --- PRE-FLIGHT VALIDATION & GUARDRAILS ---
                 if tool_name in ["read_file", "run_cmd"] and "<payload>" in response_content:
@@ -636,6 +697,22 @@ def main(state, execution_state):
                     if tool_name == "write_file":
                         if check_and_handle_identical_write(tool_args, state, agent_flags, content_key):
                             continue
+                        if check_and_handle_drastic_shrinkage(tool_args, state, agent_flags, content_key):
+                            continue
+
+                if tool_name == "write_file" and agent_flags.repair_required and os.path.isfile(tool_args.get("filepath", "")):
+                    state.messages.append({
+                        "role": "user",
+                        "content": (
+                            "System Alert: `write_file` is blocked during repair of an existing file.\n"
+                            "The previous change failed verification.\n"
+                            "You must preserve the existing file and make a targeted fix using "
+                            "`patch_file` or `replace_lines`.\n"
+                            "Read the relevant code first if necessary. Do not regenerate the "
+                            "entire file."
+                        )
+                    })
+                    continue
 
                 if check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_flags):
                     continue

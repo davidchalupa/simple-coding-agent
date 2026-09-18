@@ -333,3 +333,90 @@ def check_callback_arity(test_filepath, session_cwd):
                             f"Adjust the lambda's parameter count to match."
                         )
     return errors
+
+
+def check_constant_closures(test_filepath):
+    import ast
+    with open(test_filepath, "r", encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=test_filepath)
+
+    errors = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Lambda):
+            param_names = {a.arg for a in node.args.args}
+            if node.args.vararg:
+                param_names.add(node.args.vararg.arg)
+            if not param_names:
+                continue
+            used_names = {n.id for n in ast.walk(node.body) if isinstance(n, ast.Name)}
+            if not (param_names & used_names):
+                errors.append(
+                    f"Line {node.lineno}: lambda ignores all its arguments and will return "
+                    f"the same result every time it's called — this can cause an infinite "
+                    f"loop if used as a repeated callback (e.g. get_action in a game loop)."
+                )
+    return errors
+
+
+def check_test_coverage_regression(filepath):
+    import ast
+    with open(filepath, "r", encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=filepath)
+
+    test_methods = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name.startswith("test_"):
+                    test_methods.append(item.name)
+
+    if not test_methods:
+        return [f"{os.path.basename(filepath)} contains ZERO test methods. If you were only "
+                f"fixing an unrelated error (e.g. an import), you must preserve the existing "
+                f"test methods — do not delete test content while fixing something else."]
+    return []
+
+
+def check_and_handle_drastic_shrinkage(tool_args, state, agent_flags, content_key, threshold=0.5):
+    """
+    Blocks a write_file that removes more than `threshold` fraction of the existing file's
+    lines, unless the file is trivially small. Catches 'fix one error by deleting everything'
+    regressions that check_and_handle_identical_write cannot (content is NOT identical, so
+    that guardrail doesn't fire — this one's job is drastic, not identical, changes).
+    """
+    target_fp = tool_args.get("filepath", "")
+    if not os.path.isfile(target_fp):
+        return False
+
+    try:
+        with open(target_fp, "r", encoding="utf-8") as f:
+            existing_lines = f.readlines()
+
+        proposed_content = tool_args.get(content_key, "")
+        proposed_lines = proposed_content.splitlines(keepends=True)
+
+        if len(existing_lines) >= 5 and len(proposed_lines) < len(existing_lines) * (1 - threshold):
+            print(
+                f"🛡️  [Guardrail] Blocked drastic shrinkage of '{os.path.basename(target_fp)}' "
+                f"({len(existing_lines)} → {len(proposed_lines)} lines)."
+            )
+
+            agent_flags.consecutive_errors += 1
+            if agent_flags.consecutive_errors >= 3:
+                print("🛑 [Circuit Breaker] Agent stuck attempting to shrink the file. Forcing turn end.")
+                return True
+
+            alert_msg = (
+                f"System Alert: `write_file` blocked — this write would shrink '{target_fp}' from "
+                f"{len(existing_lines)} lines to {len(proposed_lines)} lines "
+                f"({len(existing_lines) - len(proposed_lines)} lines removed). "
+                f"If you are fixing a specific error (e.g. a bad import), make a SCOPED fix — "
+                f"correct only the broken line(s) and preserve all existing test methods and "
+                f"logic. Do not delete content while fixing an unrelated error. If you intend "
+                f"to genuinely replace most of the file, explain why in your reasoning first."
+            )
+            state.messages.append({"role": "user", "content": alert_msg})
+            return True
+    except Exception:
+        pass
+    return False
