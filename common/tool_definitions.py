@@ -57,8 +57,6 @@ def write_file(filepath, content):
         return f"Error writing file: {e}"
 
 
-import re
-
 def append_file(filepath, content):
     """Appends content to the end of an existing file. Perfect for building large files safely."""
     try:
@@ -558,6 +556,8 @@ def search_codebase(dir_path=".", query="", is_regex=False, max_matches=50):
         if not query:
             return "Error: Search query cannot be empty."
 
+        was_plain_identifier = bool(re.fullmatch(r"\w+", query)) and not str(is_regex).lower() in ['true', '1', 't']
+
         if not str(is_regex).lower() in ['true', '1', 't']:
             query = re.escape(query)
 
@@ -566,11 +566,19 @@ def search_codebase(dir_path=".", query="", is_regex=False, max_matches=50):
         except re.error as e:
             return f"Error: Invalid regex pattern - {e}"
 
+        # When searching for a plain identifier, also independently check for its
+        # DEFINITION (def/class <name>) across the whole tree first, so a usage/import
+        # match elsewhere never crowds out or hides the actual definition site.
+        def_pattern = None
+        if was_plain_identifier:
+            def_pattern = re.compile(rf"^\s*(def|class)\s+{re.escape(query)}\b")
+
         results = []
+        def_results = []
         match_count = 0
+        truncated = False
 
         for root, dirs, files in os.walk(base_path):
-            # Filter directories in-place to avoid traversing into ignored paths
             dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith('.')]
 
             for file in files:
@@ -582,31 +590,59 @@ def search_codebase(dir_path=".", query="", is_regex=False, max_matches=50):
                     with open(filepath, 'r', encoding='utf-8') as f:
                         for line_num, line in enumerate(f, 1):
                             if pattern.search(line):
-                                # Make paths relative to keep output clean and short
                                 rel_path = filepath.relative_to(base_path)
-                                # Strip whitespace and truncate very long minified lines
                                 clean_line = line.strip()[:120]
-                                results.append(f"{rel_path}:{line_num}: {clean_line}")
-                                match_count += 1
 
-                                if match_count >= max_matches:
-                                    results.append(
-                                        f"\n... [TRUNCATED] Reached maximum of {max_matches} matches. Please narrow your search query.")
-                                    return "\n".join(results)
+                                if def_pattern and def_pattern.match(line):
+                                    def_results.append(f"{rel_path}:{line_num}: {clean_line}")
+                                elif not truncated:
+                                    results.append(f"{rel_path}:{line_num}: {clean_line}")
+                                    match_count += 1
+                                    if match_count >= max_matches:
+                                        truncated = True
                 except (UnicodeDecodeError, PermissionError):
-                    # Silently skip binary files or files without read permissions
                     continue
 
-        if not results:
+        # Definitions always come first and are never subject to max_matches truncation —
+        # they're the highest-value result and there are rarely more than one or two.
+        output_sections = []
+        if def_results:
+            output_sections.append("[Definition]:\n" + "\n".join(def_results))
+
+        if results:
+            output_sections.append("[Other matches]:\n" + "\n".join(results))
+            if truncated:
+                output_sections.append(
+                    f"\n... [TRUNCATED] Reached maximum of {max_matches} non-definition matches. "
+                    f"Please narrow your search query."
+                )
+
+        if not output_sections:
             return f"No matches found for '{query}' in {dir_path}."
 
-        return "\n".join(results)
+        result_text = "\n\n".join(output_sections)
+
+        # If a plain identifier was searched but NO definition was found anywhere,
+        # and the only matches look like import/usage lines, say so explicitly —
+        # this is the exact ambiguity that has caused repeated misreadings.
+        if was_plain_identifier and not def_results and results:
+            all_look_like_import = all(
+                re.search(r'^\s*(from|import)\s', line.split(": ", 1)[-1])
+                for line in results
+            )
+            if all_look_like_import:
+                result_text += (
+                    f"\n\n[Note: no 'def {query}' or 'class {query}' was found anywhere in "
+                    f"{dir_path}. The match(es) above are import/usage lines only, NOT the "
+                    f"definition — this likely means you found your own (possibly broken) "
+                    f"import line, not the real source file. Check other files, or verify the "
+                    f"symbol name is spelled correctly."
+                )
+
+        return result_text
 
     except Exception as e:
         return f"Error searching codebase: {e}"
-
-
-import ast
 
 
 def read_symbol(filepath: str, symbol_name: str) -> str:
