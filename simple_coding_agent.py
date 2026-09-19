@@ -3,6 +3,7 @@ import os
 import json
 import re
 import shutil
+from enum import Enum
 
 from pathlib import Path
 
@@ -17,12 +18,13 @@ from coding_agent.welcome_banner import display_welcome_banner
 from coding_agent.system_prompt_builder import build_system_prompt
 from coding_agent.native_helpers import (get_repo_structure, generate_requirements_native, gather_deep_context,
                                          gather_deep_context_ast)
-from coding_agent.guardrail_tools import (verify_sandbox_health, auto_heal_newline_escaping,
-                                          find_last_code_block, run_self_verification,
-                                          check_and_handle_unread_replace_lines,
-                                          check_return_consistency, check_import_resolution, check_callback_arity,
-                                          check_constant_closures, check_and_handle_drastic_shrinkage, check_test_coverage_regression,
-                                          looks_like_unapplied_code_change)
+from coding_agent.guardrails.tools import (verify_sandbox_health, find_last_code_block,
+                                           check_and_handle_unread_replace_lines,
+                                           check_and_handle_drastic_shrinkage,
+                                           looks_like_unapplied_code_change, check_and_handle_identical_write,
+                                           check_and_handle_loop_guardrail)
+from coding_agent.guardrails.definitions import READ_ONLY_TOOLS, TOOL_FORBIDDEN_FIELDS, TOOL_REQUIRED_FIELDS
+from coding_agent.guardrails.self_verification import handle_self_verification_and_healing
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import split_tools
 from coding_agent import payload_parser
@@ -31,26 +33,6 @@ from cli import parse_cli_arguments
 # the agent currently supports: Qwen2.5-Coder-7B-Instruct-Q4_K_M/Q5_K_M
 from model_registry import MODEL_REGISTRY
 
-
-READ_ONLY_TOOLS = {"read_file", "read_symbol", "search_codebase", "list_tree"}
-
-TOOL_REQUIRED_FIELDS = {
-    "read_file": {"filepath"},
-    "read_symbol": {"filepath", "symbol_name"},
-    "write_file": {"filepath", "content"},
-    "append_file": {"filepath", "content"},
-    "patch_file": {"filepath", "old_content", "new_content"},
-    "replace_lines": {"filepath", "start_line", "end_line", "content"},
-    "search_codebase": {"dir_path", "query"},
-    "list_tree": {"dir_path"},
-    "run_cmd": {"command"},
-}
-
-# Fields that belong to a DIFFERENT tool — presence signals the model picked the wrong tool
-TOOL_FORBIDDEN_FIELDS = {
-    "patch_file": {"start_line", "end_line"},
-    "replace_lines": {"old_content", "new_content"},
-}
 
 class AgentState:
     def __init__(self, parsed_args):
@@ -82,6 +64,26 @@ class AgentExecutionState:
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
 state = AgentState(parsed_args)
 execution_state = AgentExecutionState()
+
+
+class AgentFlags:
+    def __init__(self):
+        self.file_was_modified = False  # Track if any files change during this cycle
+        self.last_tool_call_signature = None  # Track the last tool run
+        self.consecutive_errors = 0  # Track infinite loop traps
+        self.consecutive_lint_failures = 0  # Track repeated self-verification failures on the same turn
+        self.last_verification_failure = None  # Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
+        self.recent_tool_signatures = []  # Loop Guardrail: track recent signatures, not just the immediately previous one
+        self.awaiting_fix = False  # set when a run_cmd failure needs a follow-up fix
+        self.last_run_cmd_error = None
+        self.repair_required = False
+        self.guardrail_hits = {}  # NEW: {guardrail_name: count} for this user-turn cycle
+
+    def record_hit(self, name, enabled=True):
+        """No-op when tallying is disabled, so call sites never need an `if` wrapper."""
+        if not enabled:
+            return
+        self.guardrail_hits[name] = self.guardrail_hits.get(name, 0) + 1
 
 
 def handle_user_input(state, user_input, system_prompt):
@@ -320,244 +322,6 @@ def handle_automated_follow_up(state, agent_flags, execution_state, tool_args):
             print("\n[System]: Main script written / modified.")
 
 
-def check_and_handle_identical_write(tool_args, state, agent_flags, content_key):
-    """
-    Checks if the proposed content is identical to the existing content in the file.
-    If identical, blocks the write operation and provides a guardrail message.
-    """
-    target_fp = tool_args.get("filepath", "")
-    if os.path.isfile(target_fp):
-        try:
-            with open(target_fp, "r", encoding="utf-8") as f:
-                existing_disk_content = f.read()
-
-            proposed_content = tool_args.get(content_key, "")
-            if existing_disk_content.strip() == proposed_content.strip():
-                print(
-                    f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
-                agent_flags.record_hit("identical_write", state.track_guardrail_hits)
-
-                agent_flags.consecutive_errors += 1
-                if agent_flags.consecutive_errors >= 3:
-                    print(
-                        "🛑 [Circuit Breaker] Agent stuck in identical write loop. Forcing turn end.")
-                    return True
-
-                # Context-Aware Guardrail Message
-                if agent_flags.last_verification_failure and agent_flags.last_verification_failure.get(
-                        "filepath") == target_fp:
-                    alert_msg = (
-                        f"System Alert: `write_file` blocked. You attempted to overwrite '{target_fp}' with the EXACT SAME BROKEN CODE that just failed self-verification. "
-                        f"You must actually CHANGE the code to fix the error.\nError was:\n{agent_flags.last_verification_failure.get('error', '')}")
-                    if "unterminated string literal" in agent_flags.last_verification_failure.get(
-                            "error", ""):
-                        alert_msg += "\nHint: If you used '\\n' inside a Python string, the JSON parser converted it to a real newline. Avoid using '\\n' in string literals (e.g. use multiple prints) or quadruple-escape it as `\\\\n`."
-                elif getattr(agent_flags, "awaiting_fix", False) and getattr(agent_flags, "last_run_cmd_error", None):
-                    alert_msg = (
-                        f"System Alert: `write_file` blocked — the content is IDENTICAL to the file that just "
-                        f"failed with this error:\n{agent_flags.last_run_cmd_error}\n\n"
-                        f"The file is NOT fixed and the task is NOT complete. Do not claim success or say the "
-                        f"file 'already contains the correct content' — it does not, or the command above would "
-                        f"not have failed. Diagnose the actual cause of the error and make a REAL change.")
-                    if any(sig in agent_flags.last_run_cmd_error for sig in ("ModuleNotFoundError", "ImportError")):
-                        alert_msg += (
-                            "\nHint: this is a missing-module error. Do not guess a module name by analogy to a "
-                            "function name (e.g. assuming `foo_get_action` lives in `action_foo_agent.py`). "
-                            "If you search the codebase for the function name, use a query like `def random_get_action` "
-                            "(not just the bare name) to find the DEFINITION site specifically — a bare name search "
-                            "will also match your own broken import line and may hide the real result. Also use a "
-                            "higher max_matches (e.g. 5) since the same name can appear in multiple places."
-                        )
-                else:
-                    alert_msg = (
-                        f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk. "
-                        f"If the user only asked to read, analyze, inspect, or explain, DO NOT invoke write tools. Answer directly in plain text.")
-
-                state.messages.append({
-                    "role": "user",
-                    "content": alert_msg
-                })
-                return True
-        except Exception:
-            pass
-        return False
-
-
-def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
-    """
-    Checks if the same tool call has been attempted recently and blocks it.
-    Returns (intercepted: bool, should_break: bool)
-    """
-    curr_sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
-    agent_flags.recent_tool_signatures.append(curr_sig)
-    agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-6:]  # short rolling window
-
-    repeat_count = agent_flags.recent_tool_signatures.count(curr_sig)
-    if repeat_count >= 2:
-        agent_flags.record_hit("loop_guardrail", state.track_guardrail_hits)
-        agent_flags.consecutive_errors += 1
-
-        if agent_flags.consecutive_errors >= 3:
-            print("🛑 [Circuit Breaker] Agent loop detected. Forcing turn end.")
-            alert_msg = (
-                f"🛑 CRITICAL SYSTEM INTERVENTION: You have attempted the exact same '{tool_name}' tool call "
-                f"{repeat_count} times without changing parameters or fixing errors. Tool execution is HALTED.\n"
-                f"DO NOT issue another tool call. Stop calling tools now and explain in plain text what went wrong and what step you will take next."
-            )
-            state.messages.append({"role": "user", "content": alert_msg})
-            return True, True  # (intercepted=True, should_break=True)
-
-        alert_msg = (
-            f"System Alert: This exact tool call has been attempted {repeat_count} times "
-            f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
-            f"underlying issue (e.g. re-check content/context requirements) or try a different approach."
-        )
-        state.messages.append({"role": "user", "content": alert_msg})
-        return True, False  # (intercepted=True, should_break=False)
-
-    return False, False
-
-
-def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flags,
-                                         tool_reinforcement, was_mod, tool_result):
-    if state.self_verify_py_writes and was_mod and tool_name in ["write_file", "append_file",
-                                                                 "patch_file", "replace_lines"]:
-        fp = tool_args.get("filepath", "")
-        linter_error = run_self_verification(fp)
-
-        fn = os.path.basename(fp).lower()
-        is_test_file = fn.startswith("test_") or fn.endswith("_test.py")
-
-        import_errors = []
-        arity_errors = []
-        constant_closure_errors = []
-        return_warnings = []
-        coverage_errors = []
-
-        if not linter_error:
-            import_errors = check_import_resolution(fp, state.session_cwd)
-            arity_errors = check_callback_arity(fp, state.session_cwd)
-            constant_closure_errors = check_constant_closures(fp)
-            if is_test_file:
-                coverage_errors = check_test_coverage_regression(fp)
-
-            # return_consistency is the lowest-severity signal (style/robustness, not a
-            # functional bug) — only compute/report it once everything else is clean, so
-            # it never buries a real bug in the same message.
-            if not (import_errors or arity_errors or constant_closure_errors):
-                line_range = None
-                if tool_name == "replace_lines":
-                    line_range = (tool_args.get("start_line"), tool_args.get("end_line"))
-                return_warnings = check_return_consistency(fp, line_range)
-
-        def _amnesia_patch():
-            # Redacts the model's own prior assistant message to prevent it re-deriving
-            # a wrong guess (e.g. a hallucinated module name) from its own prior turn.
-            if state.messages and state.messages[-1].get("role") == "assistant":
-                old_content = state.messages[-1].get("content", "")
-                if len(old_content) > 50:
-                    state.messages[-1]["content"] = (
-                        f"[Action logged: {tool_name} to {fp}. Full JSON payload redacted "
-                        f"to prevent repetition collapse.]"
-                    )
-
-        if linter_error:
-            agent_flags.repair_required = True
-            agent_flags.record_hit("syntax_error", state.track_guardrail_hits)
-            # --- AUTO-HEALER FOR JSON NEWLINE ESCAPING ---
-            if "unterminated string literal" in linter_error:
-                try:
-                    healed, new_lines = auto_heal_newline_escaping(fp)
-                    if healed:
-                        with open(fp, "w", encoding="utf-8") as f:
-                            f.writelines(new_lines)
-
-                        # Re-verify after healing
-                        linter_error = run_self_verification(fp)
-                        if not linter_error:
-                            print(
-                                f"🔧 [Auto-Healer] Successfully repaired JSON newline escaping artifact in {os.path.basename(fp)}!")
-                            agent_flags.repair_required = False
-                            agent_flags.consecutive_lint_failures = 0
-                            agent_flags.last_verification_failure = None
-                            # Skip the rest of the failure block since it's fixed!
-                            return True, tool_reinforcement
-                except Exception as e:
-                    print(f"⚠️ Auto-healer encountered an exception: {e}")
-            # ---------------
-
-            agent_flags.consecutive_lint_failures += 1
-            print(f"🚨 [Self-Verification] FAILED on {os.path.basename(fp)}:\n{linter_error}")
-
-            tool_reinforcement += f"\n\nSystem Alert: Syntax check failed:\n{linter_error}\nFix it."
-            _amnesia_patch()
-
-            if agent_flags.consecutive_lint_failures >= 3:
-                print("🛑 [Circuit Breaker] Repeated lint failures. Forcing turn end.")
-                state.messages.append(
-                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
-                return False, tool_reinforcement
-
-        elif import_errors or arity_errors or constant_closure_errors or coverage_errors:
-            agent_flags.repair_required = True
-
-            sections = []
-            if import_errors:
-                agent_flags.record_hit("import_resolution", state.track_guardrail_hits)
-                sections.append(
-                    f"Unresolved import(s) — do NOT just add a comment claiming this is fixed, "
-                    f"the module name is still wrong. Use search_codebase or list_tree to find "
-                    f"the ACTUAL file that defines the symbol, then correct the import:\n"
-                    + "\n".join(import_errors)
-                )
-            if arity_errors:
-                agent_flags.record_hit("callback_arity", state.track_guardrail_hits)
-                sections.append("Lambda/callback arity mismatch(es):\n" + "\n".join(arity_errors))
-            if constant_closure_errors:
-                agent_flags.record_hit("constant_closure", state.track_guardrail_hits)
-                sections.append(
-                    "Callback(s) that ignore their arguments and always return the same "
-                    "result — this can cause an infinite loop if used as a repeated callback:\n"
-                    + "\n".join(constant_closure_errors)
-                )
-            if coverage_errors:
-                agent_flags.record_hit("test_coverage_regression", state.track_guardrail_hits)
-                sections.append("Test coverage regression:\n" + "\n".join(coverage_errors))
-
-            agent_flags.consecutive_lint_failures += 1
-            msg = "\n\n".join(sections)
-            print(f"🚨 [Self-Verification] Issues found in {os.path.basename(fp)}:\n{msg}")
-            tool_reinforcement += f"\n\nSystem Alert: The following issues were found:\n{msg}\nFix ALL of the above."
-            _amnesia_patch()
-
-            if agent_flags.consecutive_lint_failures >= 3:
-                print("🛑 [Circuit Breaker] Repeated verification failures. Forcing turn end.")
-                state.messages.append(
-                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
-                return False, tool_reinforcement
-
-        elif return_warnings:
-            agent_flags.repair_required = True
-            agent_flags.record_hit("return_consistency", state.track_guardrail_hits)
-            agent_flags.consecutive_lint_failures += 1
-            msg = "\n".join(return_warnings)
-            print(f"🚨 [Self-Verification] Inconsistent return paths in {os.path.basename(fp)}:\n{msg}")
-            tool_reinforcement += f"\n\nSystem Alert: Possible inconsistent return values:\n{msg}\nFix it."
-
-            if agent_flags.consecutive_lint_failures >= 3:
-                print("🛑 [Circuit Breaker] Repeated return-consistency failures. Forcing turn end.")
-                state.messages.append(
-                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
-                return False, tool_reinforcement
-        else:
-            if agent_flags.consecutive_lint_failures > 0:
-                print(f"✅ {os.path.basename(fp)} now passes checks.")
-            agent_flags.consecutive_lint_failures, agent_flags.last_verification_failure = 0, None
-            return True, tool_reinforcement
-
-    return True, tool_reinforcement
-
-
 def main(state, execution_state):
     system_prompt = build_system_prompt()
 
@@ -589,25 +353,6 @@ def main(state, execution_state):
         # Standard execution or continuation of sandbox mode
         state.messages.append({"role": "user", "content": user_input})
 
-        class AgentFlags:
-            def __init__(self):
-                self.file_was_modified = False  # Track if any files change during this cycle
-                self.last_tool_call_signature = None  # Track the last tool run
-                self.consecutive_errors = 0   # Track infinite loop traps
-                self.consecutive_lint_failures = 0  # Track repeated self-verification failures on the same turn
-                self.last_verification_failure = None  # Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
-                self.recent_tool_signatures = []  # Loop Guardrail: track recent signatures, not just the immediately previous one
-                self.awaiting_fix = False  # set when a run_cmd failure needs a follow-up fix
-                self.last_run_cmd_error = None
-                self.repair_required = False
-                self.guardrail_hits = {}  # NEW: {guardrail_name: count} for this user-turn cycle
-
-            def record_hit(self, name, enabled=True):
-                """No-op when tallying is disabled, so call sites never need an `if` wrapper."""
-                if not enabled:
-                    return
-                self.guardrail_hits[name] = self.guardrail_hits.get(name, 0) + 1
-
         agent_flags = AgentFlags()
         tool_args = {}  # Very important: this must exist in the first iteration
 
@@ -620,17 +365,26 @@ def main(state, execution_state):
                 if interrupted:
                     break
 
-                # --- catch empty/near-empty generations before anything else processes them ---
-                if not response_content or len(response_content.strip()) < 5:
-                    agent_flags.consecutive_errors += 1
-                    agent_flags.record_hit("empty_generation", state.track_guardrail_hits)
-                    if agent_flags.consecutive_errors >= 3:
-                        print("🛑 [Circuit Breaker] Model producing empty responses. Forcing turn end.")
-                        break
-                    print("🛡️  [Guardrail] Empty or near-empty generation detected — prompting to continue.")
-                    state.messages.append({"role": "user", "content":
-                        "System Alert: your last response was empty. If the previous action succeeded, "
-                        "state that briefly. If more work remains, take the next action now."})
+                def handle_empty_generation(response_content, agent_flags, state):
+                    """Catch empty/near-empty generations before anything else processes them."""
+                    if not response_content or len(response_content.strip()) < 5:
+                        agent_flags.consecutive_errors += 1
+                        agent_flags.record_hit("empty_generation", state.track_guardrail_hits)
+                        if agent_flags.consecutive_errors >= 3:
+                            print("🛑 [Circuit Breaker] Model producing empty responses. Forcing turn end.")
+                            return True
+                        print("🛡️  [Guardrail] Empty or near-empty generation detected — prompting to continue.")
+                        state.messages.append({
+                            "role": "user",
+                            "content": (
+                                "System Alert: your last response was empty. If the previous action succeeded, "
+                                "state that briefly. If more work remains, take the next action now."
+                            )
+                        })
+                        return True
+                    return False
+
+                if handle_empty_generation(response_content, agent_flags, state):
                     continue
 
                 if execution_state.is_split_mode:
@@ -673,36 +427,49 @@ def main(state, execution_state):
                 tool_name = tool_request.get("name")
                 tool_args = tool_request.get("args", {})
 
-                # --- SCHEMA VALIDATION: catch malformed calls the parser extracted but didn't validate ---
-                required = TOOL_REQUIRED_FIELDS.get(tool_name, set())
-                missing = required - tool_args.keys()
-                forbidden_present = TOOL_FORBIDDEN_FIELDS.get(tool_name, set()) & tool_args.keys()
+                class TurnStatus(Enum):
+                    OK = 1
+                    END_TURN = 2
+                    TRY_AGAIN = 3
 
-                if missing or forbidden_present:
-                    parts = []
-                    if forbidden_present:
-                        other_tool = next(
-                            (t for t, fields in TOOL_REQUIRED_FIELDS.items()
-                             if forbidden_present & fields and t != tool_name),
-                            None
-                        )
-                        parts.append(
-                            f"field(s) {sorted(forbidden_present)} belong to `{other_tool}`, not `{tool_name}`"
-                            if other_tool else f"unexpected field(s) {sorted(forbidden_present)} for `{tool_name}`"
-                        )
-                    if missing:
-                        parts.append(f"missing required field(s) {sorted(missing)} for `{tool_name}`")
+                def validate_tool_call(tool_name, tool_args, agent_flags, state) -> TurnStatus:
+                    """SCHEMA VALIDATION: catch malformed calls the parser extracted but didn't validate."""
+                    required = TOOL_REQUIRED_FIELDS.get(tool_name, set())
+                    missing = required - tool_args.keys()
+                    forbidden_present = TOOL_FORBIDDEN_FIELDS.get(tool_name, set()) & tool_args.keys()
 
-                    state.messages.append({"role": "user", "content":
-                        f"System Alert: `{tool_name}` call rejected — {'; '.join(parts)}. "
-                        f"Check the tool's exact argument names and retry with the correct shape."})
+                    if missing or forbidden_present:
+                        parts = []
+                        if forbidden_present:
+                            other_tool = next(
+                                (t for t, fields in TOOL_REQUIRED_FIELDS.items()
+                                 if forbidden_present & fields and t != tool_name),
+                                None
+                            )
+                            parts.append(
+                                f"field(s) {sorted(forbidden_present)} belong to `{other_tool}`, not `{tool_name}`"
+                                if other_tool else f"unexpected field(s) {sorted(forbidden_present)} for `{tool_name}`"
+                            )
+                        if missing:
+                            parts.append(f"missing required field(s) {sorted(missing)} for `{tool_name}`")
 
-                    agent_flags.record_hit("schema_validation", state.track_guardrail_hits)
-                    agent_flags.consecutive_errors += 1
-                    if agent_flags.consecutive_errors >= 3:
-                        print("🛑 [Circuit Breaker] Agent stuck sending malformed tool calls. Forcing turn end.")
-                        break
+                        state.messages.append({"role": "user", "content":
+                            f"System Alert: `{tool_name}` call rejected — {'; '.join(parts)}. "
+                            f"Check the tool's exact argument names and retry with the correct shape."})
+
+                        agent_flags.record_hit("schema_validation", state.track_guardrail_hits)
+                        agent_flags.consecutive_errors += 1
+                        if agent_flags.consecutive_errors >= 3:
+                            print("🛑 [Circuit Breaker] Agent stuck sending malformed tool calls. Forcing turn end.")
+                            return TurnStatus.END_TURN
+                        return TurnStatus.TRY_AGAIN
+                    return TurnStatus.OK
+
+                turn_status = validate_tool_call(tool_name, tool_args, agent_flags, state)
+                if turn_status == TurnStatus.TRY_AGAIN:
                     continue
+                if turn_status == TurnStatus.END_TURN:
+                    break
 
                 #  NEW: catch literal '...' placeholders copied verbatim into replace_lines anchors ---
                 if tool_name == "replace_lines" and "..." in tool_args.get("expected_start_snippet", ""):

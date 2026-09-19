@@ -461,3 +461,101 @@ def looks_like_unapplied_code_change(response_content, last_user_message="", min
         if block.count("\n") + 1 >= min_lines:
             return True
     return False
+
+
+def check_and_handle_identical_write(tool_args, state, agent_flags, content_key):
+    """
+    Checks if the proposed content is identical to the existing content in the file.
+    If identical, blocks the write operation and provides a guardrail message.
+    """
+    target_fp = tool_args.get("filepath", "")
+    if os.path.isfile(target_fp):
+        try:
+            with open(target_fp, "r", encoding="utf-8") as f:
+                existing_disk_content = f.read()
+
+            proposed_content = tool_args.get(content_key, "")
+            if existing_disk_content.strip() == proposed_content.strip():
+                print(
+                    f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
+                agent_flags.record_hit("identical_write", state.track_guardrail_hits)
+
+                agent_flags.consecutive_errors += 1
+                if agent_flags.consecutive_errors >= 3:
+                    print(
+                        "🛑 [Circuit Breaker] Agent stuck in identical write loop. Forcing turn end.")
+                    return True
+
+                # Context-Aware Guardrail Message
+                if agent_flags.last_verification_failure and agent_flags.last_verification_failure.get(
+                        "filepath") == target_fp:
+                    alert_msg = (
+                        f"System Alert: `write_file` blocked. You attempted to overwrite '{target_fp}' with the EXACT SAME BROKEN CODE that just failed self-verification. "
+                        f"You must actually CHANGE the code to fix the error.\nError was:\n{agent_flags.last_verification_failure.get('error', '')}")
+                    if "unterminated string literal" in agent_flags.last_verification_failure.get(
+                            "error", ""):
+                        alert_msg += "\nHint: If you used '\\n' inside a Python string, the JSON parser converted it to a real newline. Avoid using '\\n' in string literals (e.g. use multiple prints) or quadruple-escape it as `\\\\n`."
+                elif getattr(agent_flags, "awaiting_fix", False) and getattr(agent_flags, "last_run_cmd_error", None):
+                    alert_msg = (
+                        f"System Alert: `write_file` blocked — the content is IDENTICAL to the file that just "
+                        f"failed with this error:\n{agent_flags.last_run_cmd_error}\n\n"
+                        f"The file is NOT fixed and the task is NOT complete. Do not claim success or say the "
+                        f"file 'already contains the correct content' — it does not, or the command above would "
+                        f"not have failed. Diagnose the actual cause of the error and make a REAL change.")
+                    if any(sig in agent_flags.last_run_cmd_error for sig in ("ModuleNotFoundError", "ImportError")):
+                        alert_msg += (
+                            "\nHint: this is a missing-module error. Do not guess a module name by analogy to a "
+                            "function name (e.g. assuming `foo_get_action` lives in `action_foo_agent.py`). "
+                            "If you search the codebase for the function name, use a query like `def random_get_action` "
+                            "(not just the bare name) to find the DEFINITION site specifically — a bare name search "
+                            "will also match your own broken import line and may hide the real result. Also use a "
+                            "higher max_matches (e.g. 5) since the same name can appear in multiple places."
+                        )
+                else:
+                    alert_msg = (
+                        f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk. "
+                        f"If the user only asked to read, analyze, inspect, or explain, DO NOT invoke write tools. Answer directly in plain text.")
+
+                state.messages.append({
+                    "role": "user",
+                    "content": alert_msg
+                })
+                return True
+        except Exception:
+            pass
+        return False
+
+
+def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
+    """
+    Checks if the same tool call has been attempted recently and blocks it.
+    Returns (intercepted: bool, should_break: bool)
+    """
+    curr_sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
+    agent_flags.recent_tool_signatures.append(curr_sig)
+    agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-6:]  # short rolling window
+
+    repeat_count = agent_flags.recent_tool_signatures.count(curr_sig)
+    if repeat_count >= 2:
+        agent_flags.record_hit("loop_guardrail", state.track_guardrail_hits)
+        agent_flags.consecutive_errors += 1
+
+        if agent_flags.consecutive_errors >= 3:
+            print("🛑 [Circuit Breaker] Agent loop detected. Forcing turn end.")
+            alert_msg = (
+                f"🛑 CRITICAL SYSTEM INTERVENTION: You have attempted the exact same '{tool_name}' tool call "
+                f"{repeat_count} times without changing parameters or fixing errors. Tool execution is HALTED.\n"
+                f"DO NOT issue another tool call. Stop calling tools now and explain in plain text what went wrong and what step you will take next."
+            )
+            state.messages.append({"role": "user", "content": alert_msg})
+            return True, True  # (intercepted=True, should_break=True)
+
+        alert_msg = (
+            f"System Alert: This exact tool call has been attempted {repeat_count} times "
+            f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
+            f"underlying issue (e.g. re-check content/context requirements) or try a different approach."
+        )
+        state.messages.append({"role": "user", "content": alert_msg})
+        return True, False  # (intercepted=True, should_break=False)
+
+    return False, False
