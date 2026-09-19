@@ -704,6 +704,32 @@ def main(state, execution_state):
                         break
                     continue
 
+                #  NEW: catch literal '...' placeholders copied verbatim into replace_lines anchors ---
+                if tool_name == "replace_lines" and "..." in tool_args.get("expected_start_snippet", ""):
+                    agent_flags.record_hit("literal_ellipsis_anchor", state.track_guardrail_hits)
+
+                    actual_line = None
+                    fp_raw = tool_args.get("filepath", "")
+                    fp_abs = fp_raw if os.path.isabs(fp_raw) else os.path.abspath(
+                        os.path.join(state.session_cwd, fp_raw))
+                    start_line = tool_args.get("start_line")
+                    if os.path.isfile(fp_abs) and start_line:
+                        with open(fp_abs, "r", encoding="utf-8") as f:
+                            lines = f.readlines()
+                        if 0 < start_line <= len(lines):
+                            actual_line = lines[start_line - 1].rstrip("\n")
+
+                    hint = f" The actual line is: {actual_line!r}" if actual_line else ""
+                    state.messages.append({"role": "user", "content":
+                        f"System Alert: `expected_start_snippet` contains a literal '...' — this looks like you copied "
+                        f"an illustrative placeholder instead of the real line content.{hint} Retry with the exact text."})
+
+                    agent_flags.consecutive_errors += 1
+                    if agent_flags.consecutive_errors >= 3:
+                        print("🛑 [Circuit Breaker] Agent stuck submitting placeholder anchors. Forcing turn end.")
+                        break
+                    continue
+
                 # --- PRE-FLIGHT VALIDATION & GUARDRAILS ---
                 if tool_name in ["read_file", "run_cmd"] and "<payload>" in response_content:
                     agent_flags.record_hit("payload_on_wrong_tool", state.track_guardrail_hits)
