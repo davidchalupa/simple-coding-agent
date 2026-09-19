@@ -21,7 +21,8 @@ from coding_agent.guardrail_tools import (verify_sandbox_health, auto_heal_newli
                                           find_last_code_block, run_self_verification,
                                           check_and_handle_unread_replace_lines,
                                           check_return_consistency, check_import_resolution, check_callback_arity,
-                                          check_constant_closures, check_and_handle_drastic_shrinkage, check_test_coverage_regression)
+                                          check_constant_closures, check_and_handle_drastic_shrinkage, check_test_coverage_regression,
+                                          looks_like_unapplied_code_change)
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import split_tools
 from coding_agent import payload_parser
@@ -611,6 +612,25 @@ def main(state, execution_state):
                 tool_request = payload_parser.extract_tool_call(response_content, allow_patch=state.allow_patch)
 
                 if not tool_request:
+                    last_user_msg = next(
+                        (m["content"] for m in reversed(state.messages) if m.get("role") == "user"),
+                        ""
+                    )
+                    if looks_like_unapplied_code_change(response_content, last_user_message=last_user_msg):
+                        agent_flags.consecutive_errors += 1
+                        if agent_flags.consecutive_errors >= 3:
+                            print(
+                                "🛑 [Circuit Breaker] Agent repeatedly shows code without applying it. Forcing turn end.")
+                            break
+                        print(
+                            "🛡️  [Guardrail] Response contained a code block but no tool call — prompting to apply it.")
+                        state.messages.append({"role": "user", "content":
+                            "System Alert: your last response showed a code change but did not call a tool. "
+                            "Nothing has changed on disk and the task is not complete. Call the appropriate "
+                            "tool now (e.g. write_file, replace_lines, patch_file) to actually apply the change "
+                            "you just described."})
+                        continue
+
                     if execution_state.is_split_mode:
                         if handle_sandbox_guardrail(execution_state, state, response_content):
                             continue

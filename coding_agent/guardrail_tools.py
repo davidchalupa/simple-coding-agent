@@ -420,3 +420,28 @@ def check_and_handle_drastic_shrinkage(tool_args, state, agent_flags, content_ke
     except Exception:
         pass
     return False
+
+NO_APPLY_REQUESTED_PATTERNS = re.compile(
+    r"\b(just (show|output|print|display)|"
+    r"don'?t (write|apply|save|modify|create)|"
+    r"in a (markdown|code) block|"
+    r"without (writing|applying|saving)|"
+    r"show me the code|"
+    r"no need to (write|apply|save))\b",
+    re.IGNORECASE,
+)
+
+def looks_like_unapplied_code_change(response_content, last_user_message="", min_lines=5):
+    """
+    Detects a fenced code block that looks like a proposed edit (not a trivial
+    illustrative snippet) in a response that produced NO tool call — but only when
+    the user's own request didn't explicitly ask to just see the code.
+    """
+    if NO_APPLY_REQUESTED_PATTERNS.search(last_user_message):
+        return False
+
+    for m in re.finditer(r"```[a-zA-Z]*\n(.*?)\n```", response_content, re.DOTALL):
+        block = m.group(1)
+        if block.count("\n") + 1 >= min_lines:
+            return True
+    return False
