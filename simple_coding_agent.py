@@ -58,7 +58,9 @@ class AgentState:
         self.force_testing = parsed_args["force_testing"]
         self.self_verify_py_writes = parsed_args["self_verify_py_writes"]
         self.kv_quantization_type = parsed_args["kv_quantization_type"]
-
+        # NEW: toggle for per-guardrail hit tallying, printed once per user-turn cycle.
+        # Falls back to False if the CLI arg parser doesn't define it yet.
+        self.track_guardrail_hits = parsed_args.get("track_guardrail_hits", True)
 
         self.active_config = MODEL_REGISTRY[parsed_args["model"]]
 
@@ -333,6 +335,7 @@ def check_and_handle_identical_write(tool_args, state, agent_flags, content_key)
             if existing_disk_content.strip() == proposed_content.strip():
                 print(
                     f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
+                agent_flags.record_hit("identical_write", state.track_guardrail_hits)
 
                 agent_flags.consecutive_errors += 1
                 if agent_flags.consecutive_errors >= 3:
@@ -391,6 +394,7 @@ def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
 
     repeat_count = agent_flags.recent_tool_signatures.count(curr_sig)
     if repeat_count >= 2:
+        agent_flags.record_hit("loop_guardrail", state.track_guardrail_hits)
         agent_flags.consecutive_errors += 1
 
         if agent_flags.consecutive_errors >= 3:
@@ -459,6 +463,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
 
         if linter_error:
             agent_flags.repair_required = True
+            agent_flags.record_hit("syntax_error", state.track_guardrail_hits)
             # --- AUTO-HEALER FOR JSON NEWLINE ESCAPING ---
             if "unterminated string literal" in linter_error:
                 try:
@@ -495,10 +500,10 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
 
         elif import_errors or arity_errors or constant_closure_errors or coverage_errors:
             agent_flags.repair_required = True
-            agent_flags.consecutive_lint_failures += 1
 
             sections = []
             if import_errors:
+                agent_flags.record_hit("import_resolution", state.track_guardrail_hits)
                 sections.append(
                     f"Unresolved import(s) — do NOT just add a comment claiming this is fixed, "
                     f"the module name is still wrong. Use search_codebase or list_tree to find "
@@ -506,16 +511,20 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
                     + "\n".join(import_errors)
                 )
             if arity_errors:
+                agent_flags.record_hit("callback_arity", state.track_guardrail_hits)
                 sections.append("Lambda/callback arity mismatch(es):\n" + "\n".join(arity_errors))
             if constant_closure_errors:
+                agent_flags.record_hit("constant_closure", state.track_guardrail_hits)
                 sections.append(
                     "Callback(s) that ignore their arguments and always return the same "
                     "result — this can cause an infinite loop if used as a repeated callback:\n"
                     + "\n".join(constant_closure_errors)
                 )
             if coverage_errors:
+                agent_flags.record_hit("test_coverage_regression", state.track_guardrail_hits)
                 sections.append("Test coverage regression:\n" + "\n".join(coverage_errors))
 
+            agent_flags.consecutive_lint_failures += 1
             msg = "\n\n".join(sections)
             print(f"🚨 [Self-Verification] Issues found in {os.path.basename(fp)}:\n{msg}")
             tool_reinforcement += f"\n\nSystem Alert: The following issues were found:\n{msg}\nFix ALL of the above."
@@ -529,6 +538,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
 
         elif return_warnings:
             agent_flags.repair_required = True
+            agent_flags.record_hit("return_consistency", state.track_guardrail_hits)
             agent_flags.consecutive_lint_failures += 1
             msg = "\n".join(return_warnings)
             print(f"🚨 [Self-Verification] Inconsistent return paths in {os.path.basename(fp)}:\n{msg}")
@@ -590,6 +600,13 @@ def main(state, execution_state):
                 self.awaiting_fix = False  # set when a run_cmd failure needs a follow-up fix
                 self.last_run_cmd_error = None
                 self.repair_required = False
+                self.guardrail_hits = {}  # NEW: {guardrail_name: count} for this user-turn cycle
+
+            def record_hit(self, name, enabled=True):
+                """No-op when tallying is disabled, so call sites never need an `if` wrapper."""
+                if not enabled:
+                    return
+                self.guardrail_hits[name] = self.guardrail_hits.get(name, 0) + 1
 
         agent_flags = AgentFlags()
         tool_args = {}  # Very important: this must exist in the first iteration
@@ -602,6 +619,19 @@ def main(state, execution_state):
                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
                 if interrupted:
                     break
+
+                # --- catch empty/near-empty generations before anything else processes them ---
+                if not response_content or len(response_content.strip()) < 5:
+                    agent_flags.consecutive_errors += 1
+                    agent_flags.record_hit("empty_generation", state.track_guardrail_hits)
+                    if agent_flags.consecutive_errors >= 3:
+                        print("🛑 [Circuit Breaker] Model producing empty responses. Forcing turn end.")
+                        break
+                    print("🛡️  [Guardrail] Empty or near-empty generation detected — prompting to continue.")
+                    state.messages.append({"role": "user", "content":
+                        "System Alert: your last response was empty. If the previous action succeeded, "
+                        "state that briefly. If more work remains, take the next action now."})
+                    continue
 
                 if execution_state.is_split_mode:
                     if handle_ast_extraction_interception(state, execution_state, response_content):
@@ -618,6 +648,7 @@ def main(state, execution_state):
                     )
                     if looks_like_unapplied_code_change(response_content, last_user_message=last_user_msg):
                         agent_flags.consecutive_errors += 1
+                        agent_flags.record_hit("unapplied_code_change", state.track_guardrail_hits)
                         if agent_flags.consecutive_errors >= 3:
                             print(
                                 "🛑 [Circuit Breaker] Agent repeatedly shows code without applying it. Forcing turn end.")
@@ -666,6 +697,7 @@ def main(state, execution_state):
                         f"System Alert: `{tool_name}` call rejected — {'; '.join(parts)}. "
                         f"Check the tool's exact argument names and retry with the correct shape."})
 
+                    agent_flags.record_hit("schema_validation", state.track_guardrail_hits)
                     agent_flags.consecutive_errors += 1
                     if agent_flags.consecutive_errors >= 3:
                         print("🛑 [Circuit Breaker] Agent stuck sending malformed tool calls. Forcing turn end.")
@@ -674,6 +706,7 @@ def main(state, execution_state):
 
                 # --- PRE-FLIGHT VALIDATION & GUARDRAILS ---
                 if tool_name in ["read_file", "run_cmd"] and "<payload>" in response_content:
+                    agent_flags.record_hit("payload_on_wrong_tool", state.track_guardrail_hits)
                     state.messages.append({"role": "user",
                                      "content": f"System Alert: Tool `{tool_name}` does NOT accept <payload> blocks. Retry with ONLY the JSON block."})
                     continue
@@ -700,9 +733,14 @@ def main(state, execution_state):
                                         recovered.strip() == agent_flags.last_verification_failure.get("content", "").strip())
 
                         if recovered and recovered.strip() and not is_stale:
+                            agent_flags.record_hit("content_recovery", state.track_guardrail_hits)
                             print(f"🔧 [Recovery] Reusing last drafted code block for {tool_name}.")
                             tool_args[content_key] = recovered
                         else:
+                            agent_flags.record_hit(
+                                "stale_fix_guard" if is_stale else "empty_content_block",
+                                state.track_guardrail_hits
+                            )
                             msg = (f"System Alert: Blocked empty {tool_name}." if not is_stale else
                                    f"System Alert: Stale-Fix Guard. You provided the SAME failing code again.\n{agent_flags.last_verification_failure.get('error', '')}")
                             msg += f"\nYou MUST provide the corrected code inside a <payload> block. Retry {tool_name}."
@@ -721,6 +759,7 @@ def main(state, execution_state):
                             continue
 
                 if tool_name == "write_file" and agent_flags.repair_required and os.path.isfile(tool_args.get("filepath", "")):
+                    agent_flags.record_hit("repair_required_write_block", state.track_guardrail_hits)
                     state.messages.append({
                         "role": "user",
                         "content": (
@@ -735,6 +774,7 @@ def main(state, execution_state):
                     continue
 
                 if check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_flags):
+                    agent_flags.record_hit("stale_read_guard", state.track_guardrail_hits)
                     continue
 
                 intercepted, should_break = check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags)
@@ -789,6 +829,15 @@ def main(state, execution_state):
                     else:
                         print(f"   Result: {tool_result}")
 
+                    # --- catch patch_file execution-time failures before they're silently ignored ---
+                    if tool_name == "patch_file" and "Error" in tool_result:
+                        agent_flags.record_hit("patch_file_execution_failure", state.track_guardrail_hits)
+                        tool_reinforcement += (
+                            f"\n\nSystem Alert: `patch_file` failed — the file was NOT changed. The task is not "
+                            f"complete. Review the error above and retry with a corrected old_content, or switch "
+                            f"to replace_lines."
+                        )
+
                     # Self-Verification
                     success, tool_reinforcement = handle_self_verification_and_healing(state, tool_name, tool_args,
                                                                                        agent_flags, tool_reinforcement, was_mod,
@@ -805,6 +854,7 @@ def main(state, execution_state):
 
                     if tool_name in READ_ONLY_TOOLS:
                         if agent_flags.awaiting_fix:
+                            agent_flags.record_hit("fix_context_reminder", state.track_guardrail_hits)
                             FIX_CONTEXT_REMINDER = (
                                 "\n\n[System note: you are still resolving the command failure from earlier in this "
                                 "turn. If this read confirmed the cause, apply the fix now with a real "
@@ -814,6 +864,7 @@ def main(state, execution_state):
                             tool_reinforcement += FIX_CONTEXT_REMINDER
                         else:
                             # --- IMPORTANT GUARDRAIL: inject reminder right after read-only tool results ---
+                            agent_flags.record_hit("inspect_reminder", state.track_guardrail_hits)
                             INSPECT_REMINDER = (
                                 "\n\n[System note: the above was a read-only inspection result. Only call "
                                 "write_file, append_file, patch_file, or replace_lines if the user explicitly "
@@ -823,6 +874,7 @@ def main(state, execution_state):
                             tool_reinforcement += INSPECT_REMINDER
                     elif tool_name == "run_cmd" and any(sig in tool_result for sig in FAILURE_SIGNALS):
                         # A nudge for immediate fix if tests are failing
+                        agent_flags.record_hit("run_cmd_failure_reminder", state.track_guardrail_hits)
                         tool_reinforcement += (
                             "\n\n[System note: the command failed. If you know the fix, apply it now with a "
                             "real write_file/patch_file/replace_lines tool call — do not describe the fix in "
@@ -843,6 +895,7 @@ def main(state, execution_state):
 
             # potential recovery from misformatted JSONs
             except json.JSONDecodeError as e:
+                agent_flags.record_hit("json_decode_error", state.track_guardrail_hits)
                 print(f"\n❌ [Parser Interceptor] Caught JSON error, feeding back to agent...")
                 error_msg = (
                     f"⚠️ ACTION FAILED: Your tool call was NOT executed because the JSON is invalid.\n"
@@ -870,6 +923,11 @@ def main(state, execution_state):
             except Exception as e:
                 print(f"\n[Error during generation]: {e}")
                 break
+
+        # --- Print the per-turn guardrail tally, if tracking is enabled and anything fired ---
+        if state.track_guardrail_hits and agent_flags.guardrail_hits:
+            total = sum(agent_flags.guardrail_hits.values())
+            print(f"📊 [Guardrail Tally] total={total} | {agent_flags.guardrail_hits}")
 
 
 if __name__ == "__main__":
