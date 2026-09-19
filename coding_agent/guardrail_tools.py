@@ -2,6 +2,8 @@ import os
 import json
 import re
 import ast
+import sys
+
 
 from coding_agent import split_tools
 from coding_agent import native_linter
@@ -102,10 +104,7 @@ def run_self_verification(filepath):
         return None
 
 
-import sys
-
 def check_import_resolution(filepath, session_cwd):
-    import ast
     with open(filepath, "r", encoding="utf-8") as f:
         tree = ast.parse(f.read(), filename=filepath)
 
@@ -113,6 +112,8 @@ def check_import_resolution(filepath, session_cwd):
     stdlib_names = getattr(sys, "stdlib_module_names", set())
 
     errors = []
+    unresolved_imported_names = set()
+
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
             top_level = node.module.split(".")[0]
@@ -122,6 +123,21 @@ def check_import_resolution(filepath, session_cwd):
             module_pkg = os.path.join(search_dir, top_level, "__init__.py")
             if not os.path.isfile(module_file) and not os.path.isfile(module_pkg):
                 errors.append(f"from {node.module} import ... — no file '{top_level}.py' found in {search_dir}")
+                # Collect the actual imported symbol names, so we can look up
+                # where THEY really live, not just report the missing module.
+                for alias in node.names:
+                    unresolved_imported_names.add(alias.asname or alias.name)
+
+    if errors and unresolved_imported_names:
+        locations = native_linter.find_symbol_definitions(search_dir, unresolved_imported_names)
+        hints = []
+        for name, paths in locations.items():
+            if paths:
+                module_names = [p.replace('.py', '').replace(os.sep, '.') for p in paths]
+                hints.append(f"  - '{name}' is defined in: {', '.join(paths)} (import via `{module_names[0]}`)")
+        if hints:
+            errors.append("\n[Workspace Hints - Do not guess, use these]:\n" + "\n".join(hints))
+
     return errors
 
 
