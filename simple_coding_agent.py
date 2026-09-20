@@ -78,6 +78,7 @@ class AgentFlags:
         self.last_run_cmd_error = None
         self.repair_required = False
         self.guardrail_hits = {}  # NEW: {guardrail_name: count} for this user-turn cycle
+        self.last_action_was_unresolved_alert = False
 
     def record_hit(self, name, enabled=True):
         """No-op when tallying is disabled, so call sites never need an `if` wrapper."""
@@ -348,6 +349,23 @@ def handle_empty_generation(response_content, agent_flags, state):
     return False
 
 
+def handle_unresolved_verification_alert(state, agent_flags):
+    if getattr(agent_flags, "last_action_was_unresolved_alert", False):
+        agent_flags.consecutive_errors += 1
+        agent_flags.record_hit("declared_complete_with_unresolved_alert", state.track_guardrail_hits)
+        if agent_flags.consecutive_errors >= 3:
+            print(
+                "🛑 [Circuit Breaker] Agent repeatedly ignores unresolved verification failures. Forcing turn end.")
+            return TurnStatus.END_TURN
+        print(
+            "🛡️  [Guardrail] Response ended without a tool call, but the last verification failure is still unresolved.")
+        state.messages.append({"role": "user", "content":
+            "System Alert: the last verification failure has NOT been resolved. You must call a "
+            "tool now to actually fix it — do not end the turn or say the task is complete."})
+        return TurnStatus.TRY_AGAIN
+    return TurnStatus.OK
+
+
 def handle_unapplied_code_change(response_content, state, agent_flags):
     last_user_msg = next(
         (m["content"] for m in reversed(state.messages) if m.get("role") == "user"),
@@ -557,6 +575,12 @@ def main(state, execution_state):
                 tool_request = payload_parser.extract_tool_call(response_content, allow_patch=state.allow_patch)
 
                 if not tool_request:
+                    turn_status = handle_unresolved_verification_alert(state, agent_flags)
+                    if turn_status == TurnStatus.TRY_AGAIN:
+                        continue
+                    if turn_status == TurnStatus.END_TURN:
+                        break
+
                     turn_status = handle_unapplied_code_change(response_content, state, agent_flags)
                     if turn_status == TurnStatus.TRY_AGAIN:
                         continue

@@ -48,8 +48,38 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
                         f"to prevent repetition collapse.]"
                     )
 
-        if linter_error:
+        # `run_self_verification` conflates two different failure shapes into one string:
+        # a genuine SyntaxError (can't even parse) vs. a missing-name error (parses fine,
+        # references an undefined symbol — often already carrying a Workspace Hint). These
+        # need different handling: a missing name with a known fix deserves the same strong,
+        # "do not declare completion" directive as import_errors below, not the weaker
+        # generic "Fix it." message meant for actual syntax breakage.
+        is_missing_name_error = bool(linter_error) and "used but never imported or defined" in linter_error
+
+        if linter_error and is_missing_name_error:
             agent_flags.repair_required = True
+            agent_flags.last_action_was_unresolved_alert = True
+            agent_flags.record_hit("missing_name_with_hint", state.track_guardrail_hits)
+            agent_flags.consecutive_lint_failures += 1
+            print(f"🚨 [Self-Verification] Missing name(s) in {os.path.basename(fp)}:\n{linter_error}")
+
+            tool_reinforcement += (
+                f"\n\nSystem Alert: {linter_error}\n"
+                f"The task is NOT complete — this name is still undefined. You MUST add the "
+                f"correct import shown in the Workspace Hints above before saying the task is "
+                f"done. Do not declare the task complete until this resolves."
+            )
+            _amnesia_patch()
+
+            if agent_flags.consecutive_lint_failures >= 3:
+                print("🛑 [Circuit Breaker] Repeated missing-name failures. Forcing turn end.")
+                state.messages.append(
+                    {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
+                return False, tool_reinforcement
+
+        elif linter_error:
+            agent_flags.repair_required = True
+            agent_flags.last_action_was_unresolved_alert = True
             agent_flags.record_hit("syntax_error", state.track_guardrail_hits)
             # --- AUTO-HEALER FOR JSON NEWLINE ESCAPING ---
             if "unterminated string literal" in linter_error:
@@ -65,6 +95,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
                             print(
                                 f"🔧 [Auto-Healer] Successfully repaired JSON newline escaping artifact in {os.path.basename(fp)}!")
                             agent_flags.repair_required = False
+                            agent_flags.last_action_was_unresolved_alert = False
                             agent_flags.consecutive_lint_failures = 0
                             agent_flags.last_verification_failure = None
                             # Skip the rest of the failure block since it's fixed!
@@ -87,6 +118,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
 
         elif import_errors or arity_errors or constant_closure_errors or coverage_errors:
             agent_flags.repair_required = True
+            agent_flags.last_action_was_unresolved_alert = True
 
             sections = []
             if import_errors:
@@ -125,6 +157,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
 
         elif return_warnings:
             agent_flags.repair_required = True
+            agent_flags.last_action_was_unresolved_alert = True
             agent_flags.record_hit("return_consistency", state.track_guardrail_hits)
             agent_flags.consecutive_lint_failures += 1
             msg = "\n".join(return_warnings)
@@ -140,6 +173,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
             if agent_flags.consecutive_lint_failures > 0:
                 print(f"✅ {os.path.basename(fp)} now passes checks.")
             agent_flags.consecutive_lint_failures, agent_flags.last_verification_failure = 0, None
+            agent_flags.last_action_was_unresolved_alert = False
             return True, tool_reinforcement
 
     return True, tool_reinforcement
