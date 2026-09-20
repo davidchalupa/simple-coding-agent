@@ -559,3 +559,44 @@ def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
         return True, False  # (intercepted=True, should_break=False)
 
     return False, False
+
+
+def check_unused_local_function_shadowed_by_wrong_call(filepath):
+    """
+    Flags a nested/local function that is defined but never called, when a
+    higher-scope function with a different name is called with arguments that
+    don't match its own signature — a strong signal the model meant to call
+    the unused local function instead.
+    """
+    import ast
+    with open(filepath, "r", encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=filepath)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        # collect nested function defs and all Call nodes within this function's body
+        nested_defs = {n.name: n for n in ast.walk(node) if isinstance(n, ast.FunctionDef) and n is not node}
+        calls_by_name = {}
+        for n in ast.walk(node):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+                calls_by_name.setdefault(n.func.id, []).append(n)
+
+        for name, def_node in nested_defs.items():
+            called = any(n.func.id == name for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name))
+            if called:
+                continue
+            # nested function is unused — check if the OUTER function is called
+            # with an arity matching the unused nested function instead of its own
+            outer_calls = calls_by_name.get(node.name, [])
+            expected_arity = len(def_node.args.args)
+            for call in outer_calls:
+                if len(call.args) == expected_arity and expected_arity != len(node.args.args):
+                    return [
+                        f"Line {call.lineno}: '{node.name}(...)' is called with "
+                        f"{len(call.args)} argument(s), matching the unused nested "
+                        f"function '{name}' defined at line {def_node.lineno}, not "
+                        f"'{node.name}'s own signature. You likely meant to call "
+                        f"'{name}(...)' instead."
+                    ]
+    return []

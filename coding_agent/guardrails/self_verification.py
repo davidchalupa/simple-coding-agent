@@ -39,7 +39,11 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
 
         def _amnesia_patch():
             # Redacts the model's own prior assistant message to prevent it re-deriving
-            # a wrong guess (e.g. a hallucinated module name) from its own prior turn.
+            # a wrong GUESS (e.g. a hallucinated module name) from its own prior turn.
+            # Deliberately NOT used for genuine syntax errors (see the syntax branch below) —
+            # a syntax error means the model's own prior draft is the right thing to correct,
+            # not a wrong guess to discard. Redacting it removes the only reference the model
+            # has for what it actually wrote, leaving it unable to retry at all.
             if state.messages and state.messages[-1].get("role") == "assistant":
                 old_content = state.messages[-1].get("content", "")
                 if len(old_content) > 50:
@@ -55,6 +59,14 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
         # "do not declare completion" directive as import_errors below, not the weaker
         # generic "Fix it." message meant for actual syntax breakage.
         is_missing_name_error = bool(linter_error) and "used but never imported or defined" in linter_error
+
+        # JSON-escaping corruption can surface as either of these two SyntaxError messages,
+        # depending on exactly where the stray backslash/newline lands — both share the same
+        # root cause and the same auto-healer fix.
+        ESCAPING_ARTIFACT_SIGNALS = (
+            "unterminated string literal",
+            "unexpected character after line continuation",
+        )
 
         if linter_error and is_missing_name_error:
             agent_flags.repair_required = True
@@ -82,7 +94,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
             agent_flags.last_action_was_unresolved_alert = True
             agent_flags.record_hit("syntax_error", state.track_guardrail_hits)
             # --- AUTO-HEALER FOR JSON NEWLINE ESCAPING ---
-            if "unterminated string literal" in linter_error:
+            if any(sig in linter_error for sig in ESCAPING_ARTIFACT_SIGNALS):
                 try:
                     healed, new_lines = auto_heal_newline_escaping(fp)
                     if healed:
@@ -108,7 +120,9 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
             print(f"🚨 [Self-Verification] FAILED on {os.path.basename(fp)}:\n{linter_error}")
 
             tool_reinforcement += f"\n\nSystem Alert: Syntax check failed:\n{linter_error}\nFix it."
-            _amnesia_patch()
+            # NOTE: _amnesia_patch() is deliberately NOT called here. See its docstring above —
+            # a genuine syntax error needs the model to see and correct its own prior draft,
+            # not have it wiped from context.
 
             if agent_flags.consecutive_lint_failures >= 3:
                 print("🛑 [Circuit Breaker] Repeated lint failures. Forcing turn end.")
