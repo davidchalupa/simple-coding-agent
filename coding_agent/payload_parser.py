@@ -23,21 +23,6 @@ def _has_trailing_prose(text: str, match_end: int) -> bool:
     return bool(re.search(r'[a-zA-Z0-9]', suffix))
 
 
-def _normalize_double_escaped_content(text):
-    if not isinstance(text, str):
-        return text
-    if '\n' in text:
-        return text
-    if '\\n' not in text and '\\t' not in text and '\\r' not in text:
-        return text
-    return (
-        text.replace('\\r\\n', '\n')
-        .replace('\\n', '\n')
-        .replace('\\t', '\t')
-        .replace('\\r', '\n')
-    )
-
-
 def _clean_over_escaped_quotes(text):
     return text.replace('\\"', '"') if isinstance(text, str) else text
 
@@ -83,45 +68,60 @@ def _raw_string_arg(text, key):
     return m.group(1) if m else None
 
 
+def _fix_double_escaped_newlines(raw):
+    """
+    Detects the specific pathology where the model emitted \\n (JSON-decodes to literal
+    backslash-n) everywhere a real newline was intended, rather than \n (JSON-decodes to
+    an actual newline). Heuristic: three or more \\n sequences is treated as over-escaped
+    source code rather than legitimate content that needs a literal backslash-n.
+
+    IMPORTANT: \\n is valid JSON (it decodes cleanly to the two characters '\' and 'n'),
+    so this must be checked BEFORE trusting a successful json.loads — a plain try/except
+    around json.loads will never raise on this input and will silently return the wrong,
+    over-escaped result.
+    """
+    if not isinstance(raw, str):
+        return raw
+    if raw.count(r'\\n') >= 3:
+        return raw.replace(r'\\n', r'\n')
+    return raw
+
+
 def _decode_inline_content(raw):
-    """
-    Decode JSON content while fixing the 7B-model pattern where source
-    line breaks are emitted as \\n at an extra escape level.
-
-    Outside source strings:
-        \\n -> newline
-
-    Inside source strings:
-        \\n stays literal \\n
-
-    Other escapes are left alone.
-    """
     if raw is None:
         return ""
 
-    out = []
-    in_string = False
-    i = 0
+    # Repair pass 1 (must run BEFORE the fast path): collapse over-escaped newlines.
+    # \\n is valid JSON on its own, so a bare json.loads would succeed "correctly" and
+    # silently return literal backslash-n text instead of real line breaks. Checking and
+    # fixing this first means the fast path below then sees the corrected, single-escaped
+    # form and decodes it properly.
+    raw = _fix_double_escaped_newlines(raw)
 
-    while i < len(raw):
-        if raw.startswith(r'\"', i):
-            in_string = not in_string
-            out.append(r'\"')
-            i += 2
-            continue
+    # Fast path: valid JSON (after the repair above) is trusted completely.
+    try:
+        return json.loads(f'"{raw}"')
+    except json.JSONDecodeError:
+        pass
 
-        if raw.startswith(r'\\n', i):
-            out.append(r'\\n' if in_string else r'\n')
-            i += 3
-            continue
-
-        out.append(raw[i])
-        i += 1
+    # Repair pass 2: the other common breakage is the model escaping a single-quote
+    # as \' — which is not a valid JSON escape at all (JSON has no use for escaping
+    # single quotes). Un-escape it back to a bare ' before anything else, since a
+    # bare ' is always valid inside a JSON string.
+    repaired = re.sub(r"\\'", "'", raw)
 
     try:
-        return json.loads(f'"{"".join(out)}"')
+        return json.loads(f'"{repaired}"')
     except json.JSONDecodeError:
         return raw
+
+
+def _decode_string_field(raw):
+    """Shared decode-with-repair for any raw JSON string field that may contain
+    multi-line source content (old_content, new_content, etc.), not just `content`."""
+    if raw is None:
+        return None
+    return _decode_inline_content(raw)
 
 
 def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict | None:
@@ -245,6 +245,14 @@ def parse_robust_tool_call(
             elif not data["args"].get("content") and raw_payload is not None:
                 data["args"]["content"] = raw_payload
 
+        if name == "patch_file":
+            raw_old = _raw_string_arg(json_clean, "old_content")
+            raw_new = _raw_string_arg(json_clean, "new_content")
+            if raw_old is not None:
+                data["args"]["old_content"] = _decode_string_field(raw_old)
+            if raw_new is not None:
+                data["args"]["new_content"] = _decode_string_field(raw_new)
+
         for key in ("content", "old_content", "new_content"):
             if key in data["args"]:
                 data["args"][key] = _clean_over_escaped_quotes(data["args"][key])
@@ -327,9 +335,9 @@ def parse_robust_tool_call(
         if fp:
             args["filepath"] = fp.group(1)
         if old is not None:
-            args["old_content"] = json.loads(f'"{old}"')
+            args["old_content"] = _decode_string_field(old)
         if new is not None:
-            args["new_content"] = json.loads(f'"{new}"')
+            args["new_content"] = _decode_string_field(new)
 
         return {"name": tool_name, "args": args}
 
