@@ -88,30 +88,55 @@ def _fix_double_escaped_newlines(raw):
 
 
 def _decode_inline_content(raw):
+    """
+    Decode a raw JSON string value for file content, with two model-specific repairs:
+
+    1. \\' (escaped single-quote) is never valid JSON — ' never needs escaping inside a
+       JSON string. Unescape it in place. This does NOT toggle any string-tracking state;
+       it's purely a "the model added an unnecessary/invalid escape" fix.
+
+    2. Outside a nested double-quoted string in the generated source (tracked via \\"
+       boundaries), a doubly-escaped \\\\n is treated as a structural line break and
+       collapsed to a single \\n (which json.loads will turn into a real newline).
+       INSIDE a nested \\"...\\" string, \\\\n is left as-is, since it likely represents
+       a literal backslash-n escape sequence the generated file's own string needs to
+       contain on disk (e.g. print("hello\\nworld") should keep \\n as two characters,
+       not become an actual newline).
+
+    Without repair (1), a single stray \\' anywhere in the payload causes the final
+    json.loads() call to fail for the ENTIRE string, falling back to returning the raw,
+    completely unconverted text — this was the actual root cause of prior corruption,
+    not a flaw in the context-tracking approach itself.
+    """
     if raw is None:
         return ""
 
-    # Repair pass 1 (must run BEFORE the fast path): collapse over-escaped newlines.
-    # \\n is valid JSON on its own, so a bare json.loads would succeed "correctly" and
-    # silently return literal backslash-n text instead of real line breaks. Checking and
-    # fixing this first means the fast path below then sees the corrected, single-escaped
-    # form and decodes it properly.
-    raw = _fix_double_escaped_newlines(raw)
+    out = []
+    i = 0
+    in_string = False  # inside a \"..\" nested string literal in the generated source
 
-    # Fast path: valid JSON (after the repair above) is trusted completely.
+    while i < len(raw):
+        if raw.startswith(r"\'", i):
+            out.append("'")
+            i += 2
+            continue
+
+        if raw.startswith(r'\"', i):
+            in_string = not in_string
+            out.append(r'\"')
+            i += 2
+            continue
+
+        if raw.startswith(r'\\n', i):
+            out.append(r'\\n' if in_string else r'\n')
+            i += 3
+            continue
+
+        out.append(raw[i])
+        i += 1
+
     try:
-        return json.loads(f'"{raw}"')
-    except json.JSONDecodeError:
-        pass
-
-    # Repair pass 2: the other common breakage is the model escaping a single-quote
-    # as \' — which is not a valid JSON escape at all (JSON has no use for escaping
-    # single quotes). Un-escape it back to a bare ' before anything else, since a
-    # bare ' is always valid inside a JSON string.
-    repaired = re.sub(r"\\'", "'", raw)
-
-    try:
-        return json.loads(f'"{repaired}"')
+        return json.loads(f'"{"".join(out)}"', strict=False)
     except json.JSONDecodeError:
         return raw
 
