@@ -567,6 +567,10 @@ READ_INTENT_PATTERN = re.compile(
     r'\b(read|inspect|view|examine|look at)\b.*\b(file|code|contents?)\b',
     re.IGNORECASE,
 )
+WRITE_INTENT_PATTERN = re.compile(
+    r'\b(write|save)\b.*\b(file|code|contents?)\b',
+    re.IGNORECASE,
+)
 
 def looks_like_memory_regurgitation_on_read_request(response_content, last_user_message, tool_calls_this_turn, min_lines=5):
     """
@@ -577,6 +581,8 @@ def looks_like_memory_regurgitation_on_read_request(response_content, last_user_
     if tool_calls_this_turn > 0:
         return False
     if not READ_INTENT_PATTERN.search(last_user_message or ""):
+        return False
+    if WRITE_INTENT_PATTERN.search(last_user_message or ""):
         return False
     return looks_like_unapplied_code_change(response_content, last_user_message="")
     # last_user_message="" deliberately bypasses the "just show me the code" suppression
