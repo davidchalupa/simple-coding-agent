@@ -22,7 +22,7 @@ from coding_agent.guardrails.tools import (verify_sandbox_health, find_last_code
                                            check_and_handle_unread_replace_lines,
                                            check_and_handle_drastic_shrinkage,
                                            looks_like_unapplied_code_change, check_and_handle_identical_write,
-                                           check_and_handle_loop_guardrail)
+                                           check_and_handle_loop_guardrail, looks_like_memory_regurgitation_on_read_request)
 from coding_agent.guardrails.definitions import READ_ONLY_TOOLS, TOOL_FORBIDDEN_FIELDS, TOOL_REQUIRED_FIELDS
 from coding_agent.guardrails.self_verification import handle_self_verification_and_healing
 from coding_agent import hidden_readme_prompt_builder
@@ -78,7 +78,7 @@ class AgentFlags:
         self.last_run_cmd_error = None
         self.repair_required = False
         self.guardrail_hits = {}  # NEW: {guardrail_name: count} for this user-turn cycle
-        self.last_action_was_unresolved_alert = False
+        self.tool_calls_this_turn = 0
 
     def record_hit(self, name, enabled=True):
         """No-op when tallying is disabled, so call sites never need an `if` wrapper."""
@@ -483,6 +483,28 @@ def handle_content_recovery(state, agent_flags, tool_args, content_key, tool_nam
         return TurnStatus.OK
 
 
+def handle_memory_regurgitation_on_read(response_content, state, agent_flags):
+    last_user_msg = next(
+        (m["content"] for m in reversed(state.messages) if m.get("role") == "user"),
+        ""
+    )
+    if looks_like_memory_regurgitation_on_read_request(
+        response_content, last_user_msg, agent_flags.tool_calls_this_turn
+    ):
+        agent_flags.consecutive_errors += 1
+        agent_flags.record_hit("memory_regurgitation_on_read", state.track_guardrail_hits)
+        if agent_flags.consecutive_errors >= 3:
+            print("🛑 [Circuit Breaker] Agent repeatedly recites from memory instead of reading. Forcing turn end.")
+            return TurnStatus.END_TURN
+        print("🛡️  [Guardrail] User asked to read a file; response contains code but no read_file/read_symbol call.")
+        state.messages.append({"role": "user", "content":
+            "System Alert: the user asked you to READ an existing file. You must NOT write code "
+            "from memory or invent an implementation — you have not actually seen this file's "
+            "contents yet. Call read_file now to see the real content before saying anything about it."})
+        return TurnStatus.TRY_AGAIN
+    return TurnStatus.OK
+
+
 def manage_tool_response(tool_name, tool_result, agent_flags, state, tool_reinforcement):
     FAILURE_SIGNALS = ("Traceback", "Error", "FAILED", "SyntaxError", "Exception")
 
@@ -575,6 +597,12 @@ def main(state, execution_state):
                 tool_request = payload_parser.extract_tool_call(response_content, allow_patch=state.allow_patch)
 
                 if not tool_request:
+                    turn_status = handle_memory_regurgitation_on_read(response_content, state, agent_flags)
+                    if turn_status == TurnStatus.TRY_AGAIN:
+                        continue
+                    if turn_status == TurnStatus.END_TURN:
+                        break
+
                     turn_status = handle_unresolved_verification_alert(state, agent_flags)
                     if turn_status == TurnStatus.TRY_AGAIN:
                         continue
@@ -637,7 +665,11 @@ def main(state, execution_state):
                         continue
 
                     if tool_name == "write_file":
-                        if check_and_handle_identical_write(tool_args, state, agent_flags, content_key):
+                        intercepted, should_break = check_and_handle_identical_write(tool_args, state, agent_flags,
+                                                                                     content_key)
+                        if intercepted:
+                            if should_break:
+                                break
                             continue
                         if check_and_handle_drastic_shrinkage(tool_args, state, agent_flags, content_key):
                             continue
@@ -698,6 +730,7 @@ def main(state, execution_state):
 
                 if approval == 'y':
                     tool_result, tool_reinforcement, was_mod = execute_tool(tool_name, tool_args, execution_state.is_split_mode)
+                    agent_flags.tool_calls_this_turn += 1
                     agent_flags.file_was_modified = agent_flags.file_was_modified or was_mod
                     # Reset awaiting fix flag
                     if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"] and was_mod:

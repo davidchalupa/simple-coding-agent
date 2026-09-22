@@ -467,6 +467,7 @@ def check_and_handle_identical_write(tool_args, state, agent_flags, content_key)
     """
     Checks if the proposed content is identical to the existing content in the file.
     If identical, blocks the write operation and provides a guardrail message.
+    Returns (intercepted: bool, should_break: bool) — mirrors check_and_handle_loop_guardrail.
     """
     target_fp = tool_args.get("filepath", "")
     if os.path.isfile(target_fp):
@@ -484,7 +485,7 @@ def check_and_handle_identical_write(tool_args, state, agent_flags, content_key)
                 if agent_flags.consecutive_errors >= 3:
                     print(
                         "🛑 [Circuit Breaker] Agent stuck in identical write loop. Forcing turn end.")
-                    return True
+                    return True, True   # intercepted, SHOULD BREAK
 
                 # Context-Aware Guardrail Message
                 if agent_flags.last_verification_failure and agent_flags.last_verification_failure.get(
@@ -520,10 +521,11 @@ def check_and_handle_identical_write(tool_args, state, agent_flags, content_key)
                     "role": "user",
                     "content": alert_msg
                 })
-                return True
+                return True, False   # intercepted, keep retrying
         except Exception:
             pass
-        return False
+        return False, False
+    return False, False
 
 
 def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
@@ -559,6 +561,27 @@ def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
         return True, False  # (intercepted=True, should_break=False)
 
     return False, False
+
+
+READ_INTENT_PATTERN = re.compile(
+    r'\b(read|inspect|view|examine|look at)\b.*\b(file|code|contents?)\b',
+    re.IGNORECASE,
+)
+
+def looks_like_memory_regurgitation_on_read_request(response_content, last_user_message, tool_calls_this_turn, min_lines=5):
+    """
+    Detects the specific pattern: the user asked to read/inspect a file, no tool has
+    executed yet this turn, and the response contains a large code block — almost
+    certainly the model reciting something from memory instead of calling read_file.
+    """
+    if tool_calls_this_turn > 0:
+        return False
+    if not READ_INTENT_PATTERN.search(last_user_message or ""):
+        return False
+    return looks_like_unapplied_code_change(response_content, last_user_message="")
+    # last_user_message="" deliberately bypasses the "just show me the code" suppression
+    # from looks_like_unapplied_code_change, since THIS check is only reached when the
+    # user's message already matched a read-file intent, not a "show me" intent.
 
 
 def check_unused_local_function_shadowed_by_wrong_call(filepath):
