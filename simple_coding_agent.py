@@ -619,6 +619,19 @@ def main(state, execution_state):
                         if handle_sandbox_guardrail(execution_state, state, response_content):
                             continue
 
+                    if agent_flags.awaiting_fix:
+                        agent_flags.record_hit("completion_blocked_pending_fix", state.track_guardrail_hits)
+                        state.messages.append({
+                            "role": "user",
+                            "content": (
+                                "System Alert: The verification command failed earlier in this turn. "
+                                "The task is NOT complete. Do not claim completion yet. "
+                                "You must make a real fix and run the verification command again. "
+                                "Only a successful verification run can clear this state."
+                            )
+                        })
+                        continue
+
                     handle_automated_follow_up(state, agent_flags, execution_state, tool_args)
 
                     break

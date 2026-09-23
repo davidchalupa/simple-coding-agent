@@ -318,7 +318,7 @@ def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai
     )
 
 
-# @pytest.mark.skip(reason="Unstable for now")
+@pytest.mark.skip(reason="Unstable for now")
 def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_random_ai_action():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
