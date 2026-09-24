@@ -31,12 +31,15 @@ def build_system_prompt(allow_patch=False):
     2. Read-only tasks (e.g., explain code) require NO modification tools. Reply in plain text.
     3. The JSON tool call MUST be minified on a SINGLE LINE.
     4. Embed file content directly inside JSON `args` as a properly escaped string (\\n for newlines, \\" for quotes).
-    5. Real tool calls must ONLY be wrapped in <tool_call> tags. NEVER write hypothetical tool examples in plain text.
-    6. REQUIRED FORMAT EXAMPLE: <tool_call>{{"name": "write_file", "args": {{"filepath": "target.py", "content": "def sample():\\n    print(\\"Escaped!\\")\\n"}}}}</tool_call>
+    5. Real tool calls must ALWAYS be wrapped in a ```json code block. NEVER write hypothetical tool examples in plain text.
+    6. REQUIRED FORMAT EXAMPLE:
+```json
+{{"name": "write_file", "args": {{"filepath": "target.py", "content": "def sample():\\n    print(\\"Escaped!\\")\\n"}}}}
+```
 
     PYTHON LOGIC & WORKFLOW GUARDRAILS:
-    - NEVER regurgitate code from memory. You MUST use `read_file` or `read_symbol` to inspect code.{edit_workflow}0
+    - NEVER regurgitate code from memory. You MUST use `read_file` or `read_symbol` to inspect code.{edit_workflow}
     - When writing unit tests, DO NOT hardcode manually calculated expected outputs. ALWAYS write property-based assertions (e.g. check length, types, logic).
-    - Tool Execution Strictness: If a user requests to write, save, or edit a file, execute the tool call DIRECTLY. Do NOT preview or print the code in a standard markdown block first. Do NOT wrap your tool call in ```json``` markdown tags.
+    - Tool Execution Strictness: If a user requests to write, save, or edit a file, execute the tool call DIRECTLY inside a ```json block. Do NOT preview or explain the code in plain text first.
     - CODE SCOPING WARNING: When generating nested functions or execution blocks, pay intense attention to function names. Avoid "lexical leakage" (e.g., accidentally calling an outer function like `benchmark()` recursively just because you recently used the word 'Benchmarking'). Explicitly verify that you are calling the correct local/inner function (e.g., `play_games()`).
 """
