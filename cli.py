@@ -29,6 +29,9 @@ def parse_cli_arguments(model_registry_keys):
                         choices=[KVQuantizationType.NONE, KVQuantizationType.Q8_0, KVQuantizationType.Q4_0],
                         default=KVQuantizationType.Q8_0,
                         help="Specify KV cache quantization type (None, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0). Default is GGML_TYPE_Q8_0.")
+    parser.add_argument("--restrictive", action="store_true",
+                        help="Forces the agent to use a more restrictive system prompt: more stable for mechanical "
+                             "coding tasks but also less suitable for more complex tasks.")
 
     args, unknown = parser.parse_known_args()
 
@@ -39,6 +42,7 @@ def parse_cli_arguments(model_registry_keys):
     force_testing = args.force_testing
     self_verify_py_writes = not args.disable_self_verify
     kv_quantization_type = args.kv_quantization_type.value
+    restrictive = args.restrictive
 
     return {
         "model": model,
@@ -47,5 +51,6 @@ def parse_cli_arguments(model_registry_keys):
         "force_testing": force_testing,
         "self_verify_py_writes": self_verify_py_writes,
         "kv_quantization_type": kv_quantization_type,
+        "restrictive": restrictive,
         "unknown": unknown
     }

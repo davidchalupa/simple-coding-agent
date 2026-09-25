@@ -14,11 +14,17 @@ def pytest_addoption(parser):
         default="qwen2.5-7b",
         help="Specify model key from MODEL_REGISTRY (e.g. qwen2.5, hermes3)."
     )
+    parser.addoption(
+        "--restrictive",
+        action="store_true",
+        help="Specify whether to use restrictive mode."
+    )
 
 
 @pytest.fixture(autouse=True)
 def setup_agent_model(request):
     selected_model = request.config.getoption("model")
+    restrictive = request.config.getoption("restrictive")
 
     # Inject active model config into simple_coding_agent
     if selected_model in MODEL_REGISTRY:
@@ -31,5 +37,7 @@ def setup_agent_model(request):
     simple_coding_agent.llm = None
 
     fake_args = ["simple_coding_agent.py", "--model", selected_model]
+    if restrictive:
+        fake_args.append("--restrictive")
     with patch.object(sys, "argv", fake_args):
         yield
