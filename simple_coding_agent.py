@@ -721,6 +721,45 @@ def main(state, execution_state):
 
                 target_code = tool_args.get(content_key, '')
 
+                # >>> PRE-FLIGHT LINTER GUARDRAIL <<<
+                if tool_name == "write_file" and tool_args.get("filepath", "").endswith(".py"):
+                    # Use the modified linter, passing target_code directly so we don't touch the disk yet
+                    from coding_agent.native_linter import check_python_syntax_and_imports
+
+                    filepath_abs = tool_args.get("filepath")
+                    lint_error = check_python_syntax_and_imports(
+                        filepath=filepath_abs,
+                        workspace_dir=state.session_cwd,
+                        source_code=target_code
+                    )
+
+                    if lint_error:
+                        agent_flags.record_hit("linter_pre_flight_failure", state.track_guardrail_hits)
+                        agent_flags.consecutive_errors += 1
+
+                        print(
+                            f"\n❌ [Pre-Flight Guardrail] Blocked malformed code for {os.path.basename(filepath_abs)}.")
+
+                        if agent_flags.consecutive_errors >= 3:
+                            print("🛑 [Circuit Breaker] Agent stuck writing broken code. Forcing turn end.")
+                            break
+
+                        # >>> AMNESIA REDACTION <<<
+                        # Keep the assistant message, but destroy the bad JSON
+                        if state.messages and state.messages[-1].get("role") == "assistant":
+                            state.messages[-1]["content"] = f"[Action blocked pre-flight: {tool_name}. JSON payload redacted to prevent repetition collapse.]"
+
+                    # Feed the exact linter error back immediately
+                        state.messages.append({
+                            "role": "user",
+                            "content": (
+                                f"System Alert: Pre-flight linting failed for `{os.path.basename(filepath_abs)}`. "
+                                f"The file was NOT saved.\n\n{lint_error}\n\n"
+                                f"Fix the code and retry the `write_file` tool."
+                            )
+                        })
+                        continue  # Intercepts execution, loops back to model generation!
+
                 if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"]:
                     if tool_name == "patch_file":
                         old_snip = tool_args.get('old_content', '')

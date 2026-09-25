@@ -70,44 +70,70 @@ class DependencyChecker(ast.NodeVisitor):
     def __init__(self):
         self.missing_names = set()
         self.global_names = set(dir(builtins))
-        self.scopes = [self.global_names]  # Stack of scope sets. Index 0 is global.
+        self.scopes = [self.global_names]
         self.allowed_symbols = ['__file__']
 
+        # NEW: Track function signatures to catch hallucinated arguments
+        self.function_signatures = {}  # name -> (min_args, max_args, has_varargs)
+        self.arity_errors = []
+
     def visit_Module(self, node):
-        # PASS 1: Gather all global definitions (including those inside if/try/with blocks)
+        checker_instance = self
+
         class GlobalVisitor(ast.NodeVisitor):
             def __init__(self, global_names):
                 self.global_names = global_names
+
+            def visit_FunctionDef(self, n):
+                self.global_names.add(n.name)
+
+                # --- NEW: Calculate Arity (Argument Count) ---
+                defaults_count = len(n.args.defaults)
+                pos_args = len(getattr(n.args, 'posonlyargs', [])) + len(n.args.args)
+                min_args = pos_args - defaults_count
+                max_args = pos_args
+                has_varargs = bool(n.args.vararg or n.args.kwarg)
+
+                checker_instance.function_signatures[n.name] = (min_args, max_args, has_varargs)
+                # Stop traversal
+
+            def visit_AsyncFunctionDef(self, n):
+                self.visit_FunctionDef(n)  # Share arity logic
 
             def visit_Name(self, n):
                 if isinstance(n.ctx, ast.Store):
                     self.global_names.add(n.id)
 
-            def visit_FunctionDef(self, n):
-                self.global_names.add(n.name)
-                # Stop traversal: Do not bleed into function body
-
-            def visit_AsyncFunctionDef(self, n):
-                self.global_names.add(n.name)
-                # Stop traversal
-
             def visit_ClassDef(self, n):
                 self.global_names.add(n.name)
-                # Stop traversal
 
             def visit_Import(self, n):
                 for alias in n.names:
-                    name = alias.asname or alias.name
-                    self.global_names.add(name.split('.')[0])
+                    self.global_names.add((alias.asname or alias.name).split('.')[0])
 
             def visit_ImportFrom(self, n):
                 for alias in n.names:
-                    name = alias.asname or alias.name
-                    self.global_names.add(name)
+                    self.global_names.add(alias.asname or alias.name)
 
         GlobalVisitor(self.global_names).visit(node)
+        self.generic_visit(node)
 
-        # PASS 2: Traverse code to check for scope violations and usage
+    # --- NEW: Catch Function Call Argument Mismatches ---
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Name):
+            func_name = node.func.id
+            if func_name in self.function_signatures:
+                min_args, max_args, has_varargs = self.function_signatures[func_name]
+
+                # If there are *args, **kwargs, or keyword arguments in the call,
+                # we skip the strict arity check to avoid false positives.
+                has_starred = any(isinstance(a, ast.Starred) for a in node.args)
+                if not has_varargs and not has_starred and not node.keywords:
+                    passed_args = len(node.args)
+                    if passed_args < min_args or passed_args > max_args:
+                        expected = min_args if min_args == max_args else f"{min_args}-{max_args}"
+                        self.arity_errors.append(
+                            f"Function '{func_name}' expects {expected} positional arguments, but was called with {passed_args}.")
         self.generic_visit(node)
 
     def _add_to_scope(self, node, scope_set):
@@ -220,8 +246,7 @@ def find_symbol_definitions(workspace_dir, missing_names):
     return found_locations
 
 
-def check_python_syntax_and_imports(filepath, workspace_dir=None):
-    """Checks Python files for syntax errors AND missing imports/variables."""
+def check_python_syntax_and_imports(filepath, workspace_dir=None, source_code=None):
     if not filepath.endswith('.py'):
         return None
 
@@ -229,35 +254,39 @@ def check_python_syntax_and_imports(filepath, workspace_dir=None):
         workspace_dir = os.path.dirname(os.path.abspath(filepath))
 
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            source = f.read()
+        if source_code is None:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                source_code = f.read()
 
-        tree = ast.parse(source, filename=filepath)
-
+        tree = ast.parse(source_code, filename=filepath)
         checker = DependencyChecker()
         checker.visit(tree)
 
-        missing_names = checker.missing_names
+        error_msg = ""
 
-        if missing_names:
-            error_msg = f"Linter Error: The following names/modules are used but never imported or defined: {list(missing_names)}\n"
+        # 1. Check for arity errors (The exact bug you encountered!)
+        if checker.arity_errors:
+            error_msg += "Linter Error: Function signature mismatch detected:\n"
+            for err in checker.arity_errors:
+                error_msg += f"  - {err}\n"
+            error_msg += "Check if you accidentally called the wrong function or missed an argument.\n\n"
 
-            locations = find_symbol_definitions(workspace_dir, missing_names)
+        # 2. Check for missing names
+        if checker.missing_names:
+            error_msg += f"Linter Error: The following names/modules are used but never imported or defined: {list(checker.missing_names)}\n"
+            locations = find_symbol_definitions(workspace_dir, checker.missing_names)
             hints = []
-
             for name, paths in locations.items():
                 if paths:
                     module_names = [p.replace('.py', '').replace(os.sep, '.') for p in paths]
                     hints.append(f"  - '{name}' is defined in: {', '.join(paths)} (import via `{module_names[0]}`)")
-
             if hints:
-                error_msg += "\n[Workspace Hints - Do not guess, use these]:\n" + "\n".join(hints)
+                error_msg += "[Workspace Hints - Do not guess, use these]:\n" + "\n".join(hints)
             else:
-                error_msg += "\n[Workspace Hints]: Could not find definitions for these symbols in the current directory. You may need to create them, define them globally, or check standard library imports."
+                error_msg += "[Workspace Hints]: Could not find definitions for these symbols."
 
-            return error_msg
+        return error_msg.strip() if error_msg else None
 
-        return None
     except SyntaxError as e:
         return f"SyntaxError on line {e.lineno}: {e.msg}\n{e.text}"
     except Exception as e:
