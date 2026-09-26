@@ -506,8 +506,8 @@ def handle_memory_regurgitation_on_read(response_content, state, agent_flags):
     return TurnStatus.OK
 
 
-def manage_tool_response(tool_name, tool_result, agent_flags, state, tool_reinforcement):
-    FAILURE_SIGNALS = ("Traceback", "Error", "FAILED", "SyntaxError", "Exception")
+def manage_tool_response(tool_name, tool_args, tool_result, agent_flags, state, tool_reinforcement):
+    FAILURE_SIGNALS = ("Traceback", "Error", "FAILED", "SyntaxError", "Exception", "FAIL:")
 
     if tool_name in READ_ONLY_TOOLS:
         if agent_flags.awaiting_fix:
@@ -520,7 +520,6 @@ def manage_tool_response(tool_name, tool_result, agent_flags, state, tool_reinfo
             )
             tool_reinforcement += FIX_CONTEXT_REMINDER
         else:
-            # --- IMPORTANT GUARDRAIL: inject reminder right after read-only tool results ---
             agent_flags.record_hit("inspect_reminder", state.track_guardrail_hits)
             INSPECT_REMINDER = (
                 "\n\n[System note: the above was a read-only inspection result. Only call "
@@ -529,17 +528,36 @@ def manage_tool_response(tool_name, tool_result, agent_flags, state, tool_reinfo
                 "in plain text summarizing what you found — do not emit a tool call.]"
             )
             tool_reinforcement += INSPECT_REMINDER
+
     elif tool_name == "run_cmd" and any(sig in tool_result for sig in FAILURE_SIGNALS):
-        # A nudge for immediate fix if tests are failing
         agent_flags.record_hit("run_cmd_failure_reminder", state.track_guardrail_hits)
+
+        command_run = tool_args.get("command", "").lower()
+        test_keywords = ["pytest", "unittest", "test.py", "test_"]
+        is_test_run = any(kw in command_run for kw in test_keywords)
+
+        if is_test_run:
+            tool_reinforcement += (
+                "\n\n[System note: The test suite failed. Because you likely just wrote or modified "
+                "this test, the test setup itself is often flawed (e.g., incorrect mocked state, "
+                "blank board, impossible physical constraints). Do NOT assume the production code "
+                "is broken. Fix the test file first before modifying production code."
+            )
+        else:
+            tool_reinforcement += (
+                "\n\n[System note: The command failed. If you know the fix, apply it now to the source code."
+            )
+
+        # Enforce direct tool execution regardless of failure type
         tool_reinforcement += (
-            "\n\n[System note: the command failed. If you know the fix, apply it now with a "
-            "real write_file/patch_file/replace_lines tool call — do not describe the fix in "
-            "a markdown code block. Do not call run_cmd again until the fix has actually been "
+            " Apply the fix with a real write_file/patch_file/replace_lines tool call — do not describe "
+            "the fix in a markdown code block. Do not call run_cmd again until the fix has actually been "
             "applied via a tool call.]"
         )
+
         agent_flags.awaiting_fix = True
         agent_flags.last_run_cmd_error = tool_result
+
     return tool_reinforcement
 
 
@@ -822,7 +840,7 @@ def main(state, execution_state):
 
                     tool_reinforcement += f"\n\nSystem Alert: Tool executed successfully."
 
-                    tool_reinforcement = manage_tool_response(tool_name, tool_result, agent_flags, state, tool_reinforcement)
+                    tool_reinforcement = manage_tool_response(tool_name, tool_args, tool_result, agent_flags, state, tool_reinforcement)
 
                 elif approval == 'edit':
                     tool_result = f"User denied and provided feedback: {input('Feedback: ')}"
