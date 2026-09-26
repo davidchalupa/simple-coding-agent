@@ -792,27 +792,42 @@ def main(state, execution_state):
                             agent_flags.consecutive_errors = 0
                             break
 
-                        # --- SMART REDACTION ---
-                        # Show only a brief snippet/head of the payload instead of erasing it completely
-                        # or keeping 500 lines of bad code in context.
-                        snippet_lines = target_code.splitlines()[:15]
-                        code_preview = "\n".join(snippet_lines) + ("\n..." if len(snippet_lines) >= 15 else "")
+                        # --- SMART REDACTION (Token-Optimized) ---
+                        lines = target_code.splitlines()
+                        filename = os.path.basename(filepath_abs)
 
+                        # 1. Create a smart preview: Show head and tail to catch imports and EOFs.
+                        if len(lines) <= 80:
+                            code_preview = target_code
+                            redaction_note = ""
+                        else:
+                            head = "\n".join(lines[:35])
+                            tail = "\n".join(lines[-25:])
+                            redacted_count = len(lines) - 60
+                            code_preview = f"{head}\n\n# ... [{redacted_count} LINES REDACTED TO SAVE TOKENS] ...\n\n{tail}"
+                            redaction_note = f"(Note: {redacted_count} lines were hidden from the middle to save tokens)"
+
+                        # 2. Scrub the massive code payload from the assistant's history to save tokens.
                         if state.messages and state.messages[-1].get("role") == "assistant":
                             state.messages[-1]["content"] = (
-                                f"[Attempted write_file to {os.path.basename(filepath_abs)} - BLOCKED BY LINTER]\n"
-                                f"Preview of attempted code:\n```python\n{code_preview}\n```"
+                                f"[Attempted write_file to {filename} - BLOCKED BY LINTER]\n"
+                                f"(Payload scrubbed from history to save tokens)"
                             )
 
-                        # Feed back the linter error alongside the smart preview notice
+                        # 3. Feed back the linter error with strict anti-hallucination guardrails
                         state.messages.append({
                             "role": "user",
                             "content": (
-                                f"System Alert: Pre-flight linting failed for `{os.path.basename(filepath_abs)}`. "
+                                f"System Alert: Pre-flight linting failed for `{filename}`.\n"
                                 f"The file was NOT saved to disk.\n\n"
                                 f"LINTER ERROR:\n{lint_error}\n\n"
-                                f"Review the linter error above and your attempted code preview. "
-                                f"Fix the error (e.g., correct imports/syntax) and issue a valid `write_file` tool call."
+                                f"PREVIEW OF YOUR ATTEMPT {redaction_note}:\n"
+                                f"```python\n{code_preview}\n```\n\n"
+                                f"ACTION REQUIRED:\n"
+                                f"1. Review the linter error and fix it (e.g., add missing imports at the top).\n"
+                                f"2. Issue a new `write_file` tool call containing the ENTIRE, corrected file.\n"
+                                f"3. CRITICAL: Do NOT change your original core logic or testing methodology.\n"
+                                f"4. CRITICAL: Do NOT output placeholders like `...`. You must provide the full working file."
                             )
                         })
 
