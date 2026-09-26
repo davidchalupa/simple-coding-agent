@@ -487,68 +487,90 @@ def looks_like_unapplied_code_change(response_content, last_user_message="", min
     return False
 
 
+import os
+
+
 def check_and_handle_identical_write(tool_args, state, agent_flags, content_key):
     """
     Checks if the proposed content is identical to the existing content in the file.
     If identical, blocks the write operation and provides a guardrail message.
-    Returns (intercepted: bool, should_break: bool) — mirrors check_and_handle_loop_guardrail.
+    Returns (intercepted: bool, should_break: bool)
     """
     target_fp = tool_args.get("filepath", "")
-    if os.path.isfile(target_fp):
-        try:
-            with open(target_fp, "r", encoding="utf-8") as f:
-                existing_disk_content = f.read()
-
-            proposed_content = tool_args.get(content_key, "")
-            if existing_disk_content.strip() == proposed_content.strip():
-                print(
-                    f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
-                agent_flags.record_hit("identical_write", state.track_guardrail_hits)
-
-                agent_flags.consecutive_errors += 1
-                if agent_flags.consecutive_errors >= 3:
-                    print(
-                        "🛑 [Circuit Breaker] Agent stuck in identical write loop. Forcing turn end.")
-                    return True, True   # intercepted, SHOULD BREAK
-
-                # Context-Aware Guardrail Message
-                if agent_flags.last_verification_failure and agent_flags.last_verification_failure.get(
-                        "filepath") == target_fp:
-                    alert_msg = (
-                        f"System Alert: `write_file` blocked. You attempted to overwrite '{target_fp}' with the EXACT SAME BROKEN CODE that just failed self-verification. "
-                        f"You must actually CHANGE the code to fix the error.\nError was:\n{agent_flags.last_verification_failure.get('error', '')}")
-                    if "unterminated string literal" in agent_flags.last_verification_failure.get(
-                            "error", ""):
-                        alert_msg += "\nHint: If you used '\\n' inside a Python string, the JSON parser converted it to a real newline. Avoid using '\\n' in string literals (e.g. use multiple prints) or quadruple-escape it as `\\\\n`."
-                elif getattr(agent_flags, "awaiting_fix", False) and getattr(agent_flags, "last_run_cmd_error", None):
-                    alert_msg = (
-                        f"System Alert: `write_file` blocked — the content is IDENTICAL to the file that just "
-                        f"failed with this error:\n{agent_flags.last_run_cmd_error}\n\n"
-                        f"The file is NOT fixed and the task is NOT complete. Do not claim success or say the "
-                        f"file 'already contains the correct content' — it does not, or the command above would "
-                        f"not have failed. Diagnose the actual cause of the error and make a REAL change.")
-                    if any(sig in agent_flags.last_run_cmd_error for sig in ("ModuleNotFoundError", "ImportError")):
-                        alert_msg += (
-                            "\nHint: this is a missing-module error. Do not guess a module name by analogy to a "
-                            "function name (e.g. assuming `foo_get_action` lives in `action_foo_agent.py`). "
-                            "If you search the codebase for the function name, use a query like `def random_get_action` "
-                            "(not just the bare name) to find the DEFINITION site specifically — a bare name search "
-                            "will also match your own broken import line and may hide the real result. Also use a "
-                            "higher max_matches (e.g. 5) since the same name can appear in multiple places."
-                        )
-                else:
-                    alert_msg = (
-                        f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk. "
-                        f"If the user only asked to read, analyze, inspect, or explain, DO NOT invoke write tools. Answer directly in plain text.")
-
-                state.messages.append({
-                    "role": "user",
-                    "content": alert_msg
-                })
-                return True, False   # intercepted, keep retrying
-        except Exception:
-            pass
+    if not target_fp or not os.path.isfile(target_fp):
         return False, False
+
+    try:
+        with open(target_fp, "r", encoding="utf-8") as f:
+            existing_disk_content = f.read()
+
+        proposed_content = tool_args.get(content_key, "")
+
+        # 1. TIGHTER COMPARISON: Normalize line endings and trailing line spaces
+        def normalize_code(code_str):
+            code_str = code_str.replace('\r\n', '\n')
+            return "\n".join(line.rstrip() for line in code_str.splitlines()).strip()
+
+        if normalize_code(existing_disk_content) == normalize_code(proposed_content):
+            print(
+                f"🛡️  [Guardrail] Blocked identical write_file to '{os.path.basename(target_fp)}' (No-Op Regurgitation).")
+            agent_flags.record_hit("identical_write", state.track_guardrail_hits)
+
+            agent_flags.consecutive_errors += 1
+            if agent_flags.consecutive_errors >= 3:
+                print("🛑 [Circuit Breaker] Agent stuck in identical write loop. Forcing turn end.")
+                return True, True  # intercepted, SHOULD BREAK
+
+            # 2. PATH NORMALIZATION: Ensure relative/absolute paths match correctly
+            target_abs = os.path.abspath(target_fp)
+            last_fail = agent_flags.last_verification_failure or {}
+            last_fail_abs = os.path.abspath(last_fail.get("filepath", "")) if last_fail.get("filepath") else ""
+
+            # 3. THE "JOLT" MESSAGES: Force the agent to realize it didn't change the payload
+            if last_fail_abs == target_abs:
+                alert_msg = (
+                    f"System Alert: `write_file` blocked (No-Op Regurgitation).\n"
+                    f"You attempted to overwrite '{target_fp}' with the EXACT SAME BROKEN CODE that just failed self-verification.\n"
+                    f"Although you may have diagnosed the problem in your text, you failed to actually change the tool payload.\n\n"
+                    f"Error was:\n{last_fail.get('error', '')}\n\n"
+                    f"ACTION REQUIRED: Do not resubmit the same file. Actually implement the fix and issue a new tool call."
+                )
+                if "unterminated string literal" in last_fail.get("error", ""):
+                    alert_msg += "\n\nHint: If you used '\\n' inside a Python string, the JSON parser converted it to a real newline. Avoid using '\\n' in string literals (e.g. use multiple prints) or quadruple-escape it as `\\\\n`."
+
+            elif getattr(agent_flags, "awaiting_fix", False) and getattr(agent_flags, "last_run_cmd_error", None):
+                alert_msg = (
+                    f"System Alert: `write_file` blocked (No-Op Regurgitation).\n"
+                    f"You submitted code that is IDENTICAL to the file that just failed with this error:\n{agent_flags.last_run_cmd_error}\n\n"
+                    f"The file is NOT fixed. Do not claim success or say the file 'already contains the correct content'. "
+                    f"You likely diagnosed the issue in your thoughts but forgot to apply the change to the `content` argument.\n"
+                    f"ACTION REQUIRED: Make a REAL change to fix the error."
+                )
+                if any(sig in agent_flags.last_run_cmd_error for sig in ("ModuleNotFoundError", "ImportError")):
+                    alert_msg += (
+                        "\n\nHint: this is a missing-module error. Do not guess a module name by analogy to a "
+                        "function name (e.g. assuming `foo_get_action` lives in `action_foo_agent.py`). "
+                        "If you search the codebase for the function name, use a query like `def random_get_action` "
+                        "(not just the bare name) to find the DEFINITION site specifically — a bare name search "
+                        "will also match your own broken import line and may hide the real result. Also use a "
+                        "higher max_matches (e.g. 5) since the same name can appear in multiple places."
+                    )
+
+            else:
+                alert_msg = (
+                    f"System Alert: `write_file` on '{target_fp}' was blocked because the new content is IDENTICAL to the existing file on disk.\n"
+                    f"If the user only asked to read, analyze, inspect, or explain, DO NOT invoke write tools. Answer directly in plain text."
+                )
+
+            state.messages.append({
+                "role": "user",
+                "content": alert_msg
+            })
+            return True, False  # intercepted, keep retrying
+
+    except Exception:
+        pass
+
     return False, False
 
 
