@@ -286,9 +286,6 @@ def check_callback_arity(test_filepath, session_cwd):
 
     search_dir = os.path.dirname(os.path.abspath(test_filepath))
 
-    # 1. Build a small index: for every function defined anywhere in search_dir,
-    #    record its own parameter names, so we know e.g. run_game_loop's 5th
-    #    parameter is called `get_action`.
     func_params = {}   # func_name -> [param_names]
     call_arities = {}  # param_name (as used INSIDE a function body) -> observed call arity
 
@@ -304,20 +301,19 @@ def check_callback_arity(test_filepath, session_cwd):
 
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
-                func_params[node.name] = [a.arg for a in node.args.args]
+                param_names = [a.arg for a in node.args.args]
+                func_params[node.name] = param_names
                 # look for calls to any of this function's OWN parameters inside its body
                 # (i.e. it treats one of its params as a callback and invokes it)
                 for inner in ast.walk(node):
                     if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
-                            and inner.func.id in node.args.args):
+                            and inner.func.id in param_names):   # <-- compare against names, not ast.arg objects
                         arity = len(inner.args) + len(inner.keywords)
                         call_arities[inner.func.id] = arity  # last-writer wins; fine for single-callback-name codebases
 
     if not call_arities:
         return []
 
-    # 2. In the test file, find calls where a lambda/function is passed for a parameter
-    #    name matching one of the callback names we found being invoked.
     with open(test_filepath, "r", encoding="utf-8") as f:
         test_tree = ast.parse(f.read(), filename=test_filepath)
 
@@ -328,7 +324,6 @@ def check_callback_arity(test_filepath, session_cwd):
             if not callee_params:
                 continue
 
-            # match positional args to callee's declared param names
             for i, arg in enumerate(node.args):
                 if isinstance(arg, ast.Lambda) and i < len(callee_params):
                     pname = callee_params[i]
