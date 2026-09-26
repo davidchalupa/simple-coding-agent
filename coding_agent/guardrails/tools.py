@@ -283,12 +283,15 @@ def check_callback_arity(test_filepath, session_cwd):
     matches how it's actually called.
     """
     import ast
+    import os
 
     search_dir = os.path.dirname(os.path.abspath(test_filepath))
+    test_filename = os.path.basename(test_filepath)
 
-    func_params = {}   # func_name -> [param_names]
-    call_arities = {}  # param_name (as used INSIDE a function body) -> observed call arity
+    func_params = {}  # func_name -> [param_names]
+    call_arities = {}  # (func_name, param_name) -> observed call arity
 
+    # 1. Parse the codebase to find signatures and internal callback invocations
     for fname in os.listdir(search_dir):
         if not fname.endswith(".py"):
             continue
@@ -303,46 +306,72 @@ def check_callback_arity(test_filepath, session_cwd):
             if isinstance(node, ast.FunctionDef):
                 param_names = [a.arg for a in node.args.args]
                 func_params[node.name] = param_names
+
                 # look for calls to any of this function's OWN parameters inside its body
-                # (i.e. it treats one of its params as a callback and invokes it)
                 for inner in ast.walk(node):
                     if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
-                            and inner.func.id in param_names):   # <-- compare against names, not ast.arg objects
+                            and inner.func.id in param_names):
                         arity = len(inner.args) + len(inner.keywords)
-                        call_arities[inner.func.id] = arity  # last-writer wins; fine for single-callback-name codebases
+                        # Fix: Scope by both function name and parameter name to avoid collisions
+                        call_arities[(node.name, inner.func.id)] = arity
 
     if not call_arities:
         return []
 
+    # 2. Parse the test file to find lambdas being passed as those callbacks
     with open(test_filepath, "r", encoding="utf-8") as f:
         test_tree = ast.parse(f.read(), filename=test_filepath)
 
     errors = []
+
+    # Helper for generating the strict error message
+    def build_error_msg(lineno, pname, actual_arity, expected_arity, func_name):
+        return (
+            f"Line {lineno}: lambda passed for '{pname}' takes {actual_arity} explicit argument(s), "
+            f"but '{pname}' is invoked with {expected_arity} argument(s) inside `{func_name}`. "
+            f"ACTION REQUIRED: Edit the lambda definition on Line {lineno} in `{test_filename}` to accept "
+            f"{expected_arity} arguments (or use `*args`). Do NOT attempt to patch the source code in `{func_name}`."
+        )
+
     for node in ast.walk(test_tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            callee_params = func_params.get(node.func.id)
+            func_name = node.func.id
+            callee_params = func_params.get(func_name)
             if not callee_params:
                 continue
 
+            # Check positional arguments
             for i, arg in enumerate(node.args):
                 if isinstance(arg, ast.Lambda) and i < len(callee_params):
                     pname = callee_params[i]
-                    if pname in call_arities and len(arg.args.args) != call_arities[pname]:
-                        errors.append(
-                            f"Line {arg.lineno}: lambda passed for '{pname}' takes "
-                            f"{len(arg.args.args)} argument(s), but '{pname}' is invoked "
-                            f"with {call_arities[pname]} argument(s) inside {node.func.id}. "
-                            f"Adjust the lambda's parameter count to match."
-                        )
+                    key = (func_name, pname)
+
+                    if key in call_arities:
+                        expected_arity = call_arities[key]
+                        actual_arity = len(arg.args.args)
+                        has_varargs = arg.args.vararg is not None  # Fix: Check for *args
+
+                        if not has_varargs and actual_arity != expected_arity:
+                            errors.append(build_error_msg(
+                                arg.lineno, pname, actual_arity, expected_arity, func_name
+                            ))
+
+            # Check keyword arguments
             for kw in node.keywords:
-                if isinstance(kw.value, ast.Lambda) and kw.arg in call_arities:
-                    if len(kw.value.args.args) != call_arities[kw.arg]:
-                        errors.append(
-                            f"Line {kw.value.lineno}: lambda passed for '{kw.arg}=' takes "
-                            f"{len(kw.value.args.args)} argument(s), but '{kw.arg}' is invoked "
-                            f"with {call_arities[kw.arg]} argument(s) inside {node.func.id}. "
-                            f"Adjust the lambda's parameter count to match."
-                        )
+                if isinstance(kw.value, ast.Lambda):
+                    pname = kw.arg
+                    key = (func_name, pname)
+
+                    if key in call_arities:
+                        expected_arity = call_arities[key]
+                        actual_arity = len(kw.value.args.args)
+                        has_varargs = kw.value.args.vararg is not None  # Fix: Check for *args
+
+                        if not has_varargs and actual_arity != expected_arity:
+                            errors.append(build_error_msg(
+                                kw.value.lineno, pname, actual_arity, expected_arity, func_name
+                            ))
+
     return errors
 
 
