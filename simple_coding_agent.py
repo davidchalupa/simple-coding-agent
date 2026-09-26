@@ -619,6 +619,36 @@ def main(state, execution_state):
                 tool_request = payload_parser.extract_tool_call(response_content, allow_patch=state.allow_patch)
 
                 if not tool_request:
+                    # >>> Universal Completion Circuit Breaker <<<
+                    is_completion_claim = "task complete" in response_content.lower()
+                    last_user_msg = state.messages[-1].get("content", "") if state.messages else ""
+
+                    # Check if the last interaction was a failure (e.g., failed patch_file or verification)
+                    is_error_state = (
+                            agent_flags.awaiting_fix or
+                            ("System Alert:" in last_user_msg and "failed" in last_user_msg.lower()) or
+                            "Error:" in last_user_msg
+                    )
+
+                    if is_completion_claim and is_error_state:
+                        agent_flags.consecutive_errors += 1
+                        if agent_flags.consecutive_errors >= 2:
+                            print("🛑 [Circuit Breaker] Agent repeating 'Task Complete' after failures. Halting turn.")
+                            agent_flags.consecutive_errors = 0
+                            break  # Breaks the inner loop safely
+
+                        agent_flags.record_hit("premature_completion_after_error", state.track_guardrail_hits)
+                        state.messages.append({
+                            "role": "user",
+                            "content": (
+                                "SYSTEM ERROR: You declared the task complete, but the previous action failed or unresolved errors remain. "
+                                "You MUST issue a tool call (like `read_file`, `patch_file`, or `replace_lines`) to investigate and fix the issue. "
+                                "Do NOT reply with 'Task Complete' until the fix is successfully applied."
+                            )
+                        })
+                        continue
+                    # >>> END FIX 1 <<<
+
                     turn_status = handle_memory_regurgitation_on_read(response_content, state, agent_flags)
                     if turn_status == TurnStatus.TRY_AGAIN:
                         continue

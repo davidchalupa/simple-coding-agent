@@ -48,7 +48,8 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
         f"STRATEGY:\n{strategy_steps}\n\n"
         f"{deep_guardrail}"
         f"{installation_guardrail}\n\n"
-        f"CRITICAL: Do not call tools with empty arguments or empty payloads."
+        f"CRITICAL: Do not call tools with empty arguments or empty payloads.\n"
+        f"You MUST enclose your tool call in a strict markdown block that explicitly starts with ```json and ends with ```."
     )
 
 
