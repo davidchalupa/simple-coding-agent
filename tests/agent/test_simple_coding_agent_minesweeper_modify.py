@@ -238,7 +238,7 @@ def test_agent_minesweeper_modify_read_full_get_start_end_lines_replace_directly
         "2. For a LOSS test case: pass a `mines` set containing at least one real coordinate (e.g. {(0, 0)}), "
         "and have your `get_action` mock return a 'c' click on that exact mined coordinate, so handle_click "
         "genuinely returns False and the loss path executes.\n"
-        "3. For the WIN test, use exactly this pattern: "
+        "For the WIN test, pass an empty mines set (mines = set()) so there are no mines to hit, and use exactly this pattern: "
         "get_action = MagicMock(side_effect=[('c', r, c) for r in range(9) for c in range(9)]) "
         "Do NOT define a separate generator function (a function containing `yield`) and pass it to "
         "side_effect - MagicMock does not iterate a returned generator correctly and this will cause "

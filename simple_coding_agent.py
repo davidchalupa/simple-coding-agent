@@ -739,9 +739,8 @@ def main(state, execution_state):
 
                 target_code = tool_args.get(content_key, '')
 
-                # >>> PRE-FLIGHT LINTER GUARDRAIL <<<
+                # >>> PRE-FLIGHT LINTER GUARDRAIL (SMART REDACTION) <<<
                 if tool_name == "write_file" and tool_args.get("filepath", "").endswith(".py"):
-                    # Use the modified linter, passing target_code directly so we don't touch the disk yet
                     from coding_agent.native_linter import check_python_syntax_and_imports
 
                     filepath_abs = tool_args.get("filepath")
@@ -760,23 +759,34 @@ def main(state, execution_state):
 
                         if agent_flags.consecutive_errors >= 3:
                             print("🛑 [Circuit Breaker] Agent stuck writing broken code. Forcing turn end.")
+                            agent_flags.consecutive_errors = 0
                             break
 
-                        # >>> AMNESIA REDACTION <<<
-                        # Keep the assistant message, but destroy the bad JSON
-                        if state.messages and state.messages[-1].get("role") == "assistant":
-                            state.messages[-1]["content"] = f"[Action blocked pre-flight: {tool_name}. JSON payload redacted to prevent repetition collapse.]"
+                        # --- SMART REDACTION ---
+                        # Show only a brief snippet/head of the payload instead of erasing it completely
+                        # or keeping 500 lines of bad code in context.
+                        snippet_lines = target_code.splitlines()[:15]
+                        code_preview = "\n".join(snippet_lines) + ("\n..." if len(snippet_lines) >= 15 else "")
 
-                    # Feed the exact linter error back immediately
+                        if state.messages and state.messages[-1].get("role") == "assistant":
+                            state.messages[-1]["content"] = (
+                                f"[Attempted write_file to {os.path.basename(filepath_abs)} - BLOCKED BY LINTER]\n"
+                                f"Preview of attempted code:\n```python\n{code_preview}\n```"
+                            )
+
+                        # Feed back the linter error alongside the smart preview notice
                         state.messages.append({
                             "role": "user",
                             "content": (
                                 f"System Alert: Pre-flight linting failed for `{os.path.basename(filepath_abs)}`. "
-                                f"The file was NOT saved.\n\n{lint_error}\n\n"
-                                f"Fix the code and retry the `write_file` tool."
+                                f"The file was NOT saved to disk.\n\n"
+                                f"LINTER ERROR:\n{lint_error}\n\n"
+                                f"Review the linter error above and your attempted code preview. "
+                                f"Fix the error (e.g., correct imports/syntax) and issue a valid `write_file` tool call."
                             )
                         })
-                        continue  # Intercepts execution, loops back to model generation!
+
+                        continue  # Re-prompt model with broken symmetry + small context footprint
 
                 if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"]:
                     if tool_name == "patch_file":
