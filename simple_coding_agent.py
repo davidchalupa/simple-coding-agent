@@ -789,55 +789,60 @@ def main(state, execution_state):
                     if lint_error:
                         agent_flags.record_hit("linter_pre_flight_failure", state.track_guardrail_hits)
                         agent_flags.consecutive_errors += 1
-
-                        print(
-                            f"\n❌ [Pre-Flight Guardrail] Blocked malformed code for {os.path.basename(filepath_abs)}.")
-
-                        if agent_flags.consecutive_errors >= 3:
-                            print("🛑 [Circuit Breaker] Agent stuck writing broken code. Forcing turn end.")
-                            agent_flags.consecutive_errors = 0
-                            break
-
-                        # --- SMART REDACTION (Token-Optimized) ---
-                        lines = target_code.splitlines()
                         filename = os.path.basename(filepath_abs)
 
-                        # 1. Create a smart preview: Show head and tail to catch imports and EOFs.
-                        if len(lines) <= 80:
-                            code_preview = target_code
-                            redaction_note = ""
-                        else:
-                            head = "\n".join(lines[:35])
-                            tail = "\n".join(lines[-25:])
-                            redacted_count = len(lines) - 60
-                            code_preview = f"{head}\n\n# ... [{redacted_count} LINES REDACTED TO SAVE TOKENS] ...\n\n{tail}"
-                            redaction_note = f"(Note: {redacted_count} lines were hidden from the middle to save tokens)"
+                        print(f"\n❌ [Pre-Flight Guardrail] Blocked malformed code for {filename}.")
 
-                        # 2. Scrub the massive code payload from the assistant's history to save tokens.
+                        # --- 1. LEAK-PROOF CIRCUIT BREAKER ---
+                        if agent_flags.consecutive_errors >= 3:
+                            print("🛑 [Circuit Breaker] Agent stuck. Forcing task abort.")
+                            agent_flags.consecutive_errors = 0
+
+                            # Inject a hard stop instruction into the state so the LLM doesn't retry
+                            state.messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"System Alert: You have failed to write valid code for `{filename}` 3 times in a row. "
+                                    "The circuit breaker has triggered. DO NOT ATTEMPT TO WRITE THIS FILE AGAIN. "
+                                    "Respond in plain text explaining what part of the logic you are struggling with."
+                                )
+                            })
+                            break  # Exits tool loop; the LLM will read the hard stop and reply in text
+
+                        # --- 2. RETROACTIVE TOKEN SCRUBBING ---
+                        # Instead of redacting the current attempt, we scrub OLD failed attempts from history.
+                        # This keeps token count flat (max 1 copy of the file) while giving 100% visibility.
+
+                        # Scrub the immediate assistant payload
                         if state.messages and state.messages[-1].get("role") == "assistant":
                             state.messages[-1]["content"] = (
                                 f"[Attempted write_file to {filename} - BLOCKED BY LINTER]\n"
-                                f"(Payload scrubbed from history to save tokens)"
+                                f"(Payload scrubbed from history. See error below.)"
                             )
 
-                        # 3. Feed back the linter error with strict anti-hallucination guardrails
+                        # Scrub older user error messages so we don't stack 3 copies of target_code
+                        for msg in reversed(state.messages[:-1]):
+                            if msg.get("role") == "user" and "Pre-flight linting failed" in msg.get("content", ""):
+                                msg["content"] = f"[Previous Linter Error for {filename} scrubbed to save tokens]"
+
+                        # --- 3. FULL-VISIBILITY ERROR INJECTION ---
+                        # Give the agent its exact, complete code back so it can line up the linter line numbers
                         state.messages.append({
                             "role": "user",
                             "content": (
                                 f"System Alert: Pre-flight linting failed for `{filename}`.\n"
                                 f"The file was NOT saved to disk.\n\n"
                                 f"LINTER ERROR:\n{lint_error}\n\n"
-                                f"PREVIEW OF YOUR ATTEMPT {redaction_note}:\n"
-                                f"```python\n{code_preview}\n```\n\n"
+                                f"YOUR FULL ATTEMPT:\n"
+                                f"```python\n{target_code}\n```\n\n"
                                 f"ACTION REQUIRED:\n"
-                                f"1. Review the linter error and fix it (e.g., add missing imports at the top).\n"
+                                f"1. Review the linter error and match the line numbers to your code above.\n"
                                 f"2. Issue a new `write_file` tool call containing the ENTIRE, corrected file.\n"
-                                f"3. CRITICAL: Do NOT change your original core logic or testing methodology.\n"
-                                f"4. CRITICAL: Do NOT output placeholders like `...`. You must provide the full working file."
+                                f"3. CRITICAL: Do NOT output placeholders like `...`. You must provide the full working file."
                             )
                         })
 
-                        continue  # Re-prompt model with broken symmetry + small context footprint
+                        continue
 
                 if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"]:
                     if tool_name == "patch_file":
