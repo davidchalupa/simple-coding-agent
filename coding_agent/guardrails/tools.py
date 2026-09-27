@@ -289,7 +289,7 @@ def check_callback_arity(test_filepath, session_cwd):
     test_filename = os.path.basename(test_filepath)
 
     func_params = {}  # func_name -> [param_names]
-    call_arities = {}  # (func_name, param_name) -> observed call arity
+    call_arities = {}  # (func_name, param_name) -> set(observed call arities)
 
     # 1. Parse the codebase to find signatures and internal callback invocations
     for fname in os.listdir(search_dir):
@@ -312,8 +312,10 @@ def check_callback_arity(test_filepath, session_cwd):
                     if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
                             and inner.func.id in param_names):
                         arity = len(inner.args) + len(inner.keywords)
-                        # Fix: Scope by both function name and parameter name to avoid collisions
-                        call_arities[(node.name, inner.func.id)] = arity
+                        key = (node.name, inner.func.id)
+                        if key not in call_arities:
+                            call_arities[key] = set()
+                        call_arities[key].add(arity)
 
     if not call_arities:
         return []
@@ -324,14 +326,48 @@ def check_callback_arity(test_filepath, session_cwd):
 
     errors = []
 
-    # Helper for generating the strict error message
-    def build_error_msg(lineno, pname, actual_arity, expected_arity, func_name):
+    # Helper for generating a heavily prescriptive, LLM-optimized error message
+    def build_error_msg(lineno, pname, actual_arity, expected_arities, func_name):
+        expected_str = " or ".join(map(str, expected_arities))
+        # Create a dummy signature for the largest expected arity to make it foolproof
+        max_expected = max(expected_arities)
+        dummy_args = ", ".join([f"arg{i + 1}" for i in range(max_expected)])
+
         return (
-            f"Line {lineno}: lambda passed for '{pname}' takes {actual_arity} explicit argument(s), "
-            f"but '{pname}' is invoked with {expected_arity} argument(s) inside `{func_name}`. "
-            f"ACTION REQUIRED: Edit the lambda definition on Line {lineno} in `{test_filename}` to accept "
-            f"{expected_arity} arguments (or use `*args`). Do NOT attempt to patch the source code in `{func_name}`."
+            f"\n[ARITY MISMATCH] Line {lineno} in `{test_filename}`:\n"
+            f"The lambda passed for '{pname}' accepts {actual_arity} argument(s), but `{func_name}` invokes it with {expected_str} argument(s).\n\n"
+            f"ACTION REQUIRED TO FIX THIS TEST:\n"
+            f"Option 1 (Highly Recommended - Prevents infinite loops):\n"
+            f"  Replace the lambda entirely with a mock object:\n"
+            f"  `from unittest.mock import MagicMock`\n"
+            f"  `mock_{pname} = MagicMock(side_effect=[...])`\n\n"
+            f"Option 2 (Fix the Lambda Signature):\n"
+            f"  Update your lambda to accept exact arguments: `lambda {dummy_args}: ...`\n"
+            f"  Or use catch-all arguments: `lambda *args, **kwargs: ...`\n\n"
+            f"DO NOT attempt to modify `{func_name}`'s source code."
         )
+
+    # Helper to check if a lambda's arguments match expectations
+    def check_lambda_node(lam_node, pname, func_name):
+        key = (func_name, pname)
+        if key not in call_arities:
+            return None
+
+        expected_arities = call_arities[key]
+
+        # Safely calculate total explicit arguments (handling Python 3.8+ posonlyargs)
+        posonly = len(getattr(lam_node.args, 'posonlyargs', []))
+        args_len = len(lam_node.args.args)
+        kwonly = len(lam_node.args.kwonlyargs)
+        actual_arity = posonly + args_len + kwonly
+
+        has_varargs = lam_node.args.vararg is not None
+        has_kwargs = lam_node.args.kwarg is not None
+
+        # If it has *args or **kwargs, it's safe. Otherwise, check exact match.
+        if not (has_varargs or has_kwargs) and actual_arity not in expected_arities:
+            return build_error_msg(lam_node.lineno, pname, actual_arity, expected_arities, func_name)
+        return None
 
     for node in ast.walk(test_tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -344,33 +380,15 @@ def check_callback_arity(test_filepath, session_cwd):
             for i, arg in enumerate(node.args):
                 if isinstance(arg, ast.Lambda) and i < len(callee_params):
                     pname = callee_params[i]
-                    key = (func_name, pname)
-
-                    if key in call_arities:
-                        expected_arity = call_arities[key]
-                        actual_arity = len(arg.args.args)
-                        has_varargs = arg.args.vararg is not None  # Fix: Check for *args
-
-                        if not has_varargs and actual_arity != expected_arity:
-                            errors.append(build_error_msg(
-                                arg.lineno, pname, actual_arity, expected_arity, func_name
-                            ))
+                    err = check_lambda_node(arg, pname, func_name)
+                    if err: errors.append(err)
 
             # Check keyword arguments
             for kw in node.keywords:
                 if isinstance(kw.value, ast.Lambda):
                     pname = kw.arg
-                    key = (func_name, pname)
-
-                    if key in call_arities:
-                        expected_arity = call_arities[key]
-                        actual_arity = len(kw.value.args.args)
-                        has_varargs = kw.value.args.vararg is not None  # Fix: Check for *args
-
-                        if not has_varargs and actual_arity != expected_arity:
-                            errors.append(build_error_msg(
-                                kw.value.lineno, pname, actual_arity, expected_arity, func_name
-                            ))
+                    err = check_lambda_node(kw.value, pname, func_name)
+                    if err: errors.append(err)
 
     return errors
 
