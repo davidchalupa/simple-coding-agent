@@ -809,24 +809,27 @@ def main(state, execution_state):
                             })
                             break  # Exits tool loop; the LLM will read the hard stop and reply in text
 
-                        # --- 2. RETROACTIVE TOKEN SCRUBBING ---
-                        # Instead of redacting the current attempt, we scrub OLD failed attempts from history.
-                        # This keeps token count flat (max 1 copy of the file) while giving 100% visibility.
-
-                        # Scrub the immediate assistant payload
+                        # --- 2. RETROACTIVE TOKEN SCRUBBING (Preserving Chain-of-Thought) ---
                         if state.messages and state.messages[-1].get("role") == "assistant":
+                            original_content = state.messages[-1].get("content", "")
+
+                            # If the model used a <think> block, preserve it! Only truncate massive code blocks if they are in the text.
+                            import re
+                            # Optional: strip giant markdown blocks from the assistant's text to save tokens, but keep the <think>
+                            cleaned_content = re.sub(r"```python\n.*?\n```", "[Code block redacted to save tokens]",
+                                                     original_content, flags=re.DOTALL)
+
                             state.messages[-1]["content"] = (
-                                f"[Attempted write_file to {filename} - BLOCKED BY LINTER]\n"
-                                f"(Payload scrubbed from history. See error below.)"
+                                f"{cleaned_content}\n\n"
+                                f"[System Note: The tool call payload for {filename} was intercepted by the linter. See error below.]"
                             )
 
-                        # Scrub older user error messages so we don't stack 3 copies of target_code
+                        # Scrub older user error messages so we don't stack copies of target_code
                         for msg in reversed(state.messages[:-1]):
                             if msg.get("role") == "user" and "Pre-flight linting failed" in msg.get("content", ""):
                                 msg["content"] = f"[Previous Linter Error for {filename} scrubbed to save tokens]"
 
                         # --- 3. FULL-VISIBILITY ERROR INJECTION ---
-                        # Give the agent its exact, complete code back so it can line up the linter line numbers
                         state.messages.append({
                             "role": "user",
                             "content": (
@@ -836,12 +839,12 @@ def main(state, execution_state):
                                 f"YOUR FULL ATTEMPT:\n"
                                 f"```python\n{target_code}\n```\n\n"
                                 f"ACTION REQUIRED:\n"
-                                f"1. Review the linter error and match the line numbers to your code above.\n"
-                                f"2. Issue a new `write_file` tool call containing the ENTIRE, corrected file.\n"
-                                f"3. CRITICAL: Do NOT output placeholders like `...`. You must provide the full working file."
+                                f"1. Review the linter error. If it is a NameError or AttributeError, verify you are using the correct function/variable names.\n"
+                                f"2. Match the line numbers in the error to your code above, and apply the fix.\n"
+                                f"3. Issue a new `write_file` tool call containing the ENTIRE, corrected file.\n"
+                                f"4. CRITICAL: Do NOT output placeholders like `...`. You must provide the full working file."
                             )
                         })
-
                         continue
 
                 if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"]:
