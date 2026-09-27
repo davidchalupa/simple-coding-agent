@@ -104,7 +104,10 @@ def append_file(filepath, content):
 
 
 def run_cmd(command, max_chars=3000):
-    """Catching the output for maximum max_chars at the tail - more likely to contain important info."""
+    """
+    Catching the output for maximum max_chars at the tail - more likely to contain important info.
+    Returns an informative message and a timeout flag.
+    """
     try:
         result = subprocess.run(
             command,
@@ -131,12 +134,12 @@ def run_cmd(command, max_chars=3000):
 
             output = f"{head}\n\n... [TRUNCATED {omitted} CHARS — HEAD & TAIL SHOWN] ...\n\n{tail}"
 
-        return output if output else "Command completed with no output."
+        return output if output else "Command completed with no output.", False
 
     except subprocess.TimeoutExpired:
-        return "Error: Command timed out after 30 seconds."
+        return "Error: Command timed out after 30 seconds.", True
     except Exception as e:
-        return f"Error executing command: {e}"
+        return f"Error executing command: {e}", False
 
 
 def extract_code_blocks(source_filepath, target_filepath, block_names, wrap_in_class=None):

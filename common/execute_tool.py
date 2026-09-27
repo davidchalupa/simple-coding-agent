@@ -189,7 +189,14 @@ def execute_tool_without_rollback(tool_name, tool_args, is_split_mode):
             tool_reinforcement = "\n\n(System Rule: Line replacement successful. Do not summarize. If your primary task is complete, state 'Task Complete' in plain text and STOP calling tools. Wait for the user.)"
 
     elif tool_name == "run_cmd":
-        tool_result = run_cmd(tool_args.get("command"))
+        tool_result, timeout_occurred = run_cmd(tool_args.get("command"))
+        if timeout_occurred:
+            tool_reinforcement += (
+                "\n\n(System Rule: The command execution timed out. Common causes to fix:\n"
+                "1. Infinite Loops / Recursion: Loops or recursive calls lacking a guaranteed termination condition.\n"
+                "2. Static Mocks / Iterators: Mocked functions or test inputs returning static values that never advance state.\n"
+                "3. Blocking I/O: Code waiting on stdin/user input, unclosed network sockets, or unresolved async tasks.)"
+            )
 
     else:
         tool_result = "Error: Unknown tool."
