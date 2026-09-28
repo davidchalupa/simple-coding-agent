@@ -40,6 +40,9 @@ import gc
 
 from pathlib import Path
 
+# this is to avoid having to modify PYTHONPATH to make reasoning worker work with all imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 
 THINK_BLOCK_RE = re.compile(
     r"<think>.*?</think>",
