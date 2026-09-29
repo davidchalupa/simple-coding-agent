@@ -539,12 +539,18 @@ def check_and_handle_drastic_shrinkage(tool_args, state, agent_flags, content_ke
     return False
 
 NO_APPLY_REQUESTED_PATTERNS = re.compile(
-    r"\b(just (show|output|print|display)|"
-    r"don'?t (write|apply|save|modify|create)|"
+    r"\b("
+    # Catch "just / only write / show / draft"
+    r"(just|only)\s+(show|output|print|display|write(\s+down)?|provide|draft|plan)|"
+    # Catch "don't / do not modify / apply / make changes"
+    r"(do\s+not|don'?t)\s+(write|apply|save|modify|edit|change|make\s+(any\s+)?(modifications|changes|edits))|"
+    # Catch "without applying / modifying"
+    r"without\s+(writing|applying|saving|modifying|editing|making\s+changes)|"
+    # Catch explicit markdown/code requests
     r"in a (markdown|code) block|"
-    r"without (writing|applying|saving)|"
-    r"show me the code|"
-    r"no need to (write|apply|save))\b",
+    r"(show|give)\s+(me\s+)?the code|"
+    r"no need to (write|apply|save|modify|edit)"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -554,13 +560,16 @@ def looks_like_unapplied_code_change(response_content, last_user_message="", min
     illustrative snippet) in a response that produced NO tool call — but only when
     the user's own request didn't explicitly ask to just see the code.
     """
+    # 1. Check if user explicitly asked *not* to apply
     if NO_APPLY_REQUESTED_PATTERNS.search(last_user_message):
         return False
 
+    # 2. Look for code blocks that meet the minimum line threshold
     for m in re.finditer(r"```[a-zA-Z]*\n(.*?)\n```", response_content, re.DOTALL):
         block = m.group(1)
         if block.count("\n") + 1 >= min_lines:
             return True
+
     return False
 
 
