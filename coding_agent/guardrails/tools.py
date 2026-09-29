@@ -3,6 +3,7 @@ import json
 import re
 import ast
 import sys
+import importlib.util
 
 
 from coding_agent import split_tools
@@ -109,34 +110,94 @@ def check_import_resolution(filepath, session_cwd):
         tree = ast.parse(f.read(), filename=filepath)
 
     search_dir = os.path.dirname(os.path.abspath(filepath))
+    session_cwd = os.path.abspath(session_cwd)
     stdlib_names = getattr(sys, "stdlib_module_names", set())
 
-    errors = []
-    unresolved_imported_names = set()
+    # Pragmatic allow-list for heavyweights commonly used in agent sandboxes
+    # to bypass the checks immediately.
+    KNOWN_THIRDPARTY = {
+        "PyQt5", "PyQt6", "PySide2", "PySide6", "requests", "numpy", "pandas",
+        "pytest", "matplotlib", "scipy", "flask", "django", "fastapi", "sqlalchemy",
+        "boto3", "bs4", "pydantic", "yaml", "cv2", "PIL"
+    }
+
+    suspicious_imports = []
+
+    def is_resolvable(top_level):
+        if top_level in stdlib_names or top_level in KNOWN_THIRDPARTY:
+            return True
+
+        try:
+            if importlib.util.find_spec(top_level) is not None:
+                return True
+        except (ImportError, ValueError, AttributeError):
+            pass
+
+        # Check Local Workspace Resolution
+        for base_path in [search_dir, session_cwd]:
+            if os.path.isfile(os.path.join(base_path, f"{top_level}.py")):
+                return True
+            if os.path.isdir(os.path.join(base_path, top_level)) and \
+                    os.path.isfile(os.path.join(base_path, top_level, "__init__.py")):
+                return True
+
+        return False
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            top_level = node.module.split(".")[0]
-            if top_level in stdlib_names:
-                continue
-            module_file = os.path.join(search_dir, top_level + ".py")
-            module_pkg = os.path.join(search_dir, top_level, "__init__.py")
-            if not os.path.isfile(module_file) and not os.path.isfile(module_pkg):
-                errors.append(f"from {node.module} import ... — no file '{top_level}.py' found in {search_dir}")
-                # Collect the actual imported symbol names, so we can look up
-                # where THEY really live, not just report the missing module.
-                for alias in node.names:
-                    unresolved_imported_names.add(alias.asname or alias.name)
+        modules_to_check = []
 
-    if errors and unresolved_imported_names:
-        locations = native_linter.find_symbol_definitions(search_dir, unresolved_imported_names)
-        hints = []
-        for name, paths in locations.items():
-            if paths:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            modules_to_check.append((node.module, node.names))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                modules_to_check.append((alias.name, [alias]))
+
+        for module_name, names_list in modules_to_check:
+            top_level = module_name.split(".")[0]
+
+            if not is_resolvable(top_level):
+                # Don't fail immediately! Mark it as suspicious so we can cross-reference it.
+                imported_symbols = [alias.asname or alias.name for alias in names_list]
+                suspicious_imports.append((module_name, imported_symbols))
+
+    if not suspicious_imports:
+        return []
+
+    # Gather all unresolved symbols (e.g., 'QApplication', 'my_custom_func')
+    all_unresolved_symbols = set()
+    for _, symbols in suspicious_imports:
+        all_unresolved_symbols.update(symbols)
+
+    # Cross-reference with the local workspace
+    locations = {}
+    if all_unresolved_symbols:
+        # Search the whole session_cwd so we can provide accurate hints across the codebase
+        locations = native_linter.find_symbol_definitions(session_cwd, all_unresolved_symbols)
+
+    errors = []
+    for module_name, symbols in suspicious_imports:
+        local_hints = {}
+        for sym in symbols:
+            if sym in locations and locations[sym]:
+                local_hints[sym] = locations[sym]
+
+        # If we found ANY of the imported symbols elsewhere in the local repo,
+        # we know for a fact the agent hallucinated the local import path.
+        if local_hints:
+            error_msg = [f"Unresolved import '{module_name}' — but the symbols exist elsewhere in your workspace."]
+            hints = []
+            for sym, paths in local_hints.items():
                 module_names = [p.replace('.py', '').replace(os.sep, '.') for p in paths]
-                hints.append(f"  - '{name}' is defined in: {', '.join(paths)} (import via `{module_names[0]}`)")
-        if hints:
-            errors.append("\n[Workspace Hints - Do not guess, use these]:\n" + "\n".join(hints))
+                hints.append(f"  - '{sym}' is defined in: {', '.join(paths)} (import via `{module_names[0]}`)")
+
+            error_msg.append("[Workspace Hints - Do not guess, use these]:\n" + "\n".join(hints))
+            errors.append("\n".join(error_msg))
+        else:
+            # The module is unresolvable AND its symbols do not exist in the repo.
+            # In a sandbox, this is almost certainly an uninstalled 3rd-party package.
+            # We safely suppress the static error here and let normal runtime execution
+            # (which handles standard ModuleNotFoundErrors) take over if it's truly broken.
+            pass
 
     return errors
 
@@ -181,8 +242,6 @@ def check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_fla
 
     return False
 
-
-import ast
 
 def _stmt_list_falls_through(stmts):
     """True if control can reach past the end of this statement list without
@@ -503,9 +562,6 @@ def looks_like_unapplied_code_change(response_content, last_user_message="", min
         if block.count("\n") + 1 >= min_lines:
             return True
     return False
-
-
-import os
 
 
 def check_and_handle_identical_write(tool_args, state, agent_flags, content_key):

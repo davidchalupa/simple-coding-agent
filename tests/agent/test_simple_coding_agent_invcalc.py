@@ -26,7 +26,7 @@ def validate_python_syntax(file_path):
         raise AssertionError(f"❌ SYNTAX ERROR in {file_path}:\n{e}")
 
 
-@pytest.mark.skip(reason="Self-correction problems")
+# @pytest.mark.skip(reason="Skipped for efficiency")
 def test_agent_modify_invcalc():
     target_file = "test_data/invcalc.py"
     output_file = "test_data/invcalc_extended.py"
