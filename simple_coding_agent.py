@@ -15,7 +15,7 @@ from common.guardrail_tools import check_context_guardrail
 from common.output_handler import stream_agent_response
 
 from coding_agent.welcome_banner import display_welcome_banner
-from coding_agent import system_prompt_builder, system_prompt_builder_restrictive
+from coding_agent import system_prompt_builder_light, system_prompt_builder
 from coding_agent.native_helpers import (get_repo_structure, generate_requirements_native, gather_deep_context,
                                          gather_deep_context_ast)
 from coding_agent.guardrails.tools import (verify_sandbox_health, find_last_code_block,
@@ -43,7 +43,7 @@ class AgentState:
         # NEW: toggle for per-guardrail hit tallying, printed once per user-turn cycle.
         # Falls back to False if the CLI arg parser doesn't define it yet.
         self.track_guardrail_hits = parsed_args.get("track_guardrail_hits", True)
-        self.restrictive = parsed_args["restrictive"]
+        self.light_system_prompt = parsed_args["light_system_prompt"]
 
         self.active_config = MODEL_REGISTRY[parsed_args["model"]]
 
@@ -568,8 +568,8 @@ def manage_tool_response(tool_name, tool_args, tool_result, agent_flags, state, 
 
 
 def main(state, execution_state):
-    if state.restrictive:
-        system_prompt = system_prompt_builder_restrictive.build_system_prompt(allow_patch=state.allow_patch)
+    if state.light_system_prompt:
+        system_prompt = system_prompt_builder_light.build_system_prompt(allow_patch=state.allow_patch)
     else:
         system_prompt = system_prompt_builder.build_system_prompt(allow_patch=state.allow_patch)
 
