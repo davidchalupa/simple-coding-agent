@@ -15,16 +15,16 @@ def pytest_addoption(parser):
         help="Specify model key from MODEL_REGISTRY (e.g. qwen2.5, hermes3)."
     )
     parser.addoption(
-        "--restrictive",
+        "--light-system-prompt",
         action="store_true",
-        help="Specify whether to use restrictive mode."
+        help="Specify whether to use a light system prompt."
     )
 
 
 @pytest.fixture(autouse=True)
 def setup_agent_model(request):
     selected_model = request.config.getoption("model")
-    restrictive = request.config.getoption("restrictive")
+    light_system_prompt = request.config.getoption("light_system_prompt")
 
     # Inject active model config into simple_coding_agent
     if selected_model in MODEL_REGISTRY:
@@ -37,7 +37,7 @@ def setup_agent_model(request):
     simple_coding_agent.llm = None
 
     fake_args = ["simple_coding_agent.py", "--model", selected_model]
-    if restrictive:
-        fake_args.append("--restrictive")
+    if light_system_prompt:
+        fake_args.append("--light-system-prompt")
     with patch.object(sys, "argv", fake_args):
         yield
