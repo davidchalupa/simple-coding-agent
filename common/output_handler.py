@@ -16,7 +16,7 @@ _CHAR_RUN_RE = re.compile(r"(.)\1{49,}")
 _CHAR_RUN_SCAN_WINDOW = 300
 
 
-def stream_agent_response(llm, messages, stop=None, temperature=0.1, repeat_penalty=1.1, agent_label="\n[Agent]: "):
+def stream_agent_response(llm, messages, stop=None, temperature=0.1, repeat_penalty=1.1, agent_label="\n[Agent]: ", enforce_duplicate_payload_check=True):
     print(agent_label, end="", flush=True)
     content, finish_reason = "", None
     seen_payload_hashes = set()
@@ -64,21 +64,23 @@ def stream_agent_response(llm, messages, stop=None, temperature=0.1, repeat_pena
                         finish_reason = "repetition_loop"
                         break
 
-                # --- BLOCK-LEVEL DUPLICATE PAYLOAD CHECK ---
-                # Catches "same code, different narration" retries that the
-                # line-frequency detector structurally can't see, since each
-                # retry's internal lines are individually unique even though
-                # the whole payload is an exact repeat.
-                if "```json" in content and content.rstrip().endswith("```"):
-                    for payload_content in _extract_completed_payloads(content):
-                        h = hashlib.sha256(payload_content.encode('utf-8')).hexdigest()
-                        if h in seen_payload_hashes:
-                            print("\n\n🛑 [System]: Duplicate payload detected. Forcing halt.")
-                            finish_reason = "repetition_loop"
+                if enforce_duplicate_payload_check:
+                    # --- BLOCK-LEVEL DUPLICATE PAYLOAD CHECK ---
+                    # Catches "same code, different narration" retries that the
+                    # line-frequency detector structurally can't see, since each
+                    # retry's internal lines are individually unique even though
+                    # the whole payload is an exact repeat.
+                    if "```json" in content and content.rstrip().endswith("```"):
+                        payloads = _extract_completed_payloads(content)
+                        for payload_content in payloads:
+                            h = hashlib.sha256(payload_content.encode('utf-8')).hexdigest()
+                            if h in seen_payload_hashes:
+                                print("\n\n🛑 [System]: Duplicate payload detected. Forcing halt.")
+                                finish_reason = "repetition_loop"
+                                break
+                            seen_payload_hashes.add(h)
+                        if finish_reason == "repetition_loop":
                             break
-                        seen_payload_hashes.add(h)
-                    if finish_reason == "repetition_loop":
-                        break
 
     except KeyboardInterrupt:
         print("\n\n🛑 [Generation Interrupted by User]")

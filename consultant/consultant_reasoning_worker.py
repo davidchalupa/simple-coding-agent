@@ -190,6 +190,9 @@ def main():
                     # regression this caused when it was the shared default.
                     repeat_penalty=1.15,
                     agent_label="\n🧠 [Reasoning]: ",
+                    # let the reasoning worker really say what it wants - this can terminate its thought stream
+                    # while answering, which is unwanted
+                    enforce_duplicate_payload_check=False,
                 )
             )
 
