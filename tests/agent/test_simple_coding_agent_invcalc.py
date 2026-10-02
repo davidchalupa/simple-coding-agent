@@ -81,16 +81,51 @@ def test_agent_modify_invcalc_append_only():
         f"CRITICAL: You MUST output the `append_file` tool call with the fully escaped code in the JSON `content` field.\n",
         "/send",
 
-        # # --- Turn 4: Apply Widget & Update Imports ---
-        # f"Great. Now find out which function or function(s) in the `{output_file}` need to be updated. Use `read_symbol` to get the correct line number range.\n",
-        # "/send",
-        #
-        # # --- Turn 4: Apply Widget & Update Imports ---
-        # f"Great. Now we must apply this new widget and ensure dependencies are imported in `{output_file}`.\n"
-        # "1. Replace the standard `QTableWidget` instance in the main window with the new `CopyableTableWidget`.\n"
-        # "2. Ensure required PyQt5 imports (such as `Qt`, `QApplication`, `QKeySequence` if missing) are added at the top.\n"
-        # "Use `replace_lines` to perform this.\n",
-        # "/send",
+        "/quit"
+    ]
+
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        setup_sandbox_hook=setup_invcalc_sandbox,  # Assuming imported
+        expected_file=output_file,
+        max_calls_limit=30,
+        expected_keywords=["CopyableTableWidget", "selectedIndexes", "clipboard"],
+        custom_file_validator=validate_invcalc_extended
+    )
+
+
+
+def test_agent_modify_invcalc_append_and_update():
+    target_file = "test_data/invcalc.py"
+    output_file = "test_data/invcalc_extended.py"
+
+    input_queue = [
+        # --- Turn 1: Copy File ---
+        f"Copy '{target_file}' to '{output_file}' using the `run_cmd` tool (use `cp` command). Make sure you respect the correct "
+        f"signature of the `run_cmd` tool! No output is okay, `cp` does not provide output normally.",
+        "/send",
+
+        # --- Turn 2: Context & Source Inspection ---
+        f"Now read the full contents of {output_file} to understand its current structure and QTableWidget implementation.",
+        "/send",
+
+        # --- Turn 3: Write Subclass & Append to Copy ---
+        "We need to add multi-cell copy support to the table on Ctrl+C so users can paste data into Excel or LibreOffice Calc. "
+        "Here is the architectural blueprint for the new widget:\n"
+        "1. Create a custom subclass `CopyableTableWidget` that inherits from `QTableWidget`.\n"
+        "2. Override `keyPressEvent(self, event)` to intercept Ctrl+C (`QKeySequence.Copy` or `Qt.Key_C` with `Qt.ControlModifier`).\n"
+        "3. Inside `keyPressEvent`, use `self.selectedIndexes()` to compute the minimum and maximum row/column bounding box.\n"
+        "4. Construct a 2D Tab-Separated Values (TSV) string where columns are separated by '\\t' and rows by '\\n'.\n"
+        "5. Copy this TSV string to the system clipboard using `QApplication.clipboard().setText(...)`.\n\n"
+        f"Use the `append_file` tool to append this complete `CopyableTableWidget` class to the bottom of `{output_file}`.\n"
+        f"CRITICAL: You MUST output the `append_file` tool call with the fully escaped code in the JSON `content` field.\n",
+        "/send",
+
+        # --- Turn 4: Apply Widget & Update Imports ---
+        f"Great. Now we must apply this new widget in `{output_file}`.\n"
+        "Replace the standard `QTableWidget` instance in the main window with the new `CopyableTableWidget`.\n"
+        "Use `patch_file` for this not `replace_lines`, it's a small change!\n",
+        "/send",
 
         "/quit"
     ]
@@ -106,7 +141,7 @@ def test_agent_modify_invcalc_append_only():
 
 
 @pytest.mark.skip(reason="Skipped due to instability")
-def test_agent_modify_invcalc_full():
+def test_agent_modify_invcalc_full_rewrite():
     target_file = "test_data/invcalc.py"
     output_file = "test_data/invcalc_extended.py"
 
