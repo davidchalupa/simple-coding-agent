@@ -86,49 +86,62 @@ def _fix_double_escaped_newlines(raw):
         return raw.replace(r'\\n', r'\n')
     return raw
 
-
 def _decode_inline_content(raw):
     """
-    Decode a raw JSON string value for file content, with two model-specific repairs:
+    Decode a raw JSON string value for file content.
 
-    1. \\' (escaped single-quote) is never valid JSON — ' never needs escaping inside a
-       JSON string. Unescape it in place. This does NOT toggle any string-tracking state;
-       it's purely a "the model added an unnecessary/invalid escape" fix.
-
-    2. Outside a nested double-quoted string in the generated source (tracked via \\"
-       boundaries), a doubly-escaped \\\\n is treated as a structural line break and
-       collapsed to a single \\n (which json.loads will turn into a real newline).
-       INSIDE a nested \\"...\\" string, \\\\n is left as-is, since it likely represents
-       a literal backslash-n escape sequence the generated file's own string needs to
-       contain on disk (e.g. print("hello\\nworld") should keep \\n as two characters,
-       not become an actual newline).
-
-    Without repair (1), a single stray \\' anywhere in the payload causes the final
-    json.loads() call to fail for the ENTIRE string, falling back to returning the raw,
-    completely unconverted text — this was the actual root cause of prior corruption,
-    not a flaw in the context-tracking approach itself.
+    Repairs:
+    1. Removes invalid JSON-style escaping of single quotes: \\'
+    2. Distinguishes structural escaped newlines from literal \\n inside
+       Python string literals.
     """
     if raw is None:
         return ""
 
     out = []
     i = 0
-    in_string = False  # inside a \"..\" nested string literal in the generated source
+    quote_char = None
 
     while i < len(raw):
+        # JSON-level escaped single quote. It is not a meaningful JSON escape,
+        # so preserve the Python source apostrophe and do not change quote state.
         if raw.startswith(r"\'", i):
             out.append("'")
             i += 2
             continue
 
+        # JSON-level escaped double quote. If we're not inside a single-quoted
+        # Python string, this is a Python double-quote delimiter.
         if raw.startswith(r'\"', i):
-            in_string = not in_string
+            if quote_char == '"':
+                quote_char = None
+            elif quote_char is None:
+                quote_char = '"'
+
             out.append(r'\"')
             i += 2
             continue
 
+        # Unescaped single quote in the raw payload is a Python quote delimiter.
+        if raw[i] == "'":
+            if quote_char == "'":
+                quote_char = None
+            elif quote_char is None:
+                quote_char = "'"
+
+            out.append("'")
+            i += 1
+            continue
+
+        # Doubly escaped newline:
+        #   outside Python string -> structural line break
+        #   inside Python string  -> literal \n
         if raw.startswith(r'\\n', i):
-            out.append(r'\\n' if in_string else r'\n')
+            if quote_char is None:
+                out.append(r'\n')
+            else:
+                out.append(r'\\n')
+
             i += 3
             continue
 

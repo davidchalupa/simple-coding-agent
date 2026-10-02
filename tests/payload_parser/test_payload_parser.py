@@ -187,3 +187,20 @@ def test_write_file_double_escaped_newlines_with_python_string_literal():
         'print("hello\\nworld")\n'
         'print("done")'
     )
+
+def test_write_file_double_escaped_newlines_with_single_quoted_python_string_literal():
+    tool_json = (
+        '{"name":"write_file","args":{"filepath":"benchmark.py",'
+        '"content":"import sys\\\\n'
+        "QApplication.clipboard().setText('\\\\n'.join(tsv_data))\\\\n"
+        "print('done')\"}}"
+    )
+
+    result = parse_robust_tool_call(tool_json, tool_json)
+
+    assert result["args"]["content"] == (
+        'import sys\n'
+        "QApplication.clipboard().setText('\\n'.join(tsv_data))\n"
+        "print('done')"
+    )
+
