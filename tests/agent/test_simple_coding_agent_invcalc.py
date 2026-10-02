@@ -61,8 +61,7 @@ def test_agent_modify_invcalc_append_only():
 
     input_queue = [
         # --- Turn 1: Copy File ---
-        f"Copy '{target_file}' to '{output_file}' using the `run_cmd` tool (use `cp` command). Make sure you respect the correct "
-        f"signature of the `run_cmd` tool! No output is okay, `cp` does not provide output normally.",
+        f"Copy '{target_file}' to '{output_file}' using `run_cmd` and `cp` command.",
         "/send",
 
         # --- Turn 2: Context & Source Inspection ---
@@ -101,8 +100,7 @@ def test_agent_modify_invcalc_append_and_update():
 
     input_queue = [
         # --- Turn 1: Copy File ---
-        f"Copy '{target_file}' to '{output_file}' using the `run_cmd` tool (use `cp` command). Make sure you respect the correct "
-        f"signature of the `run_cmd` tool! No output is okay, `cp` does not provide output normally.",
+        f"Copy '{target_file}' to '{output_file}' using `run_cmd` and `cp` command.",
         "/send",
 
         # --- Turn 2: Context & Source Inspection ---
