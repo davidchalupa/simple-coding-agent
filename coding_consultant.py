@@ -131,6 +131,13 @@ def main(state):
                 state.active_mode = new_mode
                 try:
                     if state.active_mode == "think":
+                        def update_system_prompt(messages, new_prompt):
+                            for msg in messages:
+                                if msg.get("role") == "system":
+                                    msg["content"] = new_prompt
+                                    return
+                            update_system_prompt(state.messages, reasoner_system_prompt)
+
                         switcher.load(state.reasoning_model_key)
                         state.messages[0] = {"role": "system", "content": reasoner_system_prompt}
                         print(f"\n🧠 [Reasoning Mode Active] Switched to {switcher.display_name}")
@@ -236,7 +243,7 @@ def main(state):
 
                     perfect_history = "\n".join(
                         [f'<tool_call>{json.dumps(req)}</tool_call>' for req in tool_requests])
-                    state.messages.append({"role": "assistant", "content": perfect_history})
+                    state.messages[-1] = {"role": "assistant", "content": perfect_history}
                 else:
                     print("\n💬 [Consult] Agent finished. Awaiting your next question.")
                     break
