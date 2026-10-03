@@ -59,6 +59,7 @@ def run_read_only_coding_task_test(
         coding_consultant.state.consult_read_cache.clear()
         coding_consultant.state.session_cwd = repo_sandbox
         coding_consultant.state.force_testing = True
+        coding_consultant.state.active_mode = "code"
 
         safety_counter = {"calls": 0, "max_calls": max_calls_limit}
 

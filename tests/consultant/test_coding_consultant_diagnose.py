@@ -28,7 +28,7 @@ def test_consultant_workflow_gather_context_only():
     )
 
 
-def test_consultant_workflow_leaking_state_without_diagnose():
+def test_consultant_workflow_leaking_state_without_think_mode():
     input_queue = [
         "Load `main()` function from `coding_consultant.py` into context.",
         "/send",

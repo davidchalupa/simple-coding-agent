@@ -1,4 +1,5 @@
 import argparse
+import llama_cpp
 from enum import Enum
 
 
@@ -8,14 +9,25 @@ class KVQuantizationType(Enum):
     Q4_0 = "GGML_TYPE_Q4_0"
 
 
+def has_gpu():
+    return getattr(
+        llama_cpp,
+        "llama_supports_gpu_offload",
+        lambda: False,
+    )()
+
+
 def parse_cli_arguments(model_registry_keys):
     """
     Parses CLI arguments for the Coding Agent and returns the configuration variables.
     """
+    default_model = 'qwen2.5-7b-q5km' if has_gpu() else 'qwen2.5-7b'
+    default_reasoning_model = 'qwen3.5-9b' if has_gpu() else None
+
     parser = argparse.ArgumentParser(description="Coding Agent CLI")
-    parser.add_argument("--model", type=str, default="qwen2.5-7b", choices=model_registry_keys,
+    parser.add_argument("--model", type=str, default=default_model, choices=model_registry_keys,
                         help="Select the model to run from the registry.")
-    parser.add_argument("--reasoning-model", type=str, default=None, choices=model_registry_keys,
+    parser.add_argument("--reasoning-model", type=str, default=default_reasoning_model, choices=model_registry_keys,
                         help="Optional second model used for /diagnose in the consultant. "
                              "Loaded in place of --model at the Reading -> Answering transition, "
                              "then unloaded and swapped back. Omit to disable /diagnose.")
