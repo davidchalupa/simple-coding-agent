@@ -28,7 +28,7 @@ def test_consultant_workflow_gather_context_only():
     )
 
 
-def test_consultant_workflow_gather_leaking_state_without_diagnose():
+def test_consultant_workflow_leaking_state_without_diagnose():
     input_queue = [
         "Load `main()` function from `coding_consultant.py` into context.",
         "/send",
@@ -59,7 +59,7 @@ def test_consultant_workflow_gather_leaking_state_without_diagnose():
     )
 
 
-def test_consultant_workflow_leaking_state_diagnose():
+def test_consultant_workflow_leaking_state_think_mode():
     input_queue = [
         "Load `main()` function from `coding_consultant.py` into context.",
         "/send",
@@ -73,7 +73,11 @@ def test_consultant_workflow_leaking_state_diagnose():
         "Load `tests/consultant/test_coding_consultant_load_files_refactor.py` into context.",
         "/send",
 
-        "/diagnose "
+        # --- Standalone Mode Switch ---
+        "/mode think",
+        "/send",
+
+        # --- Followed by the separate prompt ---
         "Now, I will need your help. The above is my coding consultant and the test runner that are used in my tests. Every test uses test runner separately but some read ",
         "the same files again. And the consult cache seems to bleed from one test case to another. Evidence from logs (below is snippet from the second test that ran):",
         '[Agent]: ```json',
