@@ -9,8 +9,8 @@ test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_random
 test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai_action_static_loss    ||x|xx|xx|   5/10
 
 qwen3.5-9b                                                                                         0123456789
-test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_random_ai_action         |||x||       5/6
-test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai_action_static_loss    |xx|||       4/6
+test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_random_ai_action         |||x||||||   9/10
+test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai_action_static_loss    |xx|||xx||   6/10
 
 qwen3-8b                                                                                           012
 test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_random_ai_action         xxx          0/3
