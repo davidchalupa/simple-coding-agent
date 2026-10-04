@@ -1,0 +1,13 @@
+Benchmark for 0.1.0
+
+qwen2.5-7b-q5km                                                                                    0123456789
+test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_random_ai_action         xxx|x||x||   5/10
+test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai_action_static_loss    x||xx|x||x   5/10
+
+qwen2.5-7b-q6k                                                                                     0123456789
+test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_random_ai_action         x|||x|||||   8/10
+test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai_action_static_loss    ||x|xx|xx|   5/10
+
+Notes:
+- test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai_action_static_loss
+  - qwen2.5-7b-q5km can occasionally do a really dumb regurgitation of action_ai_agent, completely stuck in a useless loop
