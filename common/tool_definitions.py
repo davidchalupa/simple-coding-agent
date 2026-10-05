@@ -549,6 +549,7 @@ def search_codebase(dir_path=".", query="", is_regex=False, max_matches=50):
     Native Python grep equivalent. Searches for a string or regex pattern
     across all text files in the directory.
     """
+    # ToDo: this tool only searches in file contents, extend also to file names
     try:
         max_matches = int(max_matches)
         base_path = Path(dir_path).resolve()

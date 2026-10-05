@@ -15,7 +15,12 @@ def is_interactive_session() -> bool:
     return True
 
 def _fallback_input() -> str:
-    """The legacy input loop, 100% compatible with existing automated tests."""
+    """
+    The legacy input loop, 100% compatible with existing automated tests.
+    This is to make sure that /send is still required as prompt separator in tests but the actual
+    usage of instant command is respected in standard CLI.
+    """
+
     print("\n[You] (Type /send to submit, /cancel to scratch draft, /undo to delete last line):")
     user_lines = []
     while True:
@@ -63,7 +68,7 @@ def get_user_prompt() -> str:
             buffer = event.app.current_buffer
             current_line = buffer.document.current_line.strip()
             full_text = buffer.text.strip()
-            instant_commands = ['/quit', '/clear', '/cancel']
+            instant_commands = ['/quit', '/clear', '/cancel', '/mode code', '/mode think']
             macro_prefixes = ('/readme', '/requirements', '/split')
 
             if current_line == '/send':
