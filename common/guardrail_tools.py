@@ -3,13 +3,30 @@ import re
 from collections import Counter
 
 
-def _detect_repetition(significant_lines, window=80, threshold=6):
-    """Line-level fallback: catches degenerate single-line spam loops."""
-    recent = significant_lines[-window:]
-    if len(recent) < threshold:
+# def _detect_repetition(significant_lines, window=80, threshold=6):
+#     """
+#     Line-level fallback: catches degenerate single-line spam loops.
+#     Problematic: causes very common false-positives. Not worth keeping
+#     """
+#     recent = significant_lines[-window:]
+#     if len(recent) < threshold:
+#         return False
+#     _, count = Counter(recent).most_common(1)[0]
+#     return count >= threshold
+
+
+def _detect_repetition(lines):
+    """Extremely conservative version of the guardrail: only flag if SAME LINE repeats 50+ times in a row."""
+    if len(lines) < 50:
         return False
-    _, count = Counter(recent).most_common(1)[0]
-    return count >= threshold
+
+    # Count only exact consecutive matches
+    from collections import Counter
+    freq = Counter(lines[-100:])  # Look at last 100 lines
+    most_common, count = freq.most_common(1)[0]
+
+    # Require 50+ identical lines to trigger (extremely rare)
+    return count >= 50
 
 
 def _extract_completed_payloads(normalized_content):
