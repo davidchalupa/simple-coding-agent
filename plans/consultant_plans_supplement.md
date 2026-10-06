@@ -132,7 +132,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ### Technical Considerations:
 - Monitor KV cache usage via `/stats` command
-- Set hard limits on context window size based on available VRAM (8 GB constraint)
+- Set hard limits on context window size based on available VRAM
 - Implement automatic fallback to smaller models when approaching memory limits
 
 ---
@@ -310,7 +310,7 @@ This document contains detailed technical context, implementation notes, and arc
 ### Current Stack:
 - Primary fast model: 7B coder (syntax, quick tasks)
 - Reasoning model: Qwen 3.5 9B (diagnostics, complex reasoning)
-- Hardware constraint: ~8 GB VRAM total
+- Hardware constraint: VRAM total
 
 ### Architectural Insights from Document:
 - **Small models excel at:** Isolated stack traces, boundary condition brainstorming, syntax questions
