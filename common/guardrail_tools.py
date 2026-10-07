@@ -1,6 +1,7 @@
 import json
 import re
 from collections import Counter
+from common.context_hygiene_utils import get_tokens_used
 
 
 # def _detect_repetition(significant_lines, window=80, threshold=6):
@@ -39,10 +40,11 @@ def _extract_completed_payloads(normalized_content):
         except json.JSONDecodeError:
             continue
 
+
 def check_context_guardrail(messages, llm, limit):
     """Calculates tokens and warns on memory overload."""
     try:
-        tokens = sum(len(llm.tokenize(m["content"].encode('utf-8'))) + 10 for m in messages)
+        tokens = get_tokens_used(messages, llm)
         if tokens > limit:
             print(
                 f"\n🚨 [MEMORY OVERLOAD]: Prompt size is {tokens} tokens (Limit: {limit}).\n   The agent will likely hallucinate... Consider using '/clear' or '--deep-ast'.")

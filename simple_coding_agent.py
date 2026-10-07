@@ -13,6 +13,7 @@ from common.tool_definitions import read_file
 from common.execute_tool import execute_tool
 from common.guardrail_tools import check_context_guardrail
 from common.output_handler import stream_agent_response
+from common.context_hygiene_utils import render_token_footer
 
 from coding_agent.welcome_banner import display_welcome_banner
 from coding_agent import system_prompt_builder_light, system_prompt_builder
@@ -610,6 +611,7 @@ def main(state, execution_state):
 
             try:
                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
+                render_token_footer(state.messages, llm, context_window)
                 if interrupted:
                     break
 

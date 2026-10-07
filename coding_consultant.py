@@ -8,6 +8,7 @@ from pathlib import Path
 from common.input_handler import get_user_prompt
 from common.output_handler import stream_agent_response
 from common.guardrail_tools import check_context_guardrail
+from common.context_hygiene_utils import render_token_footer
 
 from consultant.system_prompt_builder import build_consultant_system_prompt, build_diagnose_system_prompt
 from consultant.guardrail_tools import sanitize_response, is_pure_load_request
@@ -180,6 +181,8 @@ def main(state):
                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages,
                                                                                     **stream_kwargs)
 
+                render_token_footer(state.messages, llm, context_window)
+
                 if interrupted:
                     break
 
@@ -210,6 +213,7 @@ def main(state):
                             try:
                                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages,
                                                                                                     **stream_kwargs)
+                                render_token_footer(state.messages, llm, context_window)
                                 if not interrupted:
                                     response_content = sanitize_response(response_content)
                                     if extract_tool_requests(response_content):
