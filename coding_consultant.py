@@ -9,6 +9,7 @@ from common.input_handler import get_user_prompt
 from common.output_handler import stream_agent_response
 from common.guardrail_tools import check_context_guardrail
 from common.context_hygiene_utils import render_token_footer
+from common.context_hygiene_utils import render_token_footer
 
 from consultant.system_prompt_builder import build_consultant_system_prompt, build_diagnose_system_prompt
 from consultant.guardrail_tools import sanitize_response, is_pure_load_request
@@ -258,13 +259,22 @@ def main(state):
 
                 if combined_results.strip():
                     if is_pure_load_request(user_input):
+                        # Inject the actual tool results (file contents) into the context first
+                        state.messages.append({
+                            "role": "user",
+                            "content": f"Tool Execution Results:\n{combined_results.strip()}"
+                        })
+
                         summary = summarize_loaded_targets(tool_requests)
                         synthesized_answer = (
                             f"Context loaded — {summary} is now available. "
                             f"What would you like to do next?"
                         )
                         print(f"\n[Agent]: {synthesized_answer}")
+
+                        # Then append the agent's acknowledgment
                         state.messages.append({"role": "assistant", "content": synthesized_answer})
+
                         print("\n💬 [Consult] Agent finished. Awaiting your next question.")
                         state.expect_plain_text = False
                         state.answering_violations = 0
