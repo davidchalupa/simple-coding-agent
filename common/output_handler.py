@@ -16,6 +16,27 @@ _CHAR_RUN_RE = re.compile(r"(.)\1{49,}")
 _CHAR_RUN_SCAN_WINDOW = 300
 
 
+def _is_inside_code_block_or_table(content):
+    """Check if content is inside a code block or markdown table."""
+
+    # Check for backtick-fenced code blocks (track opening/closing)
+    lines = content.split('\n')
+    in_code_block = False
+    for line in reversed(lines[-20:]):  # Look at last 20 lines
+        if '```' in line and not line.strip().startswith('```'):
+            continue
+        stripped = line.strip()
+        if stripped.startswith('```'):
+            in_code_block = True
+            break
+
+    # Check for markdown tables (lines starting with |)
+    has_table_row = any(line.strip().startswith('|') and '|' in line
+                        for line in lines[-10:])
+
+    return in_code_block or has_table_row
+
+
 def stream_agent_response(llm, messages, stop=None, temperature=0.1, repeat_penalty=1.1, agent_label="\n[Agent]: ", enforce_duplicate_payload_check=True):
     print(agent_label, end="", flush=True)
     content, finish_reason = "", None
@@ -42,10 +63,15 @@ def stream_agent_response(llm, messages, stop=None, temperature=0.1, repeat_pena
                 # Catches degenerate single-character runaway generation
                 # (e.g. a wall of repeated digits) that the line-based and
                 # JSON-block checks below cannot see by construction.
-                if _CHAR_RUN_RE.search(content[-_CHAR_RUN_SCAN_WINDOW:]):
-                    print("\n\n🛑 [System]: Runaway character repetition detected. Forcing halt.")
-                    finish_reason = "repetition_loop"
-                    break
+
+                # Skip validation if we're inside code blocks or tables where
+                # repeated characters are expected formatting artifacts
+                # Otherwise this could kick in as a false positive
+                if not _is_inside_code_block_or_table(content):
+                    if _CHAR_RUN_RE.search(content[-_CHAR_RUN_SCAN_WINDOW:]):
+                        print("\n\n🛑 [System]: Runaway character repetition detected. Forcing halt.")
+                        finish_reason = "repetition_loop"
+                        break
 
                 is_real_newline = '\n' in new_text
                 is_escaped_newline = '\\n' in new_text or (
