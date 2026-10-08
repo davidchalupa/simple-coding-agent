@@ -47,7 +47,7 @@ def test_consultant_workflow_leaking_state_without_think_mode():
         '[Agent]: ```json',
         '{"name": "read_file", "args": {"filepath": "coding_consultant.py", "start_line": 1, "max_lines": -1}}',
         '```',
-        "📎 [Consult Cache] Reusing cached result for read_file on /home/davidc/src/simple-coding-agent/coding_consultant.py. ",
+        "📎 [Consult Cache] Reusing cached result for read_file on /home/user/src/simple-coding-agent/coding_consultant.py. ",
         "I suspect that consult cache is not properly cleaned by the test runner. Can you diagnose and show me how to fix this?",
         "/send",
 
@@ -83,7 +83,7 @@ def test_consultant_workflow_leaking_state_think_mode():
         '[Agent]: ```json',
         '{"name": "read_file", "args": {"filepath": "coding_consultant.py", "start_line": 1, "max_lines": -1}}',
         '```',
-        "📎 [Consult Cache] Reusing cached result for read_file on /home/davidc/src/simple-coding-agent/coding_consultant.py. ",
+        "📎 [Consult Cache] Reusing cached result for read_file on /home/user/src/simple-coding-agent/coding_consultant.py. ",
         "I suspect that consult cache is not properly cleaned by the test runner. Can you diagnose and show me how to fix this?",
         "/send",
 
