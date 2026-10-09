@@ -2,6 +2,7 @@ import os
 import sys
 import gc
 import psutil
+import pickle
 from enum import Enum
 
 from llama_cpp import Llama, llama_cpp
@@ -57,44 +58,28 @@ class LLMInitializer:
             raise AttributeError("Cannot access underlying C-API in llama-cpp-python 0.3.x")
 
     def save_kv_cache(self, cache_file_path):
-        """Save KV cache to file using llama.cpp native functions (v0.3+ compatible)."""
-
-        # llama-cpp-python 0.3.x does NOT expose C-API for kv_cache_save/load
-        # Attempt fallback via set_cache() directly without trying internal attributes first
-
+        """Save KV cache to file using save_state()."""
         try:
-            from llama_cpp import Llama
-
-            if hasattr(self.llm, 'set_cache'):
-                self.llm.set_cache(cache_file_path)
-                print(f"💾 [KV Cache] Saved via set_cache()")
-                return True
-
+            state = self.llm.save_state()
+            with open(cache_file_path, 'wb') as f:
+                pickle.dump(state, f)
+            print(f"💾 [KV Cache] Saved state successfully")
+            return True
         except Exception as e:
-            # If set_cache doesn't exist or fails, log but don't crash KV cache feature
-            print(f"\n⚠️  KV Cache save not supported in this llama-cpp-python version: {e}")
-
-        return False
+            print(f"\n⚠️ KV Cache save failed: {e}")
+            return False
 
     def load_kv_cache(self, cache_file_path):
-        """Load KV cache from file using llama.cpp native functions (v0.3+ compatible)."""
-
-        # llama-cpp-python 0.3.x does NOT expose C-API for kv_cache_save/load
-        # Attempt fallback via set_cache() directly without trying internal attributes first
-
+        """Load KV cache from file using load_state()."""
         try:
-            from llama_cpp import Llama
-
-            if hasattr(self.llm, 'set_cache'):
-                self.llm.set_cache(cache_file_path)
-                print(f"📂 [KV Cache] Loaded via set_cache()")
-                return True
-
+            with open(cache_file_path, 'rb') as f:
+                state = pickle.load(f)
+            self.llm.load_state(state)
+            print(f"📂 [KV Cache] Loaded state successfully")
+            return True
         except Exception as e:
-            # If set_cache doesn't exist or fails, log but don't crash KV cache feature
-            print(f"\n⚠️  KV Cache load not supported in this llama-cpp-python version: {e}")
-
-        return False
+            print(f"\n⚠️ KV Cache load failed: {e}")
+            return False
 
     # === END KV Cache Methods ===
 

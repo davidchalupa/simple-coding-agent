@@ -38,7 +38,7 @@ class ConsultantState:
         self.models_dir = Path(__file__).resolve().parent / "models"
 
         # === NEW: KV Cache tracking ===
-        self.cache_enabled = False
+        self.cache_enabled = True
 
         # Tracks the active state: "code" (default) or "think"
         self.active_mode = "code"
