@@ -37,6 +37,9 @@ class ConsultantState:
         self.kv_quantization_type = parsed_args["kv_quantization_type"]
         self.models_dir = Path(__file__).resolve().parent / "models"
 
+        # === NEW: KV Cache tracking ===
+        self.cache_enabled = False
+
         # Tracks the active state: "code" (default) or "think"
         self.active_mode = "code"
 
@@ -74,7 +77,7 @@ def summarize_loaded_targets(tool_requests):
     return ", ".join(unique_parts) if unique_parts else "the requested content"
 
 
-def handle_user_input(state, user_input, system_prompt):
+def handle_user_input(state, user_input, system_prompt, switcher):
     if user_input == "/quit":
         print("Exiting. Goodbye!")
         sys.exit(0)
@@ -86,6 +89,22 @@ def handle_user_input(state, user_input, system_prompt):
         state.expect_plain_text = False
         state.answering_violations = 0
         state.last_directive = None
+
+        # === NEW: Clear KV cache files for current model(s) ===
+        if switcher.cache_dir and os.path.exists(switcher.cache_dir):
+            import glob
+            pattern1 = f"{state.primary_model_key}_*.bin"
+            pattern2 = f"{state.reasoning_model_key or 'reasoner'}_*.bin"
+
+            for pattern in [pattern1, pattern2]:
+                cache_files = glob.glob(os.path.join(switcher.cache_dir, pattern))
+                for cf in cache_files:
+                    try:
+                        os.remove(cf)
+                        print(f"🗑️  Deleted KV cache file: {os.path.basename(cf)}")
+                    except Exception as e:
+                        print(f"⚠️  Failed to delete {cf}: {e}")
+
         print("🧹 Memory and environment completely cleared!")
         return True
 
@@ -105,6 +124,10 @@ def main(state):
     switcher = ModelSwitcher(state.kv_quantization_type, state.models_dir)
     switcher.load(state.primary_model_key)
 
+    # === NEW: Initialize cache directory once at startup ===
+    if state.cache_enabled:
+       switcher.ensure_cache_dir_exists()
+
     state.messages = [{"role": "system", "content": coder_system_prompt}]
 
     print(f"\n🔍 [Coding Consultant] {switcher.display_name} loaded. Read-only — write tools are disabled.")
@@ -117,7 +140,7 @@ def main(state):
     while True:
         user_input = get_user_prompt()
 
-        if handle_user_input(state, user_input, coder_system_prompt):
+        if handle_user_input(state, user_input, coder_system_prompt, switcher):
             continue
 
         # --- Handle Mode Switching ---
@@ -156,6 +179,20 @@ def main(state):
 
         # Ensure correct model is loaded for the active mode
         active_model_key = state.reasoning_model_key if state.active_mode == "think" else state.primary_model_key
+
+        # === NEW: Save KV cache before switching models or starting fresh session ===
+        if state.cache_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
+            import glob
+            pattern = f"{active_model_key}_*.bin"
+            existing_cache_files = glob.glob(os.path.join(switcher.cache_dir, pattern))
+
+            # Delete old cache files for this model before saving new one
+            for cf in existing_cache_files:
+                try:
+                    os.remove(cf)
+                except Exception as e:
+                    print(f"⚠️  Failed to delete stale cache {cf}: {e}")
+
         llm, context_window = switcher.load(active_model_key)
 
         state.messages.append({"role": "user", "content": user_input})
@@ -167,6 +204,17 @@ def main(state):
 
         is_reasoner = (state.active_mode == "think")
 
+        # === NEW: Save KV cache after first successful turn with this model ===
+        if state.cache_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
+            import time
+
+            cache_filename = f"{active_model_key}_{int(time.time())}.bin"
+            cache_file_path = os.path.join(switcher.cache_dir, cache_filename)
+
+            # Save KV cache to file for next turn
+            if switcher.save_current_context(cache_file_path):
+                print(f"\n💾 [KV Cache] Saved context to {cache_file_path}")
+
         while True:
             check_context_guardrail(state.messages, llm, context_window)
 
@@ -175,12 +223,40 @@ def main(state):
                 stream_kwargs = {
                     "agent_label": "\n🧠 [Agent]: " if is_reasoner else "\n💻 [Agent]: "
                 }
+
+                # === NEW: Restore KV cache before processing each turn (except first) ===
+                if state.cache_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
+                    import glob
+
+                    pattern = f"{active_model_key}_*.bin"
+                    existing_cache_files = glob.glob(os.path.join(switcher.cache_dir, pattern))
+
+                    # Restore most recent cache file for this model
+                    if len(existing_cache_files) > 0:
+                        # Sort by filename (timestamp embedded), take latest
+                        existing_cache_files.sort(reverse=True)
+                        latest_cache_file = existing_cache_files[0]
+
+                        print(f"\n📂 [KV Cache] Restoring from {os.path.basename(latest_cache_file)}...")
+
+                        if switcher.restore_previous_context(latest_cache_file):
+                            # Successfully restored - remove old file to avoid duplicates
+                            try:
+                                os.remove(latest_cache_file)
+                                print(f"✅ KV cache restored successfully. Old file cleaned up.")
+                            except Exception as e:
+                                print(f"⚠️  Failed to cleanup old cache after restore: {e}")
+                        else:
+                            # Restore failed - log but continue normally (degrade gracefully)
+                            print(f"\n❌ [KV Cache] Restore failed. Loading fresh context.")
+
                 if is_reasoner:
                     stream_kwargs["repeat_penalty"] = 1.15
                     stream_kwargs["enforce_duplicate_payload_check"] = False
 
                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages,
                                                                                     **stream_kwargs)
+
 
                 render_token_footer(state.messages, llm, context_window)
 

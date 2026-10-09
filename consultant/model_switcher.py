@@ -27,6 +27,9 @@ class ModelSwitcher:
         self.kv_quantization_type = kv_quantization_type
         self.models_dir = models_dir
 
+        # === NEW: Cache directory and tracking ===
+        self.cache_dir = None  # Will be initialized in _ensure_cache_dir_exists()
+
         self.current_key = None
         self.initializer = None
         self.llm = None
@@ -67,6 +70,56 @@ class ModelSwitcher:
 
         # A small delay gives CUDA/native teardown some breathing room.
         time.sleep(0.5)
+
+    def ensure_cache_dir_exists(self):
+        """Create cache directory if it doesn't exist."""
+        import os
+
+        self.cache_dir = Path.home() / ".coding_consultant" / "cache"
+
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+            # Check write permissions
+            test_file = self.cache_dir / ".write_test"
+            with open(test_file, 'w') as f:
+                f.write('test')
+            os.remove(test_file)
+
+        except Exception as e:
+            print(f"\n⚠️ [KV Cache] Cannot create cache directory {self.cache_dir}: {e}")
+            self.cache_dir = None
+
+    def get_cache_filename(self, model_key):
+        """Generate a timestamped filename for KV cache."""
+        import time
+
+        if not self.cache_dir:
+            return None
+
+        # Use current timestamp to allow multiple sessions per model
+        timestamp = int(time.time())
+
+        safe_model_name = model_key.replace('-', '_').replace('.', '_')
+        filename = f"{safe_model_name}_{timestamp}.bin"
+
+        return os.path.join(self.cache_dir, filename)
+
+    def save_current_context(self, cache_file_path):
+        """Save current KV cache to file."""
+        if not self.initializer:
+            print("⚠️ [KV Cache] No model loaded. Cannot save.")
+            return False
+
+        return self.initializer.save_kv_cache(cache_file_path)
+
+    def restore_previous_context(self, cache_file_path):
+        """Restore KV cache from file."""
+        if not self.initializer:
+            print("⚠️ [KV Cache] No model loaded. Cannot restore.")
+            return False
+
+        return self.initializer.load_kv_cache(cache_file_path)
 
     def load(self, model_key: str):
         if (

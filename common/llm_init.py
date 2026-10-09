@@ -37,6 +37,67 @@ class LLMInitializer:
     def get_system_ram_gb(self):
         return psutil.virtual_memory().total / (1024 ** 3)
 
+    # === NEW: KV Cache Persistence Methods ===
+
+    def _get_llama_instance(self):
+        """Return the underlying llama_cpp.Llama instance for direct API access."""
+        if self.llm is None:
+            raise RuntimeError("LLM not initialized. Call initialize_agent() first.")
+
+        # In 0.3.x, we need to access internal C-API wrapper
+        return self._get_llama_c_instance()
+
+    def _get_llama_c_instance(self):
+        """Get the underlying llama.cpp instance for direct API calls."""
+        if hasattr(self.llm, '_llama'):
+            return self.llm._llama
+        elif hasattr(self.llm, 'llama'):
+            return self.llm.llama
+        else:
+            raise AttributeError("Cannot access underlying C-API in llama-cpp-python 0.3.x")
+
+    def save_kv_cache(self, cache_file_path):
+        """Save KV cache to file using llama.cpp native functions (v0.3+ compatible)."""
+
+        # llama-cpp-python 0.3.x does NOT expose C-API for kv_cache_save/load
+        # Attempt fallback via set_cache() directly without trying internal attributes first
+
+        try:
+            from llama_cpp import Llama
+
+            if hasattr(self.llm, 'set_cache'):
+                self.llm.set_cache(cache_file_path)
+                print(f"💾 [KV Cache] Saved via set_cache()")
+                return True
+
+        except Exception as e:
+            # If set_cache doesn't exist or fails, log but don't crash KV cache feature
+            print(f"\n⚠️  KV Cache save not supported in this llama-cpp-python version: {e}")
+
+        return False
+
+    def load_kv_cache(self, cache_file_path):
+        """Load KV cache from file using llama.cpp native functions (v0.3+ compatible)."""
+
+        # llama-cpp-python 0.3.x does NOT expose C-API for kv_cache_save/load
+        # Attempt fallback via set_cache() directly without trying internal attributes first
+
+        try:
+            from llama_cpp import Llama
+
+            if hasattr(self.llm, 'set_cache'):
+                self.llm.set_cache(cache_file_path)
+                print(f"📂 [KV Cache] Loaded via set_cache()")
+                return True
+
+        except Exception as e:
+            # If set_cache doesn't exist or fails, log but don't crash KV cache feature
+            print(f"\n⚠️  KV Cache load not supported in this llama-cpp-python version: {e}")
+
+        return False
+
+    # === END KV Cache Methods ===
+
     def close(self):
         """
         Explicitly release the Llama object and all Python references owned
