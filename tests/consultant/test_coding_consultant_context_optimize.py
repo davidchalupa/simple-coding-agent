@@ -3,7 +3,6 @@ import pytest
 from tests.consultant.test_utils.test_runner import run_read_only_coding_task_test
 
 
-@pytest.mark.skip(reason="Temporarily skipped")
 def test_consultant_workflow_context_optimize_analysis():
     input_queue = [
         "load coding_consultant.py into context.",
@@ -33,6 +32,7 @@ def test_consultant_workflow_context_optimize_analysis():
     )
 
 
+@pytest.mark.skip(reason="Temporarily skipped")
 def test_consultant_workflow_context_optimize_implement():
     input_queue = [
         "load coding_consultant.py into context.",
@@ -83,7 +83,7 @@ def test_consultant_workflow_context_optimize_implement():
         working_directory=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     )
 
-@pytest.mark.skip(reason="Temporarily skipped")
+
 def test_consultant_workflow_kv_cache_persistence_implementation_code_review():
     input_queue = [
         "load coding_consultant.py into context.",

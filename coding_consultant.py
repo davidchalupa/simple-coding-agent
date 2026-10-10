@@ -254,7 +254,7 @@ def main(state):
                     stream_kwargs["repeat_penalty"] = 1.15
                     stream_kwargs["enforce_duplicate_payload_check"] = False
 
-                response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages,
+                response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages, context_window,
                                                                                     **stream_kwargs)
 
 
@@ -288,7 +288,7 @@ def main(state):
                             print("\n💬 [Consult] Forcing plain-text answer after repeated Answering Mode violations.")
                             check_context_guardrail(state.messages, llm, context_window)
                             try:
-                                response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages,
+                                response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages, context_window,
                                                                                                     **stream_kwargs)
                                 render_token_footer(state.messages, llm, context_window)
                                 if not interrupted:

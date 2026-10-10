@@ -180,6 +180,7 @@ def main():
                 stream_agent_response(
                     initializer.llm,
                     messages,
+                    initializer.CONTEXT_WINDOW,
                     # Higher than the shared default: this call site does long
                     # free-text reasoning generation, which is where the
                     # degenerate character-repetition runaway was observed.

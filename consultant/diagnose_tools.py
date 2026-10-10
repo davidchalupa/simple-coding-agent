@@ -98,6 +98,7 @@ def gather_context_for_diagnose(state, switcher, user_question):
                 stream_agent_response(
                     llm,
                     gather_messages,
+                    context_window
                 )
             )
 
@@ -349,6 +350,7 @@ def run_diagnose_turn(state, switcher, user_question):
                 stream_agent_response(
                     llm,
                     analysis_messages,
+                    context_window,
                     # Same rationale as consultant_reasoning_worker.py: this
                     # is long free-text reasoning, not tool-calling, so the
                     # higher repeat_penalty used to guard against degenerate

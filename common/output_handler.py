@@ -2,6 +2,7 @@ import re
 import hashlib
 
 from common.guardrail_tools import _detect_repetition, _extract_completed_payloads
+from common.context_hygiene_utils import get_tokens_used
 
 # Catches a single character (digit, letter, punctuation — anything) repeated
 # this many times consecutively with no newline in between. This is
@@ -37,18 +38,29 @@ def _is_inside_code_block_or_table(content):
     return in_code_block or has_table_row
 
 
-def stream_agent_response(llm, messages, stop=None, temperature=0.1, repeat_penalty=1.1, agent_label="\n[Agent]: ", enforce_duplicate_payload_check=True):
+def stream_agent_response(llm, messages,
+                          context_window,
+                          stop=None,
+                          temperature=0.1,
+                          repeat_penalty=1.1,
+                          agent_label="\n[Agent]: ",
+                          enforce_duplicate_payload_check=True,
+                          max_output_tokens: int = None):
     print(agent_label, end="", flush=True)
     content, finish_reason = "", None
     seen_payload_hashes = set()
 
     try:
+        if max_output_tokens is None or max_output_tokens > 4096:
+            max_output_tokens = min(3584, context_window - get_tokens_used(messages, llm))
+
         for chunk in llm.create_chat_completion(
                 messages=messages,
                 stream=True,
                 temperature=temperature,
                 repeat_penalty=repeat_penalty,
-                max_tokens=4096,
+                # we have a dynamic limit now
+                max_tokens=max_output_tokens,
                 stop=stop or []
         ):
             choice = chunk['choices'][0]

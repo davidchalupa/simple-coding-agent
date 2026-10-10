@@ -610,7 +610,7 @@ def main(state, execution_state):
             check_context_guardrail(state.messages, llm, context_window)
 
             try:
-                response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages)
+                response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages, context_window)
                 render_token_footer(state.messages, llm, context_window)
                 if interrupted:
                     break
