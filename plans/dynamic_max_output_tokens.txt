@@ -190,3 +190,77 @@ Would you like me to:
 1. Generate the complete modified `output_handler.py` with dynamic token calculation?
 2. Update both system prompts in `system_prompt_builder.py` with brevity constraints?
 3. Show how to integrate this into `coding_consultant.py`'s main loop?
+
+---
+
+
+
+
+🧠 [Agent]: <think>
+The user is asking me to review the output token enforcement approach that's already implemented in the system. I need to analyze:
+
+1. The dynamic limit implementation in `output_handler.py` (stream_agent_response function)
+2. The rule 7 in the system prompts from `system_prompt_builder.py`
+3. Whether this is sufficient or needs hardening
+
+Let me trace through what's already implemented based on the files I've loaded:
+
+From `common/output_handler.py`:
+- Line 54-55 shows dynamic max_output_tokens calculation that considers context_window and tokens_used in messages
+- The limit is capped at min(3584, ...) to prevent excessive output
+
+From `consultant/system_prompt_builder.py`:
+- Rule 7 says: "Keep responses concise and focused. If you need more context, ask for specific files/symbols rather than generating long explanations."
+
+I should review this implementation against the plans document which mentions VRAM optimization needs. Let me provide a thorough analysis of what's there vs what might be missing or could be improved.
+</think>
+
+Based on my review of the codebase and plans documents, here is my assessment:
+
+## Current Implementation Analysis
+
+### What's Already in Place
+
+**1. Dynamic Token Limiting (`common/output_handler.py`, lines 54-55):**
+```python
+if max_output_tokens is None or max_output_tokens > 4096:
+    max_output_tokens = min(3584, context_window - get_tokens_used(messages, llm))
+```
+
+This dynamically calculates available tokens based on remaining context window after accounting for prompt size. The hard cap of 3584 is reasonable for VRAM constraints.
+
+**2. System Prompt Rule (Rule #7 in `system_prompt_builder.py`):**
+> "Keep responses concise and focused... ask for specific files/symbols rather than generating long explanations."
+
+This provides behavioral guidance but relies on model compliance.
+
+### Gaps & Recommendations
+
+| Gap | Severity | Recommendation |
+|-----|----------|----------------|
+| **No hard enforcement in Answering Mode** | High | The system prompt forbids tool calls, but there's no explicit token limit check before generating the final answer |
+| **Rule #7 is behavioral only** | Medium | Models can ignore instructions; needs programmatic guardrails |
+| **KV cache doesn't count toward output budget** | Low-Medium | Cache restoration adds tokens that aren't subtracted from `max_output_tokens` |
+
+### Hardening Recommendations
+
+1. **Add Pre-Generation Token Check:** Before calling `stream_agent_response`, validate the expected response length won't exceed available tokens:
+   ```python
+   # In coding_consultant.py, before line 257
+   if state.expect_plain_text and (context_window - get_tokens_used(state.messages, llm)) < 1000:
+       print("⚠️ [Token Budget] Approaching limit. Truncating response.")
+       # Force shorter generation or fallback to summary mode
+   ```
+
+2. **Strengthen Rule Enforcement:** Add a system message injection when token budget is critically low (e.g., < 50% remaining):
+   ```python
+   if tokens_used > int(context_window * 0.85):
+       state.messages.append({
+           "role": "user",
+           "content": "CRITICAL: Token budget nearly exhausted. Provide only essential information now."
+       })
+   ```
+
+3. **Add Output Length Validation:** After generation, verify the response doesn't exceed calculated limits and truncate if necessary (see `plans/consultant_plans_supplement.md`, line 129-130).
+
+**Verdict:** The current approach is a good start but needs hardening for production reliability on limited VRAM systems.

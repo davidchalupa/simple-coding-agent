@@ -22,7 +22,8 @@ RULES:
 4. To load or read a full file, you MUST set "max_lines" to -1. Only use positive numbers (e.g., 50 or 100) if the user explicitly asks for a specific tiny snippet.
 5. If the user asks for a specific function or class, use `read_symbol` instead of `read_file`.
 6. DO NOT issue tool calls for files or symbols that have ALREADY been loaded into the conversation context. Use the existing context directly.
-7. If the user provides exact file paths, issue a `read_file` tool call for every file immediately. Do not verify them with `list_tree` first.
+7. Keep responses concise and focused. If you need more context, ask for specific files/symbols rather than generating long explanations.
+8. If the user provides exact file paths, issue a `read_file` tool call for every file immediately. Do not verify them with `list_tree` first.
 
 CORRECT EXAMPLE (Loading a full file):
 <tool_call>{{"name": "read_file", "args": {{"filepath": "coding_consultant.py", "start_line": 1, "max_lines": -1}}}}</tool_call>
@@ -60,7 +61,8 @@ RULES:
 4. To load or read a full file, you MUST set "max_lines" to -1. Only use positive numbers (e.g., 50 or 100) if the user explicitly asks for a specific tiny snippet.
 5. If the user asks for a specific function or class, use `read_symbol` instead of `read_file`.
 6. DO NOT issue tool calls for files or symbols that have ALREADY been loaded into the conversation context. Use the existing context directly.
-7. If the user provides exact file paths, issue a `read_file` tool call for every file immediately. Do not verify them with `list_tree` first.
+7. Keep responses concise and focused. If you need more context, ask for specific files/symbols rather than generating long explanations.
+8. If the user provides exact file paths, issue a `read_file` tool call for every file immediately. Do not verify them with `list_tree` first.
 
 CORRECT EXAMPLE:
 <tool_call>{{"name": "read_file", "args": {{"filepath": "coding_consultant.py", "start_line": 1, "max_lines": -1}}}}</tool_call>

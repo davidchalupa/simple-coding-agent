@@ -45,6 +45,19 @@ def check_context_guardrail(messages, llm, limit):
     """Calculates tokens and warns on memory overload."""
     try:
         tokens = get_tokens_used(messages, llm)
+
+        # Critical Token Budget Enforcement ===
+        if tokens > int(limit * 0.9):
+            print(f"\n🚨 [CRITICAL TOKEN BUDGET]: {tokens}/{limit} ({(tokens / limit) * 100:.1f}%). "
+                  f"Injecting system directive to enforce brevity.")
+
+            # Inject critical instruction as user message (follows existing pattern)
+            messages.append({
+                "role": "user",
+                "content": "CRITICAL: Token budget nearly exhausted. Provide only essential information now. "
+                           "Use concise diffs, avoid re-printing full files, and answer directly."
+            })
+
         if tokens > limit:
             print(
                 f"\n🚨 [MEMORY OVERLOAD]: Prompt size is {tokens} tokens (Limit: {limit}).\n   The agent will likely hallucinate... Consider using '/clear' or '--deep-ast'.")

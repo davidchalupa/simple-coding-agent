@@ -32,8 +32,7 @@ def test_consultant_workflow_context_optimize_analysis():
     )
 
 
-@pytest.mark.skip(reason="Temporarily skipped")
-def test_consultant_workflow_context_optimize_implement():
+def test_consultant_workflow_context_optimize_review():
     input_queue = [
         "load coding_consultant.py into context.",
         "/send",
@@ -54,25 +53,13 @@ def test_consultant_workflow_context_optimize_implement():
         "/send",
 
         """
-        Now, as I understand, with respect to context hygiene - Output token enforcements is not implemented yet.
-        Model can generate long responses regardless of VRAM constraints.
-        Though we do have some limit in output_handler - do I understand correctly that the 4096 is the current
-        limit?
-
-        for chunk in llm.create_chat_completion(
-                messages=messages,
-                stream=True,
-                temperature=temperature,
-                repeat_penalty=repeat_penalty,
-                max_tokens=4096,
-                stop=stop or []
-        ):
-
-        If so, how can we set max_tokens smarter? Or shall we try to enforce the constraints with a minor system prompt
-        change? Or we try to do it somehow programatically?
-        Remember, different types of prompts will likely require different token limits.
-        And we even have both coding and reasoning modes - and the reasoning model may require more generous token
-        limit for a good answer.
+        Now, as I understand, with respect to context hygiene - Output token enforcement was a high-priority feature.
+        Model can generate long responses regardless of VRAM constraints and this is important to tame this behavior.
+        Now - as you can see - we have an implementation of a dynamically determined limit to the maximum tokens
+        allowed in a response, as well as a new point 7. in rules within our system prompts.
+        
+        Can you provide a brief review of this approach? Would it be sufficient or would you recommend hardening it
+        further?
         """,
         "/send",
 
