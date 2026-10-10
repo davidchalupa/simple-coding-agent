@@ -1,0 +1,34 @@
+   ┌───────────────────────────────────────────────────────────┐
+   │                     Outer User Loop                       │
+   │   • Prompt Input / Automated Followups / Command Macros   │
+   └─────────────────────────────┬─────────────────────────────┘
+                                 │
+                                 ▼
+   ┌───────────────────────────────────────────────────────────┐
+   │               Inner Agent Tool-Calling Loop               │
+   │                                                           │
+   │  1. Check Context Window & Stream Response                │
+   │  2. Catch Empty / Corrupted Generation                    │
+   │  3. Extract Tool Call Payload                             │
+   └──────────────┬─────────────────────────────┬──────────────┘
+                  │                             │
+        [ No Tool Call Found ]          [ Tool Call Found ]
+                  │                             │
+                  ▼                             ▼
+   ┌───────────────────────────┐ ┌───────────────────────────┐
+   │ Post-Generation Safety    │ │ Pre-Flight Guardrails     │
+   │ • Premature Completion    │ │ • Schema Validation       │
+   │ • Memory Regurgitation    │ │ • Ellipsis Anchor Check   │
+   │ • Unapplied Code Blocks   │ │ • Content Recovery        │
+   │ • Pending Verification    │ │ • Python Native Linter    │
+   └──────────────┬────────────┘ └──────────────┬────────────┘
+                  │                             │
+                  ▼                             ▼
+           [ Turn End ]                  [ User Approval ]
+                                                │
+                                                ▼
+                                         [ Execute Tool ]
+                                                │
+                                                ▼
+                                   [ Post-Exec Healing & ]
+                                   [    Reinforcement    ]

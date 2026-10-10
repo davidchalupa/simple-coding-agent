@@ -1,0 +1,192 @@
+🧠 [Agent]: <think>
+The user is asking about output token enforcement and whether the 4096 max_tokens limit in output_handler.py is appropriate. They want to know if we should:
+
+1. Set max_tokens smarter based on context size/VRAM constraints
+2. Use system prompt changes to enforce brevity
+3. Do it programmatically with dynamic limits
+
+Let me analyze what I've loaded so far:
+
+From `coding_consultant.py`:
+- Line 257 shows the stream_agent_response call with max_tokens=4096 hardcoded in output_handler.py
+- There's a token budget check via render_token_footer() that warns when approaching context limits (lines 261, and guardrail_tools.py lines 44-53)
+
+From `output_handler.py`:
+- Line 51 shows max_tokens=4096 hardcoded in the create_chat_completion call
+
+The user is correct - there's no dynamic token enforcement based on VRAM/context constraints. The system only warns via render_token_footer() but doesn't actually limit output tokens programmatically.
+
+Let me think about solutions:
+1. Dynamic max_tokens calculation based on remaining context budget
+2. System prompt instructions to keep responses brief (but this is unreliable)
+3. Programmatic enforcement with dynamic limits
+
+The best approach would be a combination of both - programmatic limits that adapt to available tokens, plus system prompts encouraging brevity.
+
+I should analyze the current implementation and propose solutions based on what I've seen in the codebase.
+</think>
+
+<tool_call>{"name": "read_file", "args": {"filepath": "common/output_handler.py", "start_line": 40, "max_lines": -1}}</tool_call>
+
+🟢 Tokens used: 18079/32768 (55.2%)
+
+⚠️  CONSULTANT REQUESTS EXECUTION: read_file
+Arguments: {'filepath': '[...]/simple-coding-agent/common/output_handler.py', 'start_line': 40, 'max_lines': -1}
+
+🤖 [Automated Test] Auto-approving tool execution: 'y'
+⚙️  Tool execution finished.
+   Result (4846 chars, truncated):    40	def stream_agent_response(llm, messages, stop=None, temperature=0.1, repeat_penalty=1.1, agent_label="\n[Agent]: ", enforce_duplicate_payload_check=True):
+   41	    print(agent_label, end="", flush=True)
+   42	    content, finish_reason = "", None
+   43	    seen_payload_hashes = set()
+   44
+   45	    try:
+   46	        for chunk in llm.create_chat_completion(
+   47	                messages=...
+
+🧠 [Agent]: <think>
+The user is asking about output token enforcement. They're correct that 4096 max_tokens is hardcoded in output_handler.py line 51, and there's no dynamic adjustment based on VRAM/context constraints.
+
+Let me analyze the situation:
+
+1. **Current State**: The `stream_agent_response` function has a fixed `max_tokens=4096` parameter passed to llama.cpp
+2. **Problem**: This doesn't account for remaining context budget or VRAM limits - it's just an arbitrary ceiling
+3. **Available Tools**:
+   - `get_tokens_used()` in context_hygiene_utils.py can calculate tokens used by messages
+   - The system prompt already warns about memory overload but doesn't enforce output limits
+
+**Solutions to propose:**
+
+1. **Programmatic Dynamic Limiting (Recommended)**: Calculate remaining budget and set max_tokens accordingly
+2. **System Prompt Enforcement**: Add instructions for brevity (less reliable)
+3. **Hybrid Approach**: Both programmatic + prompt-based
+
+Let me trace through the code flow in coding_consultant.py to understand where this would fit best, then provide a concrete implementation plan with code examples.
+
+Key considerations:
+- Different modes need different limits (reasoning mode may need more tokens)
+- Need to account for system prompts and tool call overhead
+- Should have fallback behavior if model ignores instructions anyway
+</think>
+
+You're absolutely correct — the 4096 `max_tokens` is hardcoded in [`output_handler.py`](common/output_handler.py:51), and there's no dynamic enforcement based on VRAM or remaining context budget. Here's my analysis and solution:
+
+---
+
+## **Current State Analysis**
+
+| Component | Current Behavior | Problem |
+|-----------|------------------|---------|
+| `stream_agent_response()` (line 40-51) | Fixed `max_tokens=4096` | Ignores remaining context budget, VRAM constraints |
+| [`render_token_footer()`](common/context_hygiene_utils.py:5-13) | Only warns when tokens > limit | No enforcement of output limits |
+| System prompts (lines 27-36 in `coding_consultant.py`) | Warns about memory overload | Doesn't constrain model generation behavior |
+
+---
+
+## **Recommended Solution: Hybrid Approach**
+
+### **1. Programmatic Dynamic Limiting (Primary Enforcement)**
+
+Calculate remaining budget and pass it to the LLM call. This is more reliable than prompt-based enforcement alone.
+
+```python
+# In common/output_handler.py - modify stream_agent_response signature
+def stream_agent_response(llm, messages, stop=None, temperature=0.1,
+                          repeat_penalty=1.1, agent_label="\n[Agent]: ",
+                          enforce_duplicate_payload_check=True,
+                          max_output_tokens: int = None):  # NEW PARAMETER
+
+    if max_output_tokens is None or max_output_tokens > 4096:
+        max_output_tokens = min(3584, llm.n_ctx - get_tokens_used(messages, llm))
+
+    for chunk in llm.create_chat_completion(
+            messages=messages,
+            stream=True,
+            temperature=temperature,
+            repeat_penalty=repeat_penalty,
+            max_tokens=max_output_tokens,  # DYNAMIC LIMIT
+            stop=stop or []
+    ):
+        ...
+```
+
+### **2. Mode-Specific Defaults**
+
+Different modes need different token budgets:
+
+| Mode | Default Max Output Tokens | Rationale |
+|------|---------------------------|-----------|
+| Code mode (fast model) | 1536-2048 tokens | Concise diffs, code snippets |
+| Reasoning mode (9B model) | 2560-3072 tokens | Complex analysis needs more space |
+
+### **3. System Prompt Reinforcement**
+
+Add explicit instructions to both system prompts:
+
+```python
+# In consultant/system_prompt_builder.py - add to build_consultant_system_prompt()
+brevity_instruction = (
+    "CONSTRAINTS:\n"
+    "- Keep responses concise and focused\n"
+    "- Present code changes as localized diffs, not full file reprints\n"
+    "- If you need more context, ask for specific files/symbols rather than generating long explanations\n"
+)
+
+return f"""You are a read-only coding consultant. You strictly follow a 2-step process: Reading Mode and Answering Mode.
+
+{brevity_instruction}
+
+AVAILABLE TOOLS:...
+```
+
+### **4. Implementation in `coding_consultant.py`**
+
+Modify the call site to pass dynamic limits based on mode:
+
+```python
+# In coding_consultant.py - around line 257-260
+active_model_key = state.reasoning_model_key if state.active_mode == "think" else state.primary_model_key
+
+# Calculate remaining budget dynamically
+tokens_used = get_tokens_used(state.messages, llm)
+remaining_budget = context_window - tokens_used
+
+# Mode-specific output limits (reserve 15% for system overhead)
+if state.active_mode == "think":
+    max_output_tokens = int(remaining_budget * 0.75)  # Reasoning mode gets more headroom
+else:
+    max_output_tokens = int(remaining_budget * 0.60)  # Code mode stays conservative
+
+# Pass to stream_agent_response with dynamic limit
+response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages,
+ **stream_kwargs,
+ max_output_tokens=max_output_tokens)
+```
+
+---
+
+## **Why This Hybrid Approach?**
+
+1. **Programmatic limits** are the only reliable enforcement — models will ignore prompt instructions if they want to generate more tokens
+2. **Mode differentiation** acknowledges that reasoning mode genuinely needs more space for complex analysis
+3. **Dynamic calculation** adapts to actual context usage rather than fixed thresholds
+4. **System prompts** provide behavioral guidance but aren't the primary constraint
+
+---
+
+## **Additional Recommendations from `consultant_plans.md` & Supplement:**
+
+From your loaded plans, these align with this approach:
+
+- **Tier 1 Priority**: "Context Window Hygiene & Token Budgeting" — exactly what we're implementing
+- **Supplement Section 5.2** (lines 130-131): "Smaller output token counts = faster generation + less VRAM pressure"
+- **Technical Consideration** (line 136): "Set hard limits on context window size based on available VRAM"
+
+---
+
+## **Next Steps:**
+
+Would you like me to:
+1. Generate the complete modified `output_handler.py` with dynamic token calculation?
+2. Update both system prompts in `system_prompt_builder.py` with brevity constraints?
+3. Show how to integrate this into `coding_consultant.py`'s main loop?
