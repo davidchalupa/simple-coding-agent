@@ -197,32 +197,32 @@ def handle_macros(state, user_input, coder_system_prompt, reasoner_system_prompt
             print("\n💬 [Consult] Awaiting your next question.")
             return True
 
-        # --- Handle Mode Switching ---
-        mode_match = MODE_RE.match(user_input.strip())
-        if mode_match:
-            new_mode = mode_match.group(1).lower()
+    # --- Handle Mode Switching ---
+    mode_match = MODE_RE.match(user_input.strip())
+    if mode_match:
+        new_mode = mode_match.group(1).lower()
 
-            if new_mode == "think" and not state.reasoning_model_key:
-                print("⚠️  No reasoning model configured. Operating in code mode.")
-                return True
-
-            if new_mode != state.active_mode:
-                state.active_mode = new_mode
-                try:
-                    if state.active_mode == "think":
-                        switcher.load(state.reasoning_model_key)
-                        state.messages[0] = {"role": "system", "content": reasoner_system_prompt}
-                        print(f"\n🧠 [Reasoning Mode Active] Switched to {switcher.display_name}")
-                    else:
-                        switcher.load(state.primary_model_key)
-                        print(f"\n💻 [Coding Mode Active] Switched to {switcher.display_name}")
-                except Exception as e:
-                    print(f"\n❌ Failed to switch models: {e}")
-            else:
-                print(f"Already in {new_mode} mode.")
-
-            # Standalone command: do not process further, wait for next user prompt
+        if new_mode == "think" and not state.reasoning_model_key:
+            print("⚠️  No reasoning model configured. Operating in code mode.")
             return True
+
+        if new_mode != state.active_mode:
+            state.active_mode = new_mode
+            try:
+                if state.active_mode == "think":
+                    switcher.load(state.reasoning_model_key)
+                    state.messages[0] = {"role": "system", "content": reasoner_system_prompt}
+                    print(f"\n🧠 [Reasoning Mode Active] Switched to {switcher.display_name}")
+                else:
+                    switcher.load(state.primary_model_key)
+                    print(f"\n💻 [Coding Mode Active] Switched to {switcher.display_name}")
+            except Exception as e:
+                print(f"\n❌ Failed to switch models: {e}")
+        else:
+            print(f"Already in {new_mode} mode.")
+
+        # Standalone command: do not process further, wait for next user prompt
+        return True
 
     return False
 
