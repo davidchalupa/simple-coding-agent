@@ -118,25 +118,77 @@ def handle_user_input(state, user_input, system_prompt, switcher):
     return False
 
 
-def main(state):
-    coder_system_prompt = build_consultant_system_prompt()
-    reasoner_system_prompt = build_diagnose_system_prompt()
-    switcher = ModelSwitcher(state.kv_quantization_type, state.models_dir)
-    switcher.load(state.primary_model_key)
+def execute_prepare_macro(state, coder_system_prompt, reasoner_system_prompt, switcher, macro_file_path):
+    """Execute a prepare workflow from file using builtins.input patching"""
 
-    # === NEW: Initialize cache directory once at startup ===
-    if state.cache_persistence_enabled:
-       switcher.ensure_cache_dir_exists()
+    if not os.path.exists(macro_file_path):
+        print(f"\n❌ [Prepare] File not found: {macro_file_path}")
+        return False
 
-    state.messages = [{"role": "system", "content": coder_system_prompt}]
+    try:
+        with open(macro_file_path, 'r', encoding='utf-8') as f:
+            macro_content = f.read()
 
-    print(f"\n🔍 [Coding Consultant] {switcher.display_name} loaded. Read-only — write tools are disabled.")
-    if state.reasoning_model_key is not None:
-        reasoning_display = MODEL_REGISTRY[state.reasoning_model_key]["display_name"]
-        print(
-            f"💡 Multi-Model mode enabled: Type '/mode think' to switch to {reasoning_display}, and '/mode code' to switch back.")
-    print()
+        input_queue = [line.strip() for line in macro_content.split('\n')
+                       if line.strip() and not line.strip().startswith('#')]
 
+    except Exception as e:
+        print(f"\n❌ [Prepare] Failed to read macro file: {e}")
+        return False
+
+    original_cwd = os.getcwd()
+    state.consult_read_cache.clear()
+
+    try:
+        safety_counter = {"calls": 0, "max_calls": len(input_queue) + 20}
+        original_len = len(input_queue)
+
+        def smart_input_mocker(prompt=""):
+            safety_counter["calls"] += 1
+            if safety_counter["calls"] > safety_counter["max_calls"]:
+                print("\n🛑 [Prepare Overload] Too many input calls. Forcing exit.", flush=True)
+                return "/quit"
+
+            prompt_str = str(prompt).lower()
+
+            # Auto-approve tool confirmation prompts (same logic as your test runner)
+            if "allow" in prompt_str or "y/n" in prompt_str or "execute" in prompt_str or "?" in prompt_str:
+                print(f"\n🤖 [Prepare] Auto-approving prompt ({prompt.strip()}): 'y'", flush=True)
+                return "y"
+
+            # Pull next command from the macro file queue
+            if input_queue:
+                next_input = input_queue.pop(0)
+                step_num = original_len - len(input_queue)
+                print(f"\n⌨️ [Prepare Step {step_num}/{original_len}] Typing: {next_input}", flush=True)
+                return next_input
+
+            return "/quit"
+
+        from unittest.mock import patch
+
+        # Patch builtins.input directly, matching your test runner architecture
+        with patch("builtins.input", side_effect=smart_input_mocker):
+            try:
+                main_loop(state, coder_system_prompt, reasoner_system_prompt, switcher)
+            except SystemExit as e:
+                print(f"\n[Prepare] Process exited with code {e.code}")
+            except Exception as e:
+                print(f"\n❌ [Prepare] Unexpected error in workflow execution: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+
+    finally:
+        os.chdir(original_cwd)
+
+    print("\n✅ [Prepare] Workflow completed. Context is now ready for interactive use.")
+    return True
+
+
+def main_loop(state,
+              coder_system_prompt,
+              reasoner_system_prompt,
+              switcher):
     while True:
         user_input = get_user_prompt()
 
@@ -176,6 +228,17 @@ def main(state):
 
             # Standalone command: do not process further, wait for next user prompt
             continue
+
+        # Check for /prepare command here ===
+        elif user_input.startswith('/prepare '):
+            macro_file_path = user_input[len('/prepare'):].strip()
+
+            print(f"\n💬 [Consult] Executing the prepare instructions from {macro_file_path}")
+
+            # Execute prepare workflow and return True to exit main loop
+            if execute_prepare_macro(state, coder_system_prompt, reasoner_system_prompt, switcher, macro_file_path):
+                print("\n💬 [Consult] Awaiting your next question.")
+                continue
 
         # Ensure correct model is loaded for the active mode
         active_model_key = state.reasoning_model_key if state.active_mode == "think" else state.primary_model_key
@@ -384,6 +447,28 @@ def main(state):
             except Exception as e:
                 print(f"\n[Error during generation]: {e}")
                 break
+
+
+def main(state):
+    coder_system_prompt = build_consultant_system_prompt()
+    reasoner_system_prompt = build_diagnose_system_prompt()
+    switcher = ModelSwitcher(state.kv_quantization_type, state.models_dir)
+    switcher.load(state.primary_model_key)
+
+    # === NEW: Initialize cache directory once at startup ===
+    if state.cache_persistence_enabled:
+       switcher.ensure_cache_dir_exists()
+
+    state.messages = [{"role": "system", "content": coder_system_prompt}]
+
+    print(f"\n🔍 [Coding Consultant] {switcher.display_name} loaded. Read-only — write tools are disabled.")
+    if state.reasoning_model_key is not None:
+        reasoning_display = MODEL_REGISTRY[state.reasoning_model_key]["display_name"]
+        print(
+            f"💡 Multi-Model mode enabled: Type '/mode think' to switch to {reasoning_display}, and '/mode code' to switch back.")
+    print()
+
+    main_loop(state, coder_system_prompt, reasoner_system_prompt, switcher)
 
 
 if __name__ == "__main__":
