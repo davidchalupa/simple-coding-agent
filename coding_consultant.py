@@ -2,13 +2,14 @@ import sys
 import os
 import json
 import re
+import glob
+import time
 
 from pathlib import Path
 
 from common.input_handler import get_user_prompt
 from common.output_handler import stream_agent_response
 from common.guardrail_tools import check_context_guardrail
-from common.context_hygiene_utils import render_token_footer
 from common.context_hygiene_utils import render_token_footer
 
 from consultant.system_prompt_builder import build_consultant_system_prompt, build_diagnose_system_prompt
@@ -90,9 +91,8 @@ def handle_user_input(state, user_input, system_prompt, switcher):
         state.answering_violations = 0
         state.last_directive = None
 
-        # === NEW: Clear KV cache files for current model(s) ===
+        # === Clear KV cache files for current model(s) ===
         if switcher.cache_dir and os.path.exists(switcher.cache_dir):
-            import glob
             pattern1 = f"{state.primary_model_key}_*.bin"
             pattern2 = f"{state.reasoning_model_key or 'reasoner'}_*.bin"
 
@@ -185,15 +185,17 @@ def execute_prepare_macro(state, coder_system_prompt, reasoner_system_prompt, sw
     return True
 
 
-def main_loop(state,
-              coder_system_prompt,
-              reasoner_system_prompt,
-              switcher):
-    while True:
-        user_input = get_user_prompt()
+def handle_macros(state, user_input, coder_system_prompt, reasoner_system_prompt, switcher):
+    # Check for /prepare command here ===
+    if user_input.startswith('/prepare '):
+        macro_file_path = user_input[len('/prepare'):].strip()
 
-        if handle_user_input(state, user_input, coder_system_prompt, switcher):
-            continue
+        print(f"\n💬 [Consult] Executing the prepare instructions from {macro_file_path}")
+
+        # Execute prepare workflow and return True to exit main loop
+        if execute_prepare_macro(state, coder_system_prompt, reasoner_system_prompt, switcher, macro_file_path):
+            print("\n💬 [Consult] Awaiting your next question.")
+            return True
 
         # --- Handle Mode Switching ---
         mode_match = MODE_RE.match(user_input.strip())
@@ -202,19 +204,12 @@ def main_loop(state,
 
             if new_mode == "think" and not state.reasoning_model_key:
                 print("⚠️  No reasoning model configured. Operating in code mode.")
-                continue
+                return True
 
             if new_mode != state.active_mode:
                 state.active_mode = new_mode
                 try:
                     if state.active_mode == "think":
-                        def update_system_prompt(messages, new_prompt):
-                            for msg in messages:
-                                if msg.get("role") == "system":
-                                    msg["content"] = new_prompt
-                                    return
-                            update_system_prompt(state.messages, reasoner_system_prompt)
-
                         switcher.load(state.reasoning_model_key)
                         state.messages[0] = {"role": "system", "content": reasoner_system_prompt}
                         print(f"\n🧠 [Reasoning Mode Active] Switched to {switcher.display_name}")
@@ -227,25 +222,29 @@ def main_loop(state,
                 print(f"Already in {new_mode} mode.")
 
             # Standalone command: do not process further, wait for next user prompt
+            return True
+
+    return False
+
+
+def main_loop(state,
+              coder_system_prompt,
+              reasoner_system_prompt,
+              switcher):
+    while True:
+        user_input = get_user_prompt()
+
+        if handle_user_input(state, user_input, coder_system_prompt, switcher):
             continue
 
-        # Check for /prepare command here ===
-        elif user_input.startswith('/prepare '):
-            macro_file_path = user_input[len('/prepare'):].strip()
-
-            print(f"\n💬 [Consult] Executing the prepare instructions from {macro_file_path}")
-
-            # Execute prepare workflow and return True to exit main loop
-            if execute_prepare_macro(state, coder_system_prompt, reasoner_system_prompt, switcher, macro_file_path):
-                print("\n💬 [Consult] Awaiting your next question.")
-                continue
+        if handle_macros(state, user_input, coder_system_prompt, reasoner_system_prompt, switcher):
+            continue
 
         # Ensure correct model is loaded for the active mode
         active_model_key = state.reasoning_model_key if state.active_mode == "think" else state.primary_model_key
 
-        # === NEW: Save KV cache before switching models or starting fresh session ===
+        # === Save KV cache before switching models or starting fresh session ===
         if state.cache_persistence_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
-            import glob
             pattern = f"{active_model_key}_*.bin"
             existing_cache_files = glob.glob(os.path.join(switcher.cache_dir, pattern))
 
@@ -267,10 +266,8 @@ def main_loop(state,
 
         is_reasoner = (state.active_mode == "think")
 
-        # === NEW: Save KV cache after first successful turn with this model ===
+        # === Save KV cache after first successful turn with this model ===
         if state.cache_persistence_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
-            import time
-
             cache_filename = f"{active_model_key}_{int(time.time())}.bin"
             cache_file_path = os.path.join(switcher.cache_dir, cache_filename)
 
@@ -289,8 +286,6 @@ def main_loop(state,
 
                 # === NEW: Restore KV cache before processing each turn (except first) ===
                 if state.cache_persistence_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
-                    import glob
-
                     pattern = f"{active_model_key}_*.bin"
                     existing_cache_files = glob.glob(os.path.join(switcher.cache_dir, pattern))
 
