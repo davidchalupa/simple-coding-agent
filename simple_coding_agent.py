@@ -177,7 +177,7 @@ def handle_macros(user_input, state, execution_state, system_prompt, context_win
             existing_readme = read_file(readme_path, start_line=1, max_lines=1000)
             print("   [Notice] Existing README.md found. Forcing structural analysis.")
         else:
-            existing_readme = "No existing README.md found. Create from scratch."
+            existing_readme = "STATUS: No README.md exists yet. DO NOT call read_file. You must create it from scratch using write_file."
             print("   [Notice] No README.md found. Agent will draft a new one.")
 
         # Deep Mode Trigger Interceptor

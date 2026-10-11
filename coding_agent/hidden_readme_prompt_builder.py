@@ -83,8 +83,9 @@ def build_strategy_steps(readme_path, allow_patch, deep_focus=False):
         )
     else:
         return (
-            f"1. Evaluate {grounding_source} to extract the precise concept, underlying logic, and factual CLI execution methods of the project.\n"
-            f"2. Use the `write_file` tool, embedding the full README content directly inside the JSON `content` field "
+            f"1. Evaluate {grounding_source} to extract the precise concept, underlying logic, and factual CLI execution methods of the project. "
+            f"NOTE: README.md does not exist yet. DO NOT call read_file on it.\n"
+            f"2. Use the `write_file` tool directly, embedding the full README content inside the JSON `content` field "
             f"(properly escaped, e.g. \\n for newlines), to initialize the README file from scratch incorporating "
             f"explicit usage documentation. Do NOT use a `<payload>` block.\n"
             f"3. COMPLETION (CRITICAL): After the file is written, output a final conversational message announcing completion and DO NOT invoke any further tools."

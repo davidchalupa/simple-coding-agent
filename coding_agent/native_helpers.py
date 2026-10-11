@@ -189,12 +189,11 @@ def gather_deep_context(startpath, context_window):
     candidates = []
 
     # Dynamic tokens budget to be able to generate a good quality readme,
+    # with a safe ceiling to prevent small model attention degradation,
     # leaves ~3000 tokens for system prompt & generation headroom
-    # MAX_TOTAL_CHARS = int((context_window - 3000) * 3.5)
+    # ToDo: the lower bound of 40000 should be changed to be model-specific
+    MAX_TOTAL_CHARS = min(int((context_window - 3000) * 3.5), 40000)
 
-    # Static tokens budget to be able to generate a good quality readme,
-    # behavior for dynamic budget to be investigated
-    MAX_TOTAL_CHARS = 30000
     num_files = len(py_files)
 
     # 1. Calculate Fair-Share Budget per file
