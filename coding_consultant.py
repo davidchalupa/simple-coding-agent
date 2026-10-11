@@ -37,8 +37,8 @@ class ConsultantState:
         self.kv_quantization_type = parsed_args["kv_quantization_type"]
         self.models_dir = Path(__file__).resolve().parent / "models"
 
-        # === NEW: KV Cache tracking ===
-        self.cache_enabled = True
+        # Enables KV Cache persistence
+        self.cache_persistence_enabled = True
 
         # Tracks the active state: "code" (default) or "think"
         self.active_mode = "code"
@@ -125,7 +125,7 @@ def main(state):
     switcher.load(state.primary_model_key)
 
     # === NEW: Initialize cache directory once at startup ===
-    if state.cache_enabled:
+    if state.cache_persistence_enabled:
        switcher.ensure_cache_dir_exists()
 
     state.messages = [{"role": "system", "content": coder_system_prompt}]
@@ -181,7 +181,7 @@ def main(state):
         active_model_key = state.reasoning_model_key if state.active_mode == "think" else state.primary_model_key
 
         # === NEW: Save KV cache before switching models or starting fresh session ===
-        if state.cache_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
+        if state.cache_persistence_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
             import glob
             pattern = f"{active_model_key}_*.bin"
             existing_cache_files = glob.glob(os.path.join(switcher.cache_dir, pattern))
@@ -205,7 +205,7 @@ def main(state):
         is_reasoner = (state.active_mode == "think")
 
         # === NEW: Save KV cache after first successful turn with this model ===
-        if state.cache_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
+        if state.cache_persistence_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
             import time
 
             cache_filename = f"{active_model_key}_{int(time.time())}.bin"
@@ -225,7 +225,7 @@ def main(state):
                 }
 
                 # === NEW: Restore KV cache before processing each turn (except first) ===
-                if state.cache_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
+                if state.cache_persistence_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
                     import glob
 
                     pattern = f"{active_model_key}_*.bin"

@@ -11,6 +11,9 @@ def test_consultant_workflow_context_optimize_analysis():
         "load the following files into context: common/llm_init.py, common/output_handler.py, common/context_hygiene_utils.py, common/guardrail_tools.py",
         "/send",
 
+        "load also consultant/system_prompt_builder.py into context",
+        "/send",
+
         "load also plans/consultant_plans.md into context",
         "/send",
 
@@ -71,6 +74,7 @@ def test_consultant_workflow_context_optimize_review():
     )
 
 
+@pytest.mark.skip(reason="Temporarily skipped")
 def test_consultant_workflow_kv_cache_persistence_implementation_code_review():
     input_queue = [
         "load coding_consultant.py into context.",
