@@ -159,7 +159,7 @@ def _gather_project_metadata(startpath):
     return metadata
 
 
-def gather_deep_context(startpath):
+def gather_deep_context(startpath, context_window):
     """
     Gathers repository context using a dynamic fair-share character budget.
     Small repos get deep file extraction; large repos get truncated smartly.
@@ -188,8 +188,13 @@ def gather_deep_context(startpath):
     code_summary = _gather_project_metadata(startpath)
     candidates = []
 
-    # ~5000 tokens budget. Leaves ~3000 tokens for system prompt & generation headroom
-    MAX_TOTAL_CHARS = 20000
+    # Dynamic tokens budget to be able to generate a good quality readme,
+    # leaves ~3000 tokens for system prompt & generation headroom
+    # MAX_TOTAL_CHARS = int((context_window - 3000) * 3.5)
+
+    # Static tokens budget to be able to generate a good quality readme,
+    # behavior for dynamic budget to be investigated
+    MAX_TOTAL_CHARS = 30000
     num_files = len(py_files)
 
     # 1. Calculate Fair-Share Budget per file
@@ -203,7 +208,7 @@ def gather_deep_context(startpath):
     for filepath in py_files:
         # 2. GLOBAL CIRCUIT BREAKER
         if len(code_summary) >= MAX_TOTAL_CHARS:
-            code_summary += "\n[System: Repository too large. Code context truncated to safely fit 8k window.]\n"
+            code_summary += "\n[System: Repository too large. Code context truncated to safely fit context window.]\n"
             break
 
         rel_path = os.path.relpath(filepath, startpath)

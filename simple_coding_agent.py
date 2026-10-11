@@ -111,7 +111,7 @@ def handle_user_input(state, user_input, system_prompt):
     return False
 
 
-def handle_macros(user_input, state, execution_state, system_prompt):
+def handle_macros(user_input, state, execution_state, system_prompt, context_window):
     """
     Handles the more complex macros. Returns True if a relevant macro was found but an error occurred
     and False if everything went right or no relevant macro was found.
@@ -189,7 +189,7 @@ def handle_macros(user_input, state, execution_state, system_prompt):
             code_summary, cli_help = gather_deep_context_ast(abs_target_dir)
         elif deep_focus:
             print("👀 [Mode Change] Deep Scan: Extracting script code segments and querying CLI help hooks...")
-            code_summary, cli_help = gather_deep_context(abs_target_dir)
+            code_summary, cli_help = gather_deep_context(abs_target_dir, context_window)
 
         strategy_steps = hidden_readme_prompt_builder.build_strategy_steps(
             readme_path, state.allow_patch,
@@ -596,7 +596,7 @@ def main(state, execution_state):
         if handle_user_input(state, user_input, system_prompt):
             continue
 
-        if handle_macros(user_input, state, execution_state, system_prompt):
+        if handle_macros(user_input, state, execution_state, system_prompt, context_window):
             continue
 
         # Standard execution or continuation of sandbox mode
