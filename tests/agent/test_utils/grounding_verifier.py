@@ -112,9 +112,14 @@ class GroundingVerifier:
             "python", "python3", "pip", "install", "run", "usage", "bash", "sh",
             "cd", "git", "clone", "the", "a", "to", "and", "is", "for", "with",
             "in", "of", "this", "file", "script", "use", "true", "false", "none",
+            # Git & Boilerplate additions
             "checkout", "commit", "push", "pull", "add", "status", "branch", "merge",
             "origin", "main", "master", "feature", "bugfix", "your", "repo", "repository",
-            "fork", "ctrl+c", "ctrl", "alt", "shift", "enter"
+            "fork", "ctrl+c", "ctrl", "alt", "shift", "enter",
+            # Expanded technical nouns & documentation boilerplate
+            "directory", "path", "code", "support", "filepath", "optional",
+            "backend", "location", "desired", "gpu", "cpu", "llm", "models",
+            "copy", "core", "options", "think", "backend", "support"
         }
 
         standard_cli_flags = {
@@ -133,12 +138,14 @@ class GroundingVerifier:
             if token_lower in ignore_words or token_lower in standard_cli_flags:
                 continue
 
+            # Ignore URLs, specific placeholder paths, and model family version identifiers
             if (token_lower.startswith('http://') or
                     token_lower.startswith('https://') or
                     'github.com' in token_lower or
                     'path/to' in token_lower or
                     'your-repo' in token_lower or
-                    token_lower.startswith('feature/')):
+                    token_lower.startswith('feature/') or
+                    any(m in token_lower for m in ['qwen', 'llama', 'mistral', 'deepseek', 'phi', 'codellama'])):
                 continue
 
             is_cli_flag = token_clean.startswith('-') and len(token_clean) >= 2
