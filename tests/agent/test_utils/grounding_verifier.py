@@ -4,7 +4,7 @@ import ast
 
 
 class GroundingVerifier:
-    """Extracts valid symbols from target repo and verifies README claims against them."""
+    """Extracts valid symbols, directories, and dependencies from target repo and verifies README claims against them."""
 
     def __init__(self, repo_dir: str):
         self.repo_dir = os.path.abspath(repo_dir)
@@ -19,15 +19,28 @@ class GroundingVerifier:
         self._build_symbol_manifest()
 
     def _build_symbol_manifest(self):
-        for root, _, files in os.walk(self.repo_dir):
-            for f in files:
-                rel_path = os.path.relpath(os.path.join(root, f), self.repo_dir).replace("\\", "/")
+        # 1. Walk repository to register files, modules, classes, functions, and directories
+        for root, dirs, files in os.walk(self.repo_dir):
+            rel_root = os.path.relpath(root, self.repo_dir).replace("\\", "/")
 
-                # Add exact filename and relative path
+            if rel_root != ".":
+                self.valid_symbols.add(rel_root)
+                self.valid_symbols.add(rel_root + "/")
+                for part in rel_root.split("/"):
+                    self.valid_symbols.add(part)
+
+            for d in dirs:
+                self.valid_symbols.add(d)
+                d_rel = os.path.join(rel_root, d).replace("\\", "/") if rel_root != "." else d
+                self.valid_symbols.add(d_rel)
+                self.valid_symbols.add(d_rel + "/")
+
+            for f in files:
+                rel_path = os.path.join(rel_root, f).replace("\\", "/") if rel_root != "." else f
                 self.valid_symbols.add(f)
                 self.valid_symbols.add(rel_path)
 
-                # If it's a Python file, also register the module name (without .py)
+                # If it's a Python file, register module name and AST definitions
                 if f.endswith(".py"):
                     self.valid_symbols.add(f[:-3])
 
@@ -36,41 +49,58 @@ class GroundingVerifier:
                         with open(full_p, "r", encoding="utf-8") as py_f:
                             code = py_f.read()
 
-                            # 1. AST Parsing for guaranteed extraction
+                            # AST Parsing for symbols and flags
                             tree = ast.parse(code, filename=f)
                             for node in ast.walk(tree):
-                                # Extract Classes and Functions (including async)
                                 if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)):
                                     self.valid_symbols.add(node.name)
 
-                                # Extract String Literals (Python 3.8+)
                                 elif isinstance(node, ast.Constant) and isinstance(node.value, str):
                                     if node.value.startswith('-') or node.value.startswith('/'):
                                         self.valid_flags.add(node.value.strip())
 
-                                # Extract String Literals (Python < 3.8 fallback)
                                 elif getattr(ast, 'Str', None) and isinstance(node, getattr(ast, 'Str')):
                                     if node.s.startswith('-') or node.s.startswith('/'):
                                         self.valid_flags.add(node.s.strip())
 
-                            # 2. Aggressive Regex Fallback (for non-standard formatting)
+                            # Aggressive Regex Fallback for flags/commands
                             flags = re.findall(r'["\']\s*(-[a-zA-Z0-9\-_]+|--[a-zA-Z0-9\-_]+|/[a-zA-Z0-9\-_]+)\s*["\']',
                                                code)
                             self.valid_flags.update(flags)
                     except Exception:
                         pass
 
+        # 2. Parse project metadata/dependency files to whitelist real external packages
+        for req_file in ("requirements.txt", "pyproject.toml", "setup.py", "setup.cfg"):
+            req_path = os.path.join(self.repo_dir, req_file)
+            if os.path.isfile(req_path):
+                try:
+                    with open(req_path, "r", encoding="utf-8", errors="ignore") as rf:
+                        content = rf.read()
+                        if "requirements" in req_file or "setup" in req_file:
+                            for line in content.splitlines():
+                                line = line.strip()
+                                if line and not line.startswith("#"):
+                                    pkg = re.split(r'==|>=|<=| @ |\[', line)[0].strip()
+                                    if pkg:
+                                        self.valid_symbols.add(pkg)
+                        elif "toml" in req_file:
+                            matches = re.findall(r'["\']([a-zA-Z0-9\-_]+)(?:==|>=|<=)?', content)
+                            for m in matches:
+                                self.valid_symbols.add(m)
+                except Exception:
+                    pass
+
     def evaluate_readme(self, readme_content: str):
         # 1. Extract triple-backtick code blocks first
         blocks = re.findall(r'```[a-zA-Z]*\n(.*?)```', readme_content, re.DOTALL)
 
-        # 2. Remove those blocks from the text to prevent regex crossover
+        # 2. Remove those blocks from text to prevent regex crossover
         clean_text = re.sub(r'```.*?```', '', readme_content, flags=re.DOTALL)
 
-        # 3. Now safely extract single inline backticks
+        # 3. Extract single inline backticks
         inlines = re.findall(r'`([^`\n]+)`', clean_text)
 
-        # Combine all extracted code and split it into individual words/tokens
         all_code_string = " ".join(blocks + inlines)
         raw_tokens = all_code_string.split()
 
@@ -78,12 +108,10 @@ class GroundingVerifier:
         hallucinations = []
         total_tokens = 0
 
-        # Ignore standard English, bash syntax, and common Git/contribution boilerplate
         ignore_words = {
             "python", "python3", "pip", "install", "run", "usage", "bash", "sh",
             "cd", "git", "clone", "the", "a", "to", "and", "is", "for", "with",
             "in", "of", "this", "file", "script", "use", "true", "false", "none",
-            # Git & Boilerplate additions
             "checkout", "commit", "push", "pull", "add", "status", "branch", "merge",
             "origin", "main", "master", "feature", "bugfix", "your", "repo", "repository",
             "fork", "ctrl+c", "ctrl", "alt", "shift", "enter"
@@ -94,19 +122,17 @@ class GroundingVerifier:
             "--upgrade", "--no-cache-dir", "-b"
         }
 
-        # Create a lowercase map of valid symbols for case-insensitive fallback matching
         valid_symbols_lower = {s.lower() for s in self.valid_symbols if isinstance(s, str)}
 
         for token in raw_tokens:
-            # Strip surrounding punctuation
             token_clean = token.strip('.,;:\'"()[]{}')
+            token_clean_slash = token_clean.rstrip('/')
             token_lower = token_clean.lower()
+            token_lower_slash = token_clean_slash.lower()
 
-            # Skip explicitly ignored terms and standard flags
             if token_lower in ignore_words or token_lower in standard_cli_flags:
                 continue
 
-            # Skip placeholders and URLs
             if (token_lower.startswith('http://') or
                     token_lower.startswith('https://') or
                     'github.com' in token_lower or
@@ -126,10 +152,12 @@ class GroundingVerifier:
 
             total_tokens += 1
 
-            # Check exact match first, then case-insensitive, then flags
             if (token_clean in self.valid_symbols or
+                    token_clean_slash in self.valid_symbols or
                     token_lower in valid_symbols_lower or
-                    token_clean in self.valid_flags):
+                    token_lower_slash in valid_symbols_lower or
+                    token_clean in self.valid_flags or
+                    token_clean_slash in self.valid_flags):
                 valid_count += 1
             else:
                 hallucinations.append(token_clean)
