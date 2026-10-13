@@ -68,15 +68,25 @@ def execute_tool_without_rollback(tool_name, tool_args, is_split_mode):
 
     elif tool_name == "write_file":
         file_was_modified = True
+        filepath = tool_args.get("filepath", "")
         content = tool_args.get("content", "")
+
         content = re.sub(r"^```[a-zA-Z]*\n", "", content)
         content = re.sub(r"\n```$", "", content)
 
-        tool_result = write_file(tool_args.get("filepath"), content)
+        tool_result = write_file(filepath, content)
 
-        linter_error = native_linter.check_python_syntax_and_imports(tool_args.get("filepath"))
-        if linter_error:
-            tool_result += f"\n\n⚠️ CRITICAL WARNING: The file was written, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
+        # Only lint Python files.
+        if filepath.lower().endswith(".py"):
+            linter_error = native_linter.check_python_syntax_and_imports(filepath)
+
+            if linter_error:
+                tool_result += (
+                    "\n\n⚠️ CRITICAL WARNING: The file was written, "
+                    f"but the linter found an issue:\n{linter_error}\n"
+                    "Please immediately fix this file by adding the missing "
+                    "imports or correcting the syntax."
+                )
 
         if is_split_mode:
             tool_reinforcement = "\n\n(System Rule: Write successful. If your wiring is done, output 'Refactor Phase Complete'.)"
@@ -113,9 +123,10 @@ def execute_tool_without_rollback(tool_name, tool_args, is_split_mode):
         file_was_modified = tool_result.startswith("Successfully")
 
         # Run linter after patching to catch broken indentation or missing imports
-        linter_error = native_linter.check_python_syntax_and_imports(filepath)
-        if linter_error:
-            tool_result += f"\n\n⚠️ CRITICAL WARNING: The file was patched, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
+        if filepath and filepath.lower().endswith(".py"):
+            linter_error = native_linter.check_python_syntax_and_imports(filepath)
+            if linter_error:
+                tool_result += f"\n\n⚠️ CRITICAL WARNING: The file was patched, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."
 
         if is_split_mode:
             tool_reinforcement = "\n\n(System Rule: Patch successful. If your wiring is done, output 'Refactor Phase Complete'.)"
@@ -171,7 +182,7 @@ def execute_tool_without_rollback(tool_name, tool_args, is_split_mode):
                                     expected_end_snippet)
 
         linter_error = None
-        if file_was_modified:
+        if file_was_modified and filepath and filepath.lower().endswith(".py"):
             linter_error = native_linter.check_python_syntax_and_imports(filepath)
             if linter_error:
                 tool_result += f"\n\n⚠️ CRITICAL WARNING: The lines were replaced, but the linter found an issue:\n{linter_error}\nPlease immediately fix this file by adding the missing imports or correcting the syntax."

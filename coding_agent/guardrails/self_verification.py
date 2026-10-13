@@ -7,9 +7,17 @@ from coding_agent.guardrails.tools import (auto_heal_newline_escaping,run_self_v
 
 def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flags,
                                          tool_reinforcement, was_mod, tool_result):
-    if state.self_verify_py_writes and was_mod and tool_name in ["write_file", "append_file",
-                                                                 "patch_file", "replace_lines"]:
-        fp = tool_args.get("filepath", "")
+    fp = tool_args.get("filepath", "")
+    is_python_file = isinstance(fp, str) and fp.lower().endswith(".py")
+
+    if (
+        state.self_verify_py_writes
+        and was_mod
+        and is_python_file
+        and tool_name in [
+            "write_file", "append_file", "patch_file", "replace_lines"
+        ]
+    ):
         linter_error = run_self_verification(fp)
 
         fn = os.path.basename(fp).lower()
