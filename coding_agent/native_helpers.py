@@ -4,6 +4,7 @@ import re
 import platform
 import ast
 import fnmatch
+import sys
 
 
 # --- HELPER: .gitignore Parser ---
@@ -251,8 +252,13 @@ def gather_deep_context(startpath, context_window):
         rel_entry = os.path.relpath(candidate, startpath)
         try:
             result = subprocess.run(
-                f'python "{candidate}" --help',
-                shell=True, capture_output=True, text=True, cwd=startpath, timeout=5
+                [sys.executable, os.path.abspath(candidate), "--help"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                cwd=startpath,
+                timeout=5,
+                check=False,
             )
             if result.returncode == 0 and ("usage:" in result.stdout.lower() or "options:" in result.stdout.lower()):
                 if len(result.stdout) > len(best_help):
@@ -514,8 +520,13 @@ def _extract_cli_help_internal(py_files, startpath):
         rel_entry = os.path.relpath(candidate, startpath)
         try:
             result = subprocess.run(
-                f'python "{candidate}" --help',
-                shell=True, capture_output=True, text=True, cwd=startpath, timeout=5
+                [sys.executable, os.path.abspath(candidate), "--help"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                cwd=startpath,
+                timeout=5,
+                check=False,
             )
             if result.returncode == 0 and ("usage:" in result.stdout.lower() or "options:" in result.stdout.lower()):
                 if len(result.stdout) > len(best_help):
