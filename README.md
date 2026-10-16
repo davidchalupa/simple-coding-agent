@@ -1,7 +1,7 @@
 
 # Simple Coding Agent & Consultant
 
-A local, self-contained AI coding assistant suite designed for privacy-first development. It leverages lightweight Large Language Models (LLMs) to assist with code generation, refactoring, testing, and documentation without requiring an internet connection or cloud infrastructure. The system consists of two distinct tools: the **Simple Coding Agent** (for writing/editing code) and the **Read-Only Coding Consultant** (for analyzing existing codebases).
+A local, self-contained AI coding assistant suite designed for privacy-first development. It leverages lightweight Large Language Models (LLMs) to assist with code generation, refactoring, testing, and documentation without requiring cloud infrastructure or even an internet connection. The system consists of two distinct tools: the **Simple Coding Agent** (for writing/editing code) and the **Read-Only Coding Consultant** (for analyzing existing codebases).
 
 ## 🌟 Project Overview
 
@@ -14,16 +14,39 @@ The project provides a robust environment for local AI-assisted software develop
 ## 🛠️ Installation
 
 ### Prerequisites
-*   Python 3.x installed on your system.
-*   Access to model files (`.gguf` format). The repository includes examples in the `models/` directory, but you can download additional models using the provided downloader scripts or manually place them there.
+*   Python 3.x installed on your system (tested with Python 3.10+)
+*   Access to model files (`*.gguf` format). The repository includes examples in the `models/` directory, but you can download additional models using the provided downloader scripts or manually place them there.
 
 ### Dependencies
 Install required dependencies via pip:
 ```bash
-pip install psutil tqdm pytest prompt_toolkit requests llama_cpp_python
+pip install psutil tqdm pytest requests llama_cpp_python
 ```
 
-*Note: For GPU acceleration with LLaMA C++ Python bindings, ensure your system has compatible drivers and follow specific installation instructions if using `install_llama_cpp_python_gpu.sh`.*
+**Optional (for GPU acceleration with LLaMA C++ Python bindings):**
+*   Follow specific installation instructions if you plan to use `install_llama_cpp_python_gpu.sh` for CUDA support. Ensure your system has compatible drivers and a supported NVIDIA GPU.
+
+### Model Setup
+The application uses a model registry (`model_registry.py`) to manage available models. You have two options:
+
+**Option 1: Use the Interactive Installer (Recommended)**
+```bash
+python install_agent.py
+```
+This curses-based UI will:
+*   Display all available models from `MODEL_REGISTRY`
+*   Show which models are already downloaded in `./models/`
+*   Allow you to select and download specific models with progress tracking
+
+**Option 2: Manual Download via Script**
+Download individual models using the downloader script:
+```bash
+python downloaders/download_gguf.py --model <MODEL_ID>
+```
+Example:
+```bash
+python downloaders/download_gguf.py --model qwen2.5-7b-q5km
+```
 
 ### Model Setup
 The application uses a model registry (`model_registry.py`) to manage available models. Ensure the selected `.gguf` files are present in the `models/` directory with matching filenames defined in the registry (e.g., `Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf`).
