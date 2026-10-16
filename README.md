@@ -63,13 +63,19 @@ The agent operates via an interactive chat loop where you type commands directly
     *   `--model`: Selects the primary coding model (e.g., `qwen2.5-7b`, `mistral-nemo-12b`). Defaults to GPU-enabled models if available.
     *   `--reasoning-model`: Optional secondary model for complex diagnostic tasks or `/diagnose` commands.
 
-2.  **Interactive Commands**:
+2. **Example Usage**:
+    Ask the agent to perform a well-defined coding task:
+    ```bash
+    Write a script into a file called lcs.py that finds a longest common subsequence of two given strings. Make sure it exercises a simple example when run.
+    /send
+    ```
+
+3. **Interactive Commands**:
     Once running, use the following macros:
     *   `/send`: Submit your prompt for processing.
     *   `/requirements [path]`: Generate or update `requirements.txt` based on project dependencies.
-    *   `/readme [--deep] [--deep-ast] [path]`: Create AI-driven documentation. Use `--deep` to include file contents, or `--deep-ast` to traverse function names and detect anomalies like "God Classes".
+    *   `/readme [--deep] [--deep-ast] [path]`: Create AI-driven documentation. Use `--deep` to include file contents, or `--deep-ast` to traverse function names and extract CLI command/flag interfaces via AST analysis.
     *   `/split [--execute] [filepath]`: Refactor monolithic code into smaller components using AST analysis. Add `--execute` to apply changes directly (requires approval).
-    *   `/prepare <macro_file>`: Execute a sequence of inputs from a file, useful for automated workflows or testing the agent's behavior against specific scenarios.
     *   `/clear`: Clears conversation memory and resets the environment.
     *   `/quit`: Terminates the session.
 
@@ -81,14 +87,23 @@ The consultant is ideal for analyzing codebases without risking unintended modif
     python coding_consultant.py --model qwen2.5-7b-q5km [--reasoning-model qwen3.5-9b]
     ```
 
-2.  **Interactive Commands**:
+2. **Example Usage**:
+    Ask questions about your codebase. The consultant will retrieve necessary files, analyze them, and provide answers or generate documentation based on the retrieved context. It strictly forbids write operations to ensure safety during analysis.
+    ```bash
+    Load `src/auth.py` into context.
+    /send
+   
+    How does authentication implemented in this file work?
+    /send
+    ```
+
+3.  **Interactive Commands**:
+    *   `/send`: Submit your prompt for processing.
     *   `/mode code`: Switch to standard coding mode (default).
     *   `/mode think`: Switch to reasoning mode for complex analysis tasks if a `--reasoning-model` is configured.
+    *   `/prepare <macro_file>`: Execute a sequence of inputs from a file, useful for preparing the context for more complex tasks requiring reading more files repetitively.
     *   `/clear`: Clears the read cache and conversation history.
     *   `/quit`: Terminates the session.
-
-3.  **Usage**:
-    Ask questions about your codebase (e.g., "How does authentication work?", "What are the main dependencies?"). The consultant will retrieve necessary files, analyze them, and provide answers or generate documentation based on the retrieved context. It strictly forbids write operations to ensure safety during analysis.
 
 ## ✨ Features & Capabilities
 
@@ -128,10 +143,12 @@ simple-coding-agent/
 │   ├── guardrails/                 # Safety checks and verification
 │   ├── native_linter.py            # Python syntax/import validation
 │   └── split_tools.py              # AST-based refactoring tools
+│   └── ...
 │
 ├── consultant/                     # Consultant-specific modules
 │   ├── tool_parser.py              # Extracts read-only tool requests
 │   └── model_switcher.py           # Manages multi-model switching logic
+│   └── ...
 │
 ├── models/                         # Location for .gguf model files
 └── tests/                          # Test suites for agent and consultant
