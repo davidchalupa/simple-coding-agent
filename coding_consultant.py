@@ -10,7 +10,7 @@ from pathlib import Path
 from common.input_handler import get_user_prompt
 from common.output_handler import stream_agent_response
 from common.guardrail_tools import check_context_guardrail
-from common.context_hygiene_utils import render_token_footer
+from common.context_hygiene_utils import render_token_footer, get_tokens_used
 
 from consultant.system_prompt_builder import build_consultant_system_prompt, build_diagnose_system_prompt
 from consultant.guardrail_tools import sanitize_response, is_pure_load_request
@@ -47,6 +47,10 @@ class ConsultantState:
         self.expect_plain_text = False
         self.answering_violations = 0
         self.last_directive = None
+
+        # stats / telemetry
+        self.last_turn_timestamp = None  # Track when last response started
+        self.turn_start_tokens = 0  # Token count at start of turn
 
 
 parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
@@ -185,6 +189,61 @@ def execute_prepare_macro(state, coder_system_prompt, reasoner_system_prompt, sw
     return True
 
 
+def show_stats(state, switcher):
+    """Display telemetry and system stats"""
+
+    # 1. Token & Context Stats
+    total_tokens = get_tokens_used(state.messages, switcher.llm)
+    context_window = getattr(switcher, 'context_window', None) or 8096
+
+    usage_pct = (total_tokens / context_window * 100) if context_window else "N/A"
+
+    # 2. KV Cache Stats
+    cache_dir = switcher.cache_dir
+    cache_files = []
+    total_cache_size = 0
+
+    if cache_dir and os.path.exists(cache_dir):
+        pattern = f"{state.primary_model_key}_*.bin"
+        existing_cache_files = glob.glob(os.path.join(cache_dir, pattern))
+
+        for cf in existing_cache_files:
+            try:
+                size_mb = os.path.getsize(cf) / (1024 * 1024)
+                cache_files.append(f"{os.path.basename(cf)} ({size_mb:.2f} MB)")
+                total_cache_size += size_mb
+            except Exception as e:
+                print(f"⚠️  Failed to read {cf}: {e}")
+
+    # 3. Generation Speed (if available)
+    gen_speed = "N/A"
+    if hasattr(state, 'last_turn_timestamp') and state.last_turn_timestamp:
+        import time
+        elapsed = time.time() - state.last_turn_timestamp
+        tokens_per_sec = len(state.messages[-1].get("content", "")) / elapsed if elapsed > 0 else 0
+        gen_speed = f"{tokens_per_sec:.2f} tok/s"
+
+    # Output formatted stats
+    print("\n📊 [Stats]")
+    print(f"   Mode: {state.active_mode.upper()}")
+    print(f"   Messages: {len(state.messages)} turns")
+    print(f"   Tokens Used: ~{total_tokens:,}")
+    print(f"   Context Window: {context_window:,} ({usage_pct:.1f}% used)")
+
+    if cache_files:
+        print(f"\n💾 KV Cache Files:")
+        for cf in sorted(cache_files, reverse=True):
+            print(f"      • {cf}")
+        print(f"      Total Size: {total_cache_size:.2f} MB")
+    else:
+        print("\n   💾 No active KV cache files found.")
+
+    if gen_speed != "N/A":
+        print(f"\n⚡ Generation Speed: {gen_speed}")
+
+    return True  # Exit main loop, wait for next command
+
+
 def handle_macros(state, user_input, coder_system_prompt, reasoner_system_prompt, switcher):
     # Check for /prepare command here ===
     if user_input.startswith('/prepare '):
@@ -196,6 +255,11 @@ def handle_macros(state, user_input, coder_system_prompt, reasoner_system_prompt
         if execute_prepare_macro(state, coder_system_prompt, reasoner_system_prompt, switcher, macro_file_path):
             print("\n💬 [Consult] Awaiting your next question.")
             return True
+
+    # === NEW: Handle /stats command ===
+    if user_input == '/stats':
+        show_stats(state, switcher)
+        return True
 
     # --- Handle Mode Switching ---
     mode_match = MODE_RE.match(user_input.strip())
@@ -311,6 +375,13 @@ def main_loop(state,
                 if is_reasoner:
                     stream_kwargs["repeat_penalty"] = 1.15
                     stream_kwargs["enforce_duplicate_payload_check"] = False
+
+                # === NEW: Track generation timing for /stats ===
+                state.last_turn_timestamp = time.time()
+
+                # === NEW: Track tokens for /stats ===
+                state.turn_start_tokens = sum(len(msg.get("content", ""))
+                                              for msg in state.messages)
 
                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages, context_window,
                                                                                     **stream_kwargs)
@@ -442,6 +513,10 @@ def main_loop(state,
             except Exception as e:
                 print(f"\n[Error during generation]: {e}")
                 break
+
+        # === NEW: Reset timestamp for next turn tracking ===
+        state.last_turn_timestamp = None
+        state.turn_start_tokens = 0
 
 
 def main(state):

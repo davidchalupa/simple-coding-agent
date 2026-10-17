@@ -68,7 +68,7 @@ def get_user_prompt() -> str:
             buffer = event.app.current_buffer
             current_line = buffer.document.current_line.strip()
             full_text = buffer.text.strip()
-            instant_commands = ['/quit', '/clear', '/cancel', '/mode code', '/mode think']
+            instant_commands = ['/quit', '/clear', '/cancel', '/mode code', '/mode think', '/stats']
             macro_prefixes = ('/readme', '/requirements', '/split', '/prepare')
 
             if current_line == '/send':
