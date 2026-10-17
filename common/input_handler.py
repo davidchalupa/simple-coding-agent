@@ -69,7 +69,7 @@ def get_user_prompt() -> str:
             current_line = buffer.document.current_line.strip()
             full_text = buffer.text.strip()
             instant_commands = ['/quit', '/clear', '/cancel', '/mode code', '/mode think']
-            macro_prefixes = ('/readme', '/requirements', '/split')
+            macro_prefixes = ('/readme', '/requirements', '/split', '/prepare')
 
             if current_line == '/send':
                 event.current_buffer.validate_and_handle()
