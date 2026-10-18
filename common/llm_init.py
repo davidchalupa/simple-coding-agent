@@ -315,6 +315,48 @@ class LLMInitializer:
             "Unable to initialize model on either GPU or CPU."
         )
 
+    def get_kv_cache_memory_usage(self):
+        """Query in-memory KV cache usage from C API."""
+        try:
+            llama_c = self._get_llama_c_instance()
+
+            # Get total allocated KV cache memory size (in bytes)
+            kv_size_bytes = llama_c.llama_get_kv_cache_memory_size()
+
+            if kv_size_bytes <= 0:
+                return {"allocated_mb": 0, "used_kb": 0}
+
+            # Convert to MB for display
+            allocated_mb = round(kv_size_bytes / (1024 * 1024), 2)
+
+            # Get current KV cache usage in KB
+            kv_used_kb = llama_c.llama_get_kv_cache_current_memory_usage() or 0
+
+            return {
+                "allocated_mb": allocated_mb,
+                "used_kb": kv_used_kb
+            }
+        except Exception as e:
+            print(f"⚠️ [KV Cache] Failed to query memory usage: {e}")
+            return {"allocated_mb": 0, "used_kb": 0}
+
+    def get_total_memory_usage(self):
+        """Get total model + KV cache memory footprint."""
+        try:
+            llama_c = self._get_llama_c_instance()
+
+            # Total context size (KV cache allocated)
+            kv_size_bytes = llama_c.llama_get_kv_cache_memory_size()
+            allocated_mb = round(kv_size_bytes / (1024 * 1024), 2) if kv_size_bytes > 0 else 0
+
+            return {
+                "kv_allocated_mb": allocated_mb,
+                "context_window": self.CONTEXT_WINDOW or 0
+            }
+        except Exception as e:
+            print(f"⚠️ [KV Cache] Failed to query memory usage: {e}")
+            return {"kv_allocated_mb": 0, "context_window": 0}
+
     def __del__(self):
         """
         Best-effort emergency cleanup.

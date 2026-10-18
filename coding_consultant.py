@@ -198,10 +198,10 @@ def show_stats(state, switcher):
 
     usage_pct = (total_tokens / context_window * 100) if context_window else "N/A"
 
-    # 2. KV Cache Stats
+    # === Enhanced KV Cache Stats ===
     cache_dir = switcher.cache_dir
-    cache_files = []
-    total_cache_size = 0
+    disk_cache_files = []
+    total_disk_size_mb = 0
 
     if cache_dir and os.path.exists(cache_dir):
         pattern = f"{state.primary_model_key}_*.bin"
@@ -210,18 +210,15 @@ def show_stats(state, switcher):
         for cf in existing_cache_files:
             try:
                 size_mb = os.path.getsize(cf) / (1024 * 1024)
-                cache_files.append(f"{os.path.basename(cf)} ({size_mb:.2f} MB)")
-                total_cache_size += size_mb
+                disk_cache_files.append(f"{os.path.basename(cf)} ({size_mb:.2f} MB)")
+                total_disk_size_mb += size_mb
             except Exception as e:
-                print(f"⚠️  Failed to read {cf}: {e}")
+                print(f"⚠️ Failed to read {cf}: {e}")
 
-    # 3. Generation Speed (if available)
-    gen_speed = "N/A"
-    if hasattr(state, 'last_turn_timestamp') and state.last_turn_timestamp:
-        import time
-        elapsed = time.time() - state.last_turn_timestamp
-        tokens_per_sec = len(state.messages[-1].get("content", "")) / elapsed if elapsed > 0 else 0
-        gen_speed = f"{tokens_per_sec:.2f} tok/s"
+    # In-memory KV cache usage (for currently loaded model)
+    in_memory_stats = {}
+    if switcher.llm and switcher.initializer:
+        in_memory_stats = switcher.initializer.get_kv_cache_memory_usage()
 
     # Output formatted stats
     print("\n📊 [Stats]")
@@ -230,13 +227,34 @@ def show_stats(state, switcher):
     print(f"   Tokens Used: ~{total_tokens:,}")
     print(f"   Context Window: {context_window:,} ({usage_pct:.1f}% used)")
 
-    if cache_files:
-        print(f"\n💾 KV Cache Files:")
-        for cf in sorted(cache_files, reverse=True):
-            print(f"      • {cf}")
-        print(f"      Total Size: {total_cache_size:.2f} MB")
-    else:
-        print("\n   💾 No active KV cache files found.")
+    # KV Cache Stats - show both disk and in-memory
+    if switcher.llm or disk_cache_files:
+        print("\n💾 [KV Cache]")
+
+        # In-memory usage (current model)
+        if in_memory_stats.get("allocated_mb", 0) > 0:
+            used_kb = in_memory_stats.get("used_kb", 0)
+            allocated_mb = in_memory_stats["allocated_mb"]
+
+            print(f"   • Allocated: {allocated_mb:.2f} MB")
+            if used_kb > 0 and allocated_mb > 0:
+                usage_pct_kv = (used_kb / (1024 * allocated_mb)) * 100
+                print(f"     └─ Used: ~{usage_pct_kv:.1f}% of allocation ({used_kb / 1024:.2f} MB)")
+
+        # Disk cache files (persisted, will be deleted after turn)
+        if disk_cache_files:
+            print("   • Persisted on disk:")
+            for cf in sorted(disk_cache_files, reverse=True):
+                print(f"      └─ {cf}")
+            print(f"     Total Size: {total_disk_size_mb:.2f} MB")
+
+    # 3. Generation Speed (if available)
+    gen_speed = "N/A"
+    if hasattr(state, 'last_turn_timestamp') and state.last_turn_timestamp:
+        import time
+        elapsed = time.time() - state.last_turn_timestamp
+        tokens_per_sec = len(state.messages[-1].get("content", "")) / elapsed if elapsed > 0 else 0
+        gen_speed = f"{tokens_per_sec:.2f} tok/s"
 
     if gen_speed != "N/A":
         print(f"\n⚡ Generation Speed: {gen_speed}")
