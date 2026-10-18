@@ -190,15 +190,31 @@ def execute_prepare_macro(state, coder_system_prompt, reasoner_system_prompt, sw
 
 
 def show_stats(state, switcher):
-    """Display telemetry and system stats"""
-
-    # 1. Token & Context Stats
+    """Display telemetry and context hygiene stats"""
     total_tokens = get_tokens_used(state.messages, switcher.llm)
-    context_window = getattr(switcher, 'context_window', None) or 8096
+    context_window = getattr(switcher, 'context_window', None) or 32768
+    usage_pct = (total_tokens / context_window * 100) if context_window else 0.0
+    headroom = context_window - total_tokens
 
-    usage_pct = (total_tokens / context_window * 100) if context_window else "N/A"
+    # --- Token Breakdown by Category ---
+    system_tokens = 0
+    tool_tokens = 0
+    chat_tokens = 0
 
-    # === Enhanced KV Cache Stats ===
+    for msg in state.messages:
+        role = msg.get("role")
+        content = msg.get("content", "")
+        # Rough token estimate (~4 chars per token) if switcher tokenizer isn't used per-message
+        msg_len = len(content) // 4
+
+        if role == "system":
+            system_tokens += msg_len
+        elif role == "user" and "Tool Execution Results:" in content:
+            tool_tokens += msg_len
+        else:
+            chat_tokens += msg_len
+
+    # --- Disk Cache Check ---
     cache_dir = switcher.cache_dir
     disk_cache_files = []
     total_disk_size_mb = 0
@@ -206,60 +222,39 @@ def show_stats(state, switcher):
     if cache_dir and os.path.exists(cache_dir):
         pattern = f"{state.primary_model_key}_*.bin"
         existing_cache_files = glob.glob(os.path.join(cache_dir, pattern))
-
         for cf in existing_cache_files:
             try:
                 size_mb = os.path.getsize(cf) / (1024 * 1024)
-                disk_cache_files.append(f"{os.path.basename(cf)} ({size_mb:.2f} MB)")
+                disk_cache_files.append((os.path.basename(cf), size_mb))
                 total_disk_size_mb += size_mb
-            except Exception as e:
-                print(f"⚠️ Failed to read {cf}: {e}")
+            except Exception:
+                pass
 
-    # In-memory KV cache usage (for currently loaded model)
-    in_memory_stats = {}
-    if switcher.llm and switcher.initializer:
-        in_memory_stats = switcher.initializer.get_kv_cache_memory_usage()
-
-    # Output formatted stats
-    print("\n📊 [Stats]")
+    print("\n📊 [Stats & Context Hygiene]")
     print(f"   Mode: {state.active_mode.upper()}")
     print(f"   Messages: {len(state.messages)} turns")
-    print(f"   Tokens Used: ~{total_tokens:,}")
-    print(f"   Context Window: {context_window:,} ({usage_pct:.1f}% used)")
+    print(f"   Context Used: ~{total_tokens:,} / {context_window:,} tokens ({usage_pct:.1f}%)")
+    print(f"   Headroom Left: ~{headroom:,} tokens")
 
-    # KV Cache Stats - show both disk and in-memory
-    if switcher.llm or disk_cache_files:
-        print("\n💾 [KV Cache]")
+    print("\n📦 [Context Breakdown]")
+    print(f"   • Loaded Code / Tool Results : ~{tool_tokens:,} tokens ({tool_tokens / max(1, total_tokens) * 100:.1f}%)")
+    print(f"   • Conversation History       : ~{chat_tokens:,} tokens ({chat_tokens / max(1, total_tokens) * 100:.1f}%)")
+    print(f"   • System Instructions        : ~{system_tokens:,} tokens ({system_tokens / max(1, total_tokens) * 100:.1f}%)")
 
-        # In-memory usage (current model)
-        if in_memory_stats.get("allocated_mb", 0) > 0:
-            used_kb = in_memory_stats.get("used_kb", 0)
-            allocated_mb = in_memory_stats["allocated_mb"]
+    if disk_cache_files:
+        latest_cache = sorted(disk_cache_files, reverse=True)[0]
+        print(f"\n💾 [KV Cache Persistence]")
+        print(f"   • Active Disk Cache : {latest_cache[0]} ({latest_cache[1]:.2f} MB)")
+        print(f"   • Total Cache Space : {total_disk_size_mb:.2f} MB")
 
-            print(f"   • Allocated: {allocated_mb:.2f} MB")
-            if used_kb > 0 and allocated_mb > 0:
-                usage_pct_kv = (used_kb / (1024 * allocated_mb)) * 100
-                print(f"     └─ Used: ~{usage_pct_kv:.1f}% of allocation ({used_kb / 1024:.2f} MB)")
-
-        # Disk cache files (persisted, will be deleted after turn)
-        if disk_cache_files:
-            print("   • Persisted on disk:")
-            for cf in sorted(disk_cache_files, reverse=True):
-                print(f"      └─ {cf}")
-            print(f"     Total Size: {total_disk_size_mb:.2f} MB")
-
-    # 3. Generation Speed (if available)
-    gen_speed = "N/A"
+    # Generation Speed
     if hasattr(state, 'last_turn_timestamp') and state.last_turn_timestamp:
-        import time
         elapsed = time.time() - state.last_turn_timestamp
         tokens_per_sec = len(state.messages[-1].get("content", "")) / elapsed if elapsed > 0 else 0
-        gen_speed = f"{tokens_per_sec:.2f} tok/s"
+        if tokens_per_sec > 0:
+            print(f"\n⚡ Last Generation Speed: {tokens_per_sec:.2f} tok/s")
 
-    if gen_speed != "N/A":
-        print(f"\n⚡ Generation Speed: {gen_speed}")
-
-    return True  # Exit main loop, wait for next command
+    return True
 
 
 def handle_macros(state, user_input, coder_system_prompt, reasoner_system_prompt, switcher):
