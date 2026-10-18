@@ -3,22 +3,36 @@ MODEL_REGISTRY = {
         "filename": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
         "display_name": "Qwen 2.5 Coder 7B (Q4_K_M)",
         "chat_format": "chatml",
-        "max_context": 32768,
+        "max_context": 49152,
         "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
     "qwen2.5-7b-q5km": {
         "filename": "Qwen2.5-Coder-7B-Instruct-Q5_K_M.gguf",
         "display_name": "Qwen 2.5 Coder 7B (Q5_K_M)",
         "chat_format": "chatml",
-        "max_context": 32768,
+        "max_context": 49152,
         "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
     "qwen2.5-7b-q6k": {
         "filename": "Qwen2.5-Coder-7B-Instruct-Q6_K.gguf",
         "display_name": "Qwen 2.5 Coder 7B (Q6_K)",
         "chat_format": "chatml",
-        "max_context": 24576,
+        "max_context": 32768,
         "gpu_layers": -1
+    },
+    "qwen3.5-9b": {
+        "filename": "Qwen3.5-9B-Q5_K_M.gguf",
+        "display_name": "Qwen 3.5 9B (Q5_K_M)",
+        "chat_format": "chatml",
+        "max_context": 65536,
+        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
+    },
+    "qwen3-8b": {
+        "filename": "Qwen_Qwen3-VL-8B-Instruct-Q5_K_M.gguf",
+        "display_name": "Qwen 3 8B (Q5_K_M)",
+        "chat_format": "chatml",
+        "max_context": 32768,
+        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
     },
     "qwen2.5-14b": {
         "filename": "Qwen2.5-Coder-14B-Instruct-Q3_K_S.gguf",
@@ -34,30 +48,16 @@ MODEL_REGISTRY = {
         "max_context": 16384,
         "gpu_layers": [-1, 32, 24, 16]
     },
-    "qwen3-8b": {
-        "filename": "Qwen_Qwen3-VL-8B-Instruct-Q5_K_M.gguf",
-        "display_name": "Qwen 3 8B (Q5_K_M)",
-        "chat_format": "chatml",
-        "max_context": 32768,
-        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
-    },
-    "qwen3.5-9b": {
-        "filename": "Qwen3.5-9B-Q5_K_M.gguf",
-        "display_name": "Qwen 3.5 9B (Q5_K_M)",
-        "chat_format": "chatml",
-        "max_context": 32768,
-        "gpu_layers": -1  # -1 attempts to offload entirely to GPU
-    },
-    "mistral-nemo-12b-iq4xs": {
-        "filename": "Mistral-Nemo-Instruct-2407-IQ4_XS.gguf",
-        "display_name": "Mistral Nemo 12B Instruct (IQ4_XS)",
+    "mistral-nemo-12b": {
+        "filename": "Mistral-Nemo-Instruct-2407-Q3_K_S.gguf",
+        "display_name": "Mistral Nemo 12B Instruct (Q3_K_S)",
         "chat_format": "chatml",
         "max_context": 16384,
         "gpu_layers": [-1, 32, 24, 16]  # Full offload if using Q8_0 or Q4_0 KV cache
     },
-    "mistral-nemo-12b": {
-        "filename": "Mistral-Nemo-Instruct-2407-Q3_K_S.gguf",
-        "display_name": "Mistral Nemo 12B Instruct (Q3_K_S)",
+    "mistral-nemo-12b-iq4xs": {
+        "filename": "Mistral-Nemo-Instruct-2407-IQ4_XS.gguf",
+        "display_name": "Mistral Nemo 12B Instruct (IQ4_XS)",
         "chat_format": "chatml",
         "max_context": 16384,
         "gpu_layers": [-1, 32, 24, 16]  # Full offload if using Q8_0 or Q4_0 KV cache

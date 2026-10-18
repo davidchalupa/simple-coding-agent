@@ -133,6 +133,8 @@ class LLMInitializer:
         max_ctx = self.active_config["max_context"]
 
         base_gpu_contexts = [
+            65536,
+            49152,
             32768,
             24576,
             16384,

@@ -126,7 +126,6 @@ def main(state, execution_state):
 
             try:
                 response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages, context_window)
-                render_token_footer(state.messages, llm, context_window)
                 if interrupted:
                     break
 
@@ -467,6 +466,9 @@ def main(state, execution_state):
             except Exception as e:
                 print(f"\n[Error during generation]: {e}")
                 break
+
+            finally:
+                render_token_footer(state.messages, llm, context_window)
 
         # --- Print the per-turn guardrail tally, if tracking is enabled and anything fired ---
         if state.track_guardrail_hits and agent_flags.guardrail_hits:

@@ -400,8 +400,6 @@ def main_loop(state,
                                                                                     **stream_kwargs)
 
 
-                render_token_footer(state.messages, llm, context_window)
-
                 if interrupted:
                     break
 
@@ -526,6 +524,9 @@ def main_loop(state,
             except Exception as e:
                 print(f"\n[Error during generation]: {e}")
                 break
+            finally:
+                render_token_footer(state.messages, llm, context_window)
+
 
         # === NEW: Reset timestamp for next turn tracking ===
         state.last_turn_timestamp = None
