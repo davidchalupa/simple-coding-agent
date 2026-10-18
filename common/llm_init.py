@@ -63,7 +63,7 @@ class LLMInitializer:
             state = self.llm.save_state()
             with open(cache_file_path, 'wb') as f:
                 pickle.dump(state, f)
-            print(f"💾 [KV Cache] Saved state successfully")
+            # print(f"💾 [KV Cache] Saved state successfully")
             return True
         except Exception as e:
             print(f"\n⚠️ KV Cache save failed: {e}")
@@ -75,7 +75,7 @@ class LLMInitializer:
             with open(cache_file_path, 'rb') as f:
                 state = pickle.load(f)
             self.llm.load_state(state)
-            print(f"📂 [KV Cache] Loaded state successfully")
+            # print(f"📂 [KV Cache] Loaded state successfully")
             return True
         except Exception as e:
             print(f"\n⚠️ KV Cache load failed: {e}")

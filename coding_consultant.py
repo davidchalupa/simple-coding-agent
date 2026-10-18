@@ -350,7 +350,8 @@ def main_loop(state,
 
             # Save KV cache to file for next turn
             if switcher.save_current_context(cache_file_path):
-                print(f"\n💾 [KV Cache] Saved context to {cache_file_path}")
+                # print(f"\n💾 [KV Cache] Saved context to {cache_file_path}")
+                pass
 
         while True:
             check_context_guardrail(state.messages, llm, context_window)
@@ -372,13 +373,13 @@ def main_loop(state,
                         existing_cache_files.sort(reverse=True)
                         latest_cache_file = existing_cache_files[0]
 
-                        print(f"\n📂 [KV Cache] Restoring from {os.path.basename(latest_cache_file)}...")
+                        # print(f"\n📂 [KV Cache] Restoring from {os.path.basename(latest_cache_file)}...")
 
                         if switcher.restore_previous_context(latest_cache_file):
                             # Successfully restored - remove old file to avoid duplicates
                             try:
                                 os.remove(latest_cache_file)
-                                print(f"✅ KV cache restored successfully. Old file cleaned up.")
+                                # print(f"✅ KV cache restored successfully. Old file cleaned up.")
                             except Exception as e:
                                 print(f"⚠️  Failed to cleanup old cache after restore: {e}")
                         else:
