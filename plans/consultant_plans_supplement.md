@@ -4,24 +4,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **1. Interactive Step-by-Step Execution Plans (`/plan`) - Detailed Context**
-
-### Implementation Notes:
-- **Trigger Pattern:** User asks "How do I refactor auth_service.py to support OIDC?" or similar high-level questions
-- **Expected Output Format:** Structured checklist with exact file locations and code skeletons (not full implementations)
-- **Human-in-the-Middle Flow:** 
-  1. Model generates plan → User reviews/approves/tweaks → Implementation begins
-  2. Can request step-by-step code generation after approval
-- **Key Benefit:** Reduces hallucinations by breaking complex tasks into verifiable steps before any code is generated
-
-### Technical Considerations:
-- Must work with `read_symbol` and `read_file` tools to gather context
-- Should output in a parseable format (Markdown list or JSON) for potential automation later
-- Plan should include estimated complexity/effort per step if possible
-
----
-
-## **2. Clipboard & Direct Patch Handoff - Detailed Context**
+## **1. Clipboard & Direct Patch Handoff - Detailed Context**
 
 ### Implementation Notes:
 #### `/diff` Command:
@@ -59,7 +42,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **3. Diagnostic Root-Cause Triage (`/diagnose`) - Detailed Context**
+## **2. Diagnostic Root-Cause Triage (`/diagnose`) - Detailed Context**
 
 ### Implementation Notes:
 #### Target Models:
@@ -85,7 +68,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **4. Test Scenario & Edge-Case Matrix (`/test-matrix`) - Detailed Context**
+## **3. Test Scenario & Edge-Case Matrix (`/test-matrix`) - Detailed Context**
 
 ### Implementation Notes:
 #### Target Models:
@@ -109,7 +92,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **5. Key VRAM Optimizations - Detailed Context**
+## **4. Key VRAM Optimizations - Detailed Context**
 
 ### Implementation Notes:
 
@@ -137,7 +120,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **6. Multi-Agent Debate & Local Verification - Detailed Context**
+## **5. Multi-Agent Debate & Local Verification - Detailed Context**
 
 ### Implementation Notes:
 #### Problem Addressed:
@@ -162,7 +145,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **7. Execution Path Logging - Detailed Context**
+## **6. Execution Path Logging - Detailed Context**
 
 ### Implementation Notes:
 #### Problem Addressed:
@@ -192,7 +175,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **8. Codebase Navigation & Context - Detailed Context**
+## **7. Codebase Navigation & Context - Detailed Context**
 
 ### Implementation Notes:
 
@@ -224,7 +207,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **9. Output & Deliverables - Detailed Context**
+## **8. Output & Deliverables - Detailed Context**
 
 ### Implementation Notes:
 
@@ -250,7 +233,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **10. Session & CLI Experience - Detailed Context**
+## **9. Session & CLI Experience - Detailed Context**
 
 ### Implementation Notes:
 
@@ -284,7 +267,7 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **11. Advanced Guardrails & Memory - Detailed Context**
+## **10. Advanced Guardrails & Memory - Detailed Context**
 
 ### Implementation Notes:
 
@@ -303,6 +286,41 @@ This document contains detailed technical context, implementation notes, and arc
 - Can implement progressive compression (summarize more aggressively as session grows)
 - May need user confirmation before discarding original conversation turns
 
+---
+
+## **11. Interactive Step-by-Step Execution Plans (`/plan`) - Deferred (Tier 5)** ⚠️
+
+### Current Status
+- **Deferred from Tier 2 → Tier 5**: Limited value for read-only human-in-the-loop consultant without autonomous execution capability
+- Requires requirements specification before implementation
+
+---
+
+### Critical Design Decisions Needed:
+
+| Decision | Options to Evaluate |
+|----------|---------------------|
+| **Trigger Model** | Mandatory for complex tasks vs. optional on-demand? Auto-detect complexity via prompt analysis? |
+| **Approval Mechanism** | Interactive CLI prompts per step / Batch approval with edits / Integrate into Think Mode reasoning output instead of separate macro |
+| **State Management** | Track approved plans across turns? Resume after interruption? Clear state on `/clear` or mode switch? |
+| **Output Format Integration** | Align with Clipboard/Patch handoff: unified diff (`git diff -u`) / Markdown code blocks for clipboard / Both formats |
+
+---
+
+### Key Requirements (if implemented):
+- Must work with `read_symbol` and `read_file` tools to gather context before plan generation
+- Output must be parseable (Markdown list or JSON) but human-readable for review
+- Plan should include file locations, code skeletons, and estimated complexity per step
+- Human-in-the-Middle flow: Model generates → User approves/tweaks → Step-by-step implementation begins
+
+---
+
+### Recommended Next Steps:
+1. Define use cases where `/plan` adds value over direct Think Mode reasoning
+2. Specify CLI interaction model for plan approval (interactive vs batch)
+3. Determine integration points with Clipboard/Patch handoff features
+4. Consider if this belongs to autonomous agent variant rather than read-only consultant
+5. 
 ---
 
 ## **12. Model Selection & Architecture Notes**
