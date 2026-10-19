@@ -196,7 +196,13 @@ def main_loop(state,
 
         llm, context_window = switcher.load(active_model_key)
 
-        state.messages.append({"role": "user", "content": user_input})
+        msg_content = user_input
+
+        # a nudge for the model not to forget about loading multiple files, if requested
+        if is_pure_load_request(user_input):
+            msg_content += "\n\n[NOTE: If multiple files or targets are requested above, you MUST issue a separate <tool_call> for EACH file or target in this single response.]"
+
+        state.messages.append({"role": "user", "content": msg_content})
 
         real_tool_calls_this_turn = 0
         state.expect_plain_text = False

@@ -1,0 +1,5 @@
+load coding_consultant.py into context.
+/send
+
+load plans/consultant_plans.md and plans/consultant_plans_supplement.md into context.
+/send
