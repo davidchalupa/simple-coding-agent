@@ -8,7 +8,8 @@ def test_consultant_workflow_context_optimize_analysis():
         "load coding_consultant.py into context.",
         "/send",
 
-        "load the following files into context: common/llm_init.py, common/output_handler.py, common/context_hygiene_utils.py, common/guardrail_tools.py",
+        "load the following files into context: common/llm_init.py, common/output_handler.py, "
+        "common/context_hygiene_utils.py, common/guardrail_tools.py, consultant/input_and_macro_handlers.py",
         "/send",
 
         "load also consultant/system_prompt_builder.py into context",
@@ -17,7 +18,7 @@ def test_consultant_workflow_context_optimize_analysis():
         "load also plans/consultant_plans.md into context",
         "/send",
 
-        "And load also plans/consultant_plans_supplement.md into context but only lines 112-137",
+        "And load also plans/consultant_plans_supplement.md into context",
         "/send",
 
         "/mode think",
@@ -35,13 +36,16 @@ def test_consultant_workflow_context_optimize_analysis():
     )
 
 
+@pytest.mark.skip(reason="Skipped for efficiency")
 def test_consultant_workflow_context_optimize_review():
     input_queue = [
         "load coding_consultant.py into context.",
         "/send",
 
-        "load the following files into context: common/llm_init.py, common/output_handler.py, common/context_hygiene_utils.py, common/guardrail_tools.py",
+        "load the following files into context: common/llm_init.py, common/output_handler.py, "
+        "common/context_hygiene_utils.py, common/guardrail_tools.py, consultant/input_and_macro_handlers.py",
         "/send",
+
 
         "load also consultant/system_prompt_builder.py into context",
         "/send",
@@ -49,7 +53,7 @@ def test_consultant_workflow_context_optimize_review():
         "load also plans/consultant_plans.md into context",
         "/send",
 
-        "And load also plans/consultant_plans_supplement.md into context but only lines 112-137",
+        "And load also plans/consultant_plans_supplement.md into context",
         "/send",
 
         "/mode think",

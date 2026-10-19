@@ -9,7 +9,7 @@ def test_consultant_workflow_planning_features():
         "/send",
 
         "load the following files into context: common/llm_init.py, common/output_handler.py, common/context_hygiene_utils.py, "
-        "common/guardrail_tools.py, consultant/model_switcher.py",
+        "common/guardrail_tools.py, consultant/model_switcher.py, consultant/input_and_macro_handlers.py",
         "/send",
 
         "load the following files into context: common/guardrail_tools.py, consultant/guardrail_tools.py",
