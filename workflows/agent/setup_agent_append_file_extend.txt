@@ -1,0 +1,19 @@
+load simple_coding_agent.py into context
+/send
+
+can you find across this entire repo where `append_file` tool is defined? we will do changes in it
+/send
+
+now, based on all the relevant files identified, can you now load all the relevant files into context so that we can analyze how to modify the tool?
+/send
+
+are you missing any more files? i believe coding_agent/system_prompt_builder.py has in mentioned too
+/send
+
+/mode think
+
+good, now I would like to modify `append_file` tool to have a start_line parameter that would specify for the tool where to insert the new code
+or content generated. make the new parameter work like max_lines of read_file, i.e. if start_line==-1 then make append_file insert the code
+at the end of the file. if it contains a particular number, let it allow the agent to insert code also in the middle of a file.
+can you show me how to do it?
+/send
