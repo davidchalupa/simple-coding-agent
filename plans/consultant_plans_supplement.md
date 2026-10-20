@@ -267,24 +267,43 @@ This document contains detailed technical context, implementation notes, and arc
 
 ---
 
-## **10. Advanced Guardrails & Memory - Detailed Context**
+## **10. Advanced Guardrails & Memory - Detailed Context - Deferred (Tier 5)** ⚠️
 
 ### Implementation Notes:
 
-#### Automatic Context Compression:
-- Current state: `check_context_guardrail` is simple truncator
-- Enhancement goal: Upgrade to active summarizer
-- Trigger condition: Context hits 80% of window limit
-- Action: Spawn background thread using fast primary_model
-- Process: Summarize oldest 50% of conversation into single dense context block
-- Benefit: Keeps VRAM usage low while preserving important information
+#### Automatic Context Compression
 
-### Technical Considerations:
+**Decision Rationale:**
+- Originally planned as Tier 1 critical feature, but analysis suggests deferral is prudent until practical need demonstrated
+- Current testing environment at ~58% context usage shows no immediate pressure for compression
+- Key insight from observation: >80% token counts typically result in model hallucinations/logic errors rather than pure context grounding failures — compression alone doesn't solve this fundamental limitation
+
+**Deferred Implementation Strategy:**
+1. **Wait for real-world evidence**: Monitor autonomous coding agent during long sessions with self-corrections to observe when 80%+ actually becomes problematic
+2. **Focus on reliability first**: Prioritize improving model grounding and reducing hallucinations at high token counts before adding compression complexity
+3. **Add as opt-in feature later** only when:
+   - Users report OOM errors or severe degradation specifically tied to context length (not just general quality issues)
+   - Concrete examples exist showing what breaks and why
+   - Autonomous agent demonstrates clear need in practice
+
+**Future Implementation Notes (when activated):**
+- Trigger condition: Context hits 80% of window limit (configurable threshold)
+- Action: User confirmation required before compressing old tool results + chat history into single dense blocks
+- Compression approach: Summarize dialogue turns; for tool results preserve metadata (file paths, function names, line ranges) while compressing actual content to key excerpts (~20-50 lines max per file)
+- Use fast primary model (7B coder) for compression tasks — not reasoning model
+- Add "compressed" flag so model knows it can re-query via tools when needed
+
+**Technical Considerations:**
 - Background threading must not block main inference loop
 - Summary quality depends on model choice (use fastest available for this task)
 - Should maintain summary history to avoid redundant summarization
 - Can implement progressive compression (summarize more aggressively as session grows)
 - May need user confirmation before discarding original conversation turns
+
+**Alternative Optimizations to Prioritize:**
+- Keep system prompts compact and minimal (already implemented)
+- Enforce concise diffs in output via instructions rather than full file reprints
+- Improve model grounding mechanisms to reduce hallucinations at high token counts
 
 ---
 

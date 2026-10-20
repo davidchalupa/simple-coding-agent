@@ -21,7 +21,6 @@ The primary goal is to enhance the consultant's ability to assist with:
 |---------|------|----------|--------|-------------|
 | Context Window Hygiene & Token Budgeting | High | Critical | Low | Enforce strict output limits ("concise diffs") and compact system prompts to prevent OOM errors. Essential for 7B/9B models on limited VRAM. |
 | Aggressive Context Caching (KV Cache) | High | Critical | Medium | Implement `slot_save`/`slot_restore` or file-based caching in llama.cpp. Prevents re-processing the entire codebase context every turn, drastically reducing latency and peak memory usage. |
-| Automatic Context Compression | High | Critical | Medium-High | When conversation approaches 80% of context window limit, use fast primary model to summarize oldest turns into dense summaries OR intelligently drop older conversation segments while preserving key tool results and recent dialogue. Keeps long sessions viable without OOM crashes or hallucinations from truncated context. |
 | Token & VRAM Telemetry (`/stats`) | Low | High | Low | Add a CLI footer showing current token count, KV cache usage, gen speed, and compression status. Vital for debugging why the model is crashing, slowing down, or hitting memory limits during long sessions. |
 
 ---
@@ -59,6 +58,7 @@ The primary goal is to enhance the consultant's ability to assist with:
 | Feature | Impact | Priority | Effort | Description & Requirements |
 |---------|--------|----------|--------|----------------------------|
 | **Interactive Step-by-Step Execution Plans (`/plan`)** | Medium | Low-Medium | High | Generate structured checklists before code generation. Requires: (1) Clear distinction between human-in-the-loop vs autonomous workflows, (2) Approval gate mechanism for multi-file changes, (3) Integration with Clipboard/Patch handoff to enable incremental implementation. **Status**: Deferred — requires requirements specification and use-case analysis before implementation. |
+| Automatic Context Compression | High | Critical | Medium-High | When conversation approaches 80% of context window limit, use fast primary model to summarize oldest turns into dense summaries OR intelligently drop older conversation segments while preserving key tool results and recent dialogue. Keeps long sessions viable without OOM crashes or hallucinations from truncated context. |
 
 ---
 
