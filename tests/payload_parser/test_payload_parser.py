@@ -1,6 +1,7 @@
 import pytest
 
 from coding_agent.payload_parser import parse_robust_tool_call
+from coding_agent.payload_parser import extract_tool_call
 
 
 def test_write_file_normal_json_escapes():
@@ -204,3 +205,37 @@ def test_write_file_double_escaped_newlines_with_single_quoted_python_string_lit
         "print('done')"
     )
 
+def test_extract_write_file_with_trailing_explanation():
+    response = (
+        "Sure, let's write the file.\n\n"
+        "```json\n"
+        '{"name": "write_file", "args": {'
+        '"filepath": "test_trap.py", '
+        '"content": "import unittest\\n"'
+        "}}\n"
+        "```\n\n"
+        "This script defines the requested unit tests.\n"
+    )
+
+    result = extract_tool_call(response)
+
+    assert result is not None
+    assert result["name"] == "write_file"
+    assert result["args"]["filepath"] == "test_trap.py"
+    assert result["args"]["content"] == "import unittest\n"
+
+def test_extract_tool_call_rejects_documentation_example():
+    response = (
+        "For example, you can use the following tool call:\n\n"
+        "```json\n"
+        '{"name": "write_file", "args": {'
+        '"filepath": "example.py", '
+        '"content": "print(1)"'
+        "}}\n"
+        "```\n\n"
+        "This illustrates the expected format.\n"
+    )
+
+    result = extract_tool_call(response)
+
+    assert result is None

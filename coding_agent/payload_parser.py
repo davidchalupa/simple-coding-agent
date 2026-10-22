@@ -187,16 +187,12 @@ def extract_tool_call(response_content: str, allow_patch: bool = True) -> dict |
                     f"executing the FIRST only and ignoring the rest. The model should emit ONE "
                     f"tool call per turn."
                 )
-            # Only apply the trailing-prose check when there's a single candidate — its job is to
-            # tell a real call apart from a documentation snippet, not to choose between two
-            # otherwise-valid real calls. With multiple candidates, always prefer the first.
-            if len(candidates) == 1:
-                candidate, start, end = candidates[0]
-                if not _has_trailing_prose(response_content, end):
-                    tool_json_str, search_start = candidate, end
-            else:
-                candidate, start, end = candidates[0]
-                tool_json_str, search_start = candidate, end
+
+            # A valid fenced JSON tool call may be followed by explanatory prose.
+            # Documentation examples are filtered above by _is_example_context().
+            # Do not reject a candidate solely because text follows its code fence.
+            candidate, start, end = candidates[0]
+            tool_json_str, search_start = candidate, end
 
     if not tool_json_str:
         m = re.search(r'\{\s*"name"\s*:\s*"[^"]+"', response_content, re.DOTALL)
