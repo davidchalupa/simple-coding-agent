@@ -96,10 +96,59 @@ def execute_tool_without_rollback(tool_name, tool_args, is_split_mode):
     elif tool_name == "append_file":
         file_was_modified = True
         content = tool_args.get("content", "")
+        start_line = tool_args.get("start_line")
+
+        # Strip markdown fences if the LLM wraps the payload in them
         content = re.sub(r"^```[a-zA-Z]*\n", "", content)
         content = re.sub(r"\n```$", "", content)
 
-        tool_result = append_file(tool_args.get("filepath"), content)
+        filepath = tool_args.get("filepath", "")
+
+        # Handle start_line parameter: -1 means end of file, otherwise insert after specified line
+        if start_line is not None and start_line != -1:
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    existing_lines = f.readlines()
+
+                # Insert content AFTER the specified line
+                # converted from 1-indexed to 0-indexed internally
+                insert_position = min(start_line - 1, len(existing_lines))
+
+                new_content_lines = [content + '\n'] if content else []
+                updated_lines = existing_lines[:insert_position] + new_content_lines + existing_lines[insert_position:]
+
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.writelines(updated_lines)
+            except FileNotFoundError:
+                tool_result = "Error: File not found."
+            except Exception as e:
+                tool_result = f"Error appending to file: {str(e)}"
+        else:
+            # Default behavior: append at end of file (or create if doesn't exist)
+            try:
+                with open(filepath, 'a', encoding='utf-8') as f:
+                    if content:  # Only write if there's actual content to add
+                        f.write(content + '\n' if not content.endswith('\n') else content)
+            except FileNotFoundError:
+                tool_result = "Error: File not found."
+            except Exception as e:
+                tool_result = f"Error appending to file: {str(e)}"
+
+        # Add linter check for Python files after append
+        if filepath and filepath.lower().endswith(".py"):
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    updated_content = f.read()
+
+                linter_error = native_linter.check_python_syntax_and_imports(filepath)
+                if linter_error:
+                    tool_result += (
+                        "\n\n⚠️ CRITICAL WARNING: The file was appended, "
+                        f"but the linter found an issue:\n{linter_error}\n"
+                        "Please immediately fix this file by correcting the syntax."
+                    )
+            except Exception as e:
+                tool_result += f"\n\n⚠️ Could not verify Python syntax after append: {str(e)}"
 
         if is_split_mode:
             tool_reinforcement = "\n\n(System Rule: Append successful. If your wiring is done, output 'Refactor Phase Complete'.)"
@@ -238,6 +287,9 @@ def execute_tool(tool_name, tool_args, is_split_mode):
         # If the linter returns an error and it's a severe syntax break
         if linter_error and "SyntaxError" in linter_error:
             if original_content is not None:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    source_code = f.read()
+                print("The actual content:\n", source_code)
                 # Rollback to original content
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write(original_content)

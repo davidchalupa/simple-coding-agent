@@ -55,7 +55,7 @@ def validate_invcalc_extended(extended_file_path):
     print("✅ SUCCESS: 'invcalc_extended.py' was successfully updated and differs from 'invcalc.py'.", flush=True)
 
 
-def test_agent_modify_invcalc_append_only():
+def test_agent_modify_invcalc_append_bottom():
     target_file = "test_data/invcalc.py"
     output_file = "test_data/invcalc_extended.py"
 
@@ -93,6 +93,48 @@ def test_agent_modify_invcalc_append_only():
     )
 
 
+def test_agent_modify_invcalc_append_mid_file():
+    target_file = "test_data/invcalc.py"
+    output_file = "test_data/invcalc_extended.py"
+
+    input_queue = [
+        # --- Turn 1: Copy File ---
+        f"Copy '{target_file}' to '{output_file}' using `run_cmd` and `cp` command.",
+        "/send",
+
+        # --- Turn 2: Context & Source Inspection ---
+        f"Now read the full contents of {output_file} to understand its current structure and QTableWidget implementation.",
+        "/send",
+
+        f"Now, use `read_symbol` to identify the line number where the implementation of `CalculatorApp` class in {output_file} starts. "
+        f"Just output that line number, do not do any other action.",
+        "/send",
+
+        # --- Turn 3: Write Subclass & Append to Copy ---
+        "We need to add multi-cell copy support to the table on Ctrl+C so users can paste data into Excel or LibreOffice Calc. "
+        "Here is the architectural blueprint for the new widget:\n"
+        "1. Create a custom subclass `CopyableTableWidget` that inherits from `QTableWidget`.\n"
+        "2. Override `keyPressEvent(self, event)` to intercept Ctrl+C (`QKeySequence.Copy` or `Qt.Key_C` with `Qt.ControlModifier`).\n"
+        "3. Inside `keyPressEvent`, use `self.selectedIndexes()` to compute the minimum and maximum row/column bounding box.\n"
+        "4. Construct a 2D Tab-Separated Values (TSV) string where columns are separated by '\\t' and rows by '\\n'.\n"
+        "5. Copy this TSV string to the system clipboard using `QApplication.clipboard().setText(...)`.\n\n"
+        f"Use the `append_file` tool to append this complete `CopyableTableWidget` class to `{output_file}`. "
+        f"Place `CopyableTableWidget` class JUST BEFORE the `CalculatorApp` class, use the line number identified. \n"
+        f"CRITICAL: You MUST output the `append_file` tool call with the fully escaped code in the JSON `content` field.\n",
+        "/send",
+
+        "/quit"
+    ]
+
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        setup_sandbox_hook=setup_invcalc_sandbox,  # Assuming imported
+        expected_file=output_file,
+        max_calls_limit=30,
+        expected_keywords=["CopyableTableWidget", "selectedIndexes", "clipboard"],
+        custom_file_validator=validate_invcalc_extended
+    )
+
 
 def test_agent_modify_invcalc_append_and_update():
     target_file = "test_data/invcalc.py"
@@ -107,6 +149,10 @@ def test_agent_modify_invcalc_append_and_update():
         f"Now read the full contents of {output_file} to understand its current structure and QTableWidget implementation.",
         "/send",
 
+        f"Now, use `read_symbol` to identify the line number where the implementation of `CalculatorApp` class in {output_file} starts. "
+        f"Just output that line number, do not do any other action.",
+        "/send",
+
         # --- Turn 3: Write Subclass & Append to Copy ---
         "We need to add multi-cell copy support to the table on Ctrl+C so users can paste data into Excel or LibreOffice Calc. "
         "Here is the architectural blueprint for the new widget:\n"
@@ -115,7 +161,8 @@ def test_agent_modify_invcalc_append_and_update():
         "3. Inside `keyPressEvent`, use `self.selectedIndexes()` to compute the minimum and maximum row/column bounding box.\n"
         "4. Construct a 2D Tab-Separated Values (TSV) string where columns are separated by '\\t' and rows by '\\n'.\n"
         "5. Copy this TSV string to the system clipboard using `QApplication.clipboard().setText(...)`.\n\n"
-        f"Use the `append_file` tool to append this complete `CopyableTableWidget` class to the bottom of `{output_file}`.\n"
+        f"Use the `append_file` tool to append this complete `CopyableTableWidget` class to `{output_file}`. "
+        f"Place `CopyableTableWidget` class JUST BEFORE the `CalculatorApp` class, use the line number identified. \n"
         f"CRITICAL: You MUST output the `append_file` tool call with the fully escaped code in the JSON `content` field.\n",
         "/send",
 

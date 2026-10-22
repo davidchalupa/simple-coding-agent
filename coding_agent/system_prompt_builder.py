@@ -37,7 +37,7 @@ def build_system_prompt(allow_patch=False):
     3. `read_file`: {{"filepath": "<str>", "start_line": <int>, "max_lines": <int>}} - Output is prefixed with the real 1-indexed line number of each line (e.g. "  42\\tsome code"). Use these exact numbers, do not count lines yourself. Set "max_lines" to -1 to read the entire file.
     4. `read_symbol`: {{"filepath": "<str>", "symbol_name": "<str>"}} - Extracts a specific function, method, or class from a Python file, returning its code and exact start/end line numbers. Use this only for targeted inspection when you already know the symbol you need.
     5. `write_file`: {{"filepath": "<str>", "content": "<str>"}} - Overwrites or initializes a file completely. ONLY use this when creating a new file or intentionally overwriting content. NEVER use `write_file` to regurgitate content that is identical to what is already on disk. Pass content directly inside JSON (properly escaped: \\n for newlines, \\" for quotes).
-    6. `append_file`: {{"filepath": "<str>", "content": "<str>"}} - Appends code structures. Pass content inside the JSON (properly escaped).
+    6. `append_file`: {{"filepath": "<str>", "content": "<str>", "start_line": <int>}} - Appends code structures. Pass content inside the JSON (properly escaped). Use "start_line" to specify line number after which to insert. Set "start_line" to -1 to append at the end of file.
     {tools_section}
 
     CRITICAL RULES:
