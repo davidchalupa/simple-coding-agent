@@ -46,6 +46,10 @@ class ConsultantState:
         self.answering_violations = 0
         self.last_directive = None
 
+        # === NEW: Reading round safety cap tracking ===
+        self.consecutive_reading_turns = 0
+        self.max_consecutive_reading_turns = 3
+
         # stats / telemetry
         self.last_turn_timestamp = None  # Track when last response started
         self.turn_start_tokens = 0  # Token count at start of turn
@@ -208,6 +212,7 @@ def main_loop(state,
         state.expect_plain_text = False
         state.answering_violations = 0
         state.last_directive = None
+        state.consecutive_reading_turns = 0
 
         is_reasoner = (state.active_mode == "think")
 
@@ -366,17 +371,29 @@ def main_loop(state,
                         state.last_directive = None
                         break
 
-                    directive = (
-                        f'[SYSTEM DIRECTIVE: Context retrieved. Fulfill the user\'s explicit request now: '
-                        f'"{user_input}". Provide the complete solution or code draft directly. DO NOT output any tool calls.]'
-                    )
+                    # === NEW: Increment and check reading turns cap ===
+                    state.consecutive_reading_turns += 1
 
+                    if state.consecutive_reading_turns >= state.max_consecutive_reading_turns:
+                        print(
+                            f"\n🛑 [Consult Guardrail] Maximum consecutive reading turns ({state.max_consecutive_reading_turns}) reached. Forcing answer.")
+                        directive = (
+                            f'[SYSTEM DIRECTIVE: Maximum reading rounds reached. Fulfill the user\'s explicit request now: '
+                            f'"{user_input}". Provide the complete solution or answer directly. DO NOT output any tool calls.]'
+                        )
+                        state.messages.append({
+                            "role": "user",
+                            "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n{directive}"
+                        })
+                        state.expect_plain_text = True
+                        state.last_directive = directive
+                        continue
+
+                    # Append tool results normally and let the loop continue (multi-step reading enabled)
                     state.messages.append({
                         "role": "user",
-                        "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n{directive}"
+                        "content": f"Tool Execution Results:\n{combined_results.strip()}"
                     })
-                    state.expect_plain_text = True
-                    state.last_directive = directive
 
                 if real_tool_calls_this_turn >= state.max_tool_calls_per_turn:
                     state.messages.append({

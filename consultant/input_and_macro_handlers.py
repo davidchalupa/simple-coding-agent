@@ -21,6 +21,7 @@ def handle_user_input(state, user_input, system_prompt, switcher):
         state.expect_plain_text = False
         state.answering_violations = 0
         state.last_directive = None
+        state.consecutive_reading_turns = 0
 
         # === Clear KV cache files for current model(s) ===
         if switcher.cache_dir and os.path.exists(switcher.cache_dir):
