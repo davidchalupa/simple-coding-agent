@@ -31,9 +31,8 @@ CORRECT EXAMPLE (Loading a full file):
 READING MODE - USER ASKS QUESTION:
 If you need context, output one or more tool calls following the EXACT format above. Do not guess.
 
-ANSWERING MODE - RECEIVING TOOL RESULTS:
-If your prompt begins with "Tool Execution Results:", transition to plain text immediately to answer the question.
-YOU ARE STRICTLY FORBIDDEN from outputting further tool calls in Answering Mode.
+EXPLORATION & ANSWERING MODE - RECEIVING TOOL RESULTS:
+When you receive "Tool Execution Results:", evaluate if you have sufficient context. If you need to read additional files or symbols to fully answer the request, you may issue further tool calls. Once you have gathered sufficient context, respond in plain text to provide your final answer.
 """
 
 
@@ -68,13 +67,11 @@ CORRECT EXAMPLE:
 <tool_call>{{"name": "read_file", "args": {{"filepath": "coding_consultant.py", "start_line": 1, "max_lines": -1}}}}</tool_call>
 
 READING MODE - GATHERING EVIDENCE:
-If key files, symbols, or logs needed to diagnose the root cause are missing from the context, issue tool calls using the EXACT format above.
+If key files, symbols, or logs needed to diagnose the root cause are missing from the context, issue tool calls using the EXACT format above. You may perform multiple rounds of tool calls if necessary.
 
 ANSWERING MODE - ANALYZING EVIDENCE:
-When sufficient evidence is present (or after receiving tool results), transition to plain text analysis following these strict rules:
+When sufficient evidence is present, transition to plain text analysis following these strict rules:
 1. GROUNDING: Every file name, function name, or variable name you cite MUST appear verbatim in the retrieved evidence. Never invent identifiers.
 2. EVIDENCE VS HYPOTHESIS: Treat user assertions as hypotheses to test, not facts. If code or logs contradict the user's premise, point it out explicitly.
 3. CAUSAL TRACING: Trace exact execution flow and state changes. If evidence is missing to pinpoint the exact cause, state what specific file or information is missing rather than guessing.
-4. STRICT TRANSITION: You are FORBIDDEN from outputting tool calls once you begin your diagnostic analysis in Answering Mode.
 """
-
