@@ -71,6 +71,7 @@ class ConsultantMainWindow(QMainWindow):
                 .user { background: #2d2d2d; border-left: 4px solid #0e639c; white-space: pre-wrap; }
                 .assistant { background: #252526; border-left: 4px solid #4ec9b0; }
                 .status-badge { color: #888; font-style: italic; font-size: 13px; margin: 10px 0; padding: 4px 8px; }
+                .system-notification { background: #222; border-left: 4px solid #cca700; padding: 8px 12px; border-radius: 4px; margin-bottom: 20px; font-size: 13px; color: #dcdcaa; }
                 pre { position: relative; background: #1e1e1e; padding: 12px; border-radius: 6px; overflow-x: auto; margin-top: 10px; margin-bottom: 10px; }
                 code { font-family: Consolas, monospace; }
                 .copy-btn { position: absolute; top: 8px; right: 8px; background: #333; color: #fff; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
@@ -88,6 +89,16 @@ class ConsultantMainWindow(QMainWindow):
                     const div = document.createElement('div');
                     div.className = 'message user';
                     div.innerText = text;
+                    container.appendChild(div);
+                    window.scrollTo(0, document.body.scrollHeight);
+                }
+
+                function appendSystemMessage(text) {
+                    clearStatus();
+                    const container = document.getElementById('chat-container');
+                    const div = document.createElement('div');
+                    div.className = 'system-notification';
+                    div.innerText = '⚙️ ' + text;
                     container.appendChild(div);
                     window.scrollTo(0, document.body.scrollHeight);
                 }
@@ -181,7 +192,43 @@ class ConsultantMainWindow(QMainWindow):
             return
 
         self.input_box.clear()
-        self.send_button.setEnabled(False)
+
+        # Intercept commands & macros
+        if user_text.startswith("/mode "):
+            mode = user_text[len("/mode "):].strip()
+            if mode in ["think", "code"]:
+                if mode == "think" and self.state.reasoning_model_key is None:
+                    escaped_json = json.dumps("⚠️ Reasoning model is not configured. Cannot switch to think mode.")
+                    self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+                    return
+
+                self.state.active_mode = mode
+                active_model = self.state.reasoning_model_key if mode == "think" else self.state.primary_model_key
+
+                # Immediately load model into VRAM and trigger console logs
+                self.switcher.load(active_model)
+
+                display_name = MODEL_REGISTRY.get(active_model, {}).get("display_name", active_model)
+                self.setWindowTitle(f"Coding Consultant ({display_name}) - [{mode.upper()} MODE]")
+
+                escaped_json = json.dumps(f"Switched active mode to: {mode} ({display_name})")
+                self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+                return
+            else:
+                escaped_json = json.dumps("Unknown mode. Use '/mode code' or '/mode think'.")
+                self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+                return
+
+        if user_text == "/clear":
+            self.state.messages = [{"role": "system", "content": self.coder_prompt}]
+            self.web_view.page().runJavaScript("document.getElementById('chat-container').innerHTML = '';")
+            escaped_json = json.dumps("Chat history cleared.")
+            self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+            return
+
+        if user_text in ["/quit", "/exit"]:
+            self.close()
+            return
 
         escaped_json = json.dumps(user_text)
         self.web_view.page().runJavaScript(f"appendUserMessage({escaped_json});")
