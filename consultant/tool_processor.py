@@ -7,6 +7,26 @@ from common.execute_tool import execute_tool
 KNOWN_TOOLS = frozenset({"list_tree", "search_codebase", "read_file", "read_symbol", "run_cmd"})
 
 
+def _format_tool_args_for_display(state, tool_args):
+    """Convert tool args to display-safe format (relative paths only)."""
+    if not isinstance(tool_args, dict):
+        return str(tool_args)
+
+    formatted = {}
+    for key, value in tool_args.items():
+        if key in ("filepath", "dir_path") and os.path.isabs(value):
+            # Convert absolute to relative path for display only
+            try:
+                rel_value = os.path.relpath(value, state.session_cwd)
+                formatted[key] = rel_value
+            except ValueError:  # Different drive on Windows
+                formatted[key] = value
+        else:
+            formatted[key] = value
+
+    return str(formatted)
+
+
 def process_tool_requests(state, response_content, tool_requests, real_tool_calls_this_turn, compact_cache_hits=False):
     combined_results = ""
 
@@ -62,7 +82,8 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
             break
 
         print(f"\n⚠️  CONSULTANT REQUESTS EXECUTION: {tool_name}")
-        print(f"Arguments: {tool_args}")
+        display_args = _format_tool_args_for_display(state, tool_args)
+        print(f"Arguments (relative): {display_args}")
 
         approval = input("Allow this action? (y/n/edit): ").strip().lower()
 
