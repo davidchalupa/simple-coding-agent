@@ -1,4 +1,5 @@
 import os
+import json
 from PyQt6.QtCore import QThread, pyqtSignal, QEventLoop
 from common.guardrail_tools import check_context_guardrail
 from common.output_handler import stream_agent_response
@@ -34,6 +35,12 @@ class ConsultantWorker(QThread):
     def _gui_approval_callback(self, tool_name, display_args):
         """Blocks worker thread safely using QEventLoop while waiting for GUI response"""
         self._approval_loop = QEventLoop()
+
+        # Ensure display_args is converted to a string for the pyqtSignal(str, str) signature
+        if not isinstance(display_args, str):
+            display_args = json.dumps(display_args, indent=2) if isinstance(display_args, (dict, list)) else str(
+                display_args)
+
         self.approval_requested.emit(tool_name, display_args)
         self._approval_loop.exec()
         return self._approval_result
