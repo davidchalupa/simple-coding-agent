@@ -9,6 +9,7 @@ from common.execute_tool import execute_tool
 from common.guardrail_tools import check_context_guardrail
 from common.output_handler import stream_agent_response
 from common.context_hygiene_utils import render_token_footer
+from common.display_tools import format_tool_args_for_display
 
 from coding_agent.welcome_banner import display_welcome_banner
 from coding_agent import system_prompt_builder_light, system_prompt_builder
@@ -289,6 +290,7 @@ def main(state, execution_state):
                 # --- EXECUTION ---
                 print(f"\n⚠️  AGENT REQUESTS EXECUTION: {tool_name}")
 
+                display_args = format_tool_args_for_display(state, tool_args)
                 target_code = tool_args.get(content_key, '')
 
                 # >>> PRE-FLIGHT LINTER GUARDRAIL (SMART REDACTION) <<<
@@ -309,12 +311,9 @@ def main(state, execution_state):
 
                         print(f"\n❌ [Pre-Flight Guardrail] Blocked malformed code for {filename}.")
 
-                        # --- 1. LEAK-PROOF CIRCUIT BREAKER ---
                         if agent_flags.consecutive_errors >= 3:
                             print("🛑 [Circuit Breaker] Agent stuck. Forcing task abort.")
                             agent_flags.consecutive_errors = 0
-
-                            # Inject a hard stop instruction into the state so the LLM doesn't retry
                             state.messages.append({
                                 "role": "user",
                                 "content": (
@@ -323,29 +322,22 @@ def main(state, execution_state):
                                     "Respond in plain text explaining what part of the logic you are struggling with."
                                 )
                             })
-                            break  # Exits tool loop; the LLM will read the hard stop and reply in text
+                            break
 
-                        # --- 2. RETROACTIVE TOKEN SCRUBBING (Preserving Chain-of-Thought) ---
                         if state.messages and state.messages[-1].get("role") == "assistant":
                             original_content = state.messages[-1].get("content", "")
-
-                            # If the model used a <think> block, preserve it! Only truncate massive code blocks if they are in the text.
                             import re
-                            # Optional: strip giant markdown blocks from the assistant's text to save tokens, but keep the <think>
                             cleaned_content = re.sub(r"```python\n.*?\n```", "[Code block redacted to save tokens]",
                                                      original_content, flags=re.DOTALL)
-
                             state.messages[-1]["content"] = (
                                 f"{cleaned_content}\n\n"
                                 f"[System Note: The tool call payload for {filename} was intercepted by the linter. See error below.]"
                             )
 
-                        # Scrub older user error messages so we don't stack copies of target_code
                         for msg in reversed(state.messages[:-1]):
                             if msg.get("role") == "user" and "Pre-flight linting failed" in msg.get("content", ""):
                                 msg["content"] = f"[Previous Linter Error for {filename} scrubbed to save tokens]"
 
-                        # --- 3. FULL-VISIBILITY ERROR INJECTION ---
                         state.messages.append({
                             "role": "user",
                             "content": (
@@ -355,21 +347,22 @@ def main(state, execution_state):
                                 f"YOUR FULL ATTEMPT:\n"
                                 f"```python\n{target_code}\n```\n\n"
                                 f"ACTION REQUIRED:\n"
-                                f"1. Review the linter error. If it is a NameError or AttributeError, verify you are using the correct function/variable names.\n"
-                                f"2. Match the line numbers in the error to your code above, and apply the fix.\n"
+                                f"1. Review the linter error. If it is a NameError or AttributeError, verify you are using correct function/variable names.\n"
+                                f"2. Match line numbers in the error to your code above, and apply the fix.\n"
                                 f"3. Issue a new `write_file` tool call containing the ENTIRE, corrected file.\n"
-                                f"4. CRITICAL: Do NOT output placeholders like `...`. You must provide the full working file."
+                                f"4. CRITICAL: Do NOT output placeholders like `...`. Provide the full working file."
                             )
                         })
                         continue
 
                 if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"]:
+                    display_filepath = display_args.get('filepath', tool_args.get('filepath'))
                     if tool_name == "patch_file":
                         old_snip = tool_args.get('old_content', '')
                         print(
-                            f"Target: {tool_args.get('filepath')}\n"
+                            f"Target: {display_filepath}\n"
                             f"--- Replacing ---\n{old_snip}\n"
-                            f"--- With ---\n{target_code}\n{'-' * 20}"
+                            f"--- With ---\n{target_code}\n" + "-" * 20
                         )
                     else:
                         line_count = target_code.count('\n') + 1 if target_code else 0
@@ -377,12 +370,14 @@ def main(state, execution_state):
                         if len(target_code) > MAX_PREVIEW_CHARS:
                             shown = target_code[:MAX_PREVIEW_CHARS]
                             print(
-                                f"Target: {tool_args.get('filepath')} ({line_count} lines, showing first {MAX_PREVIEW_CHARS} chars)\n{'-' * 20}\n{shown}\n...\n{'-' * 20}")
+                                f"Target: {display_filepath} ({line_count} lines, showing first {MAX_PREVIEW_CHARS} chars)\n" + "-" * 20 + f"\n{shown}\n...\n" + "-" * 20
+                            )
                         else:
                             print(
-                                f"Target: {tool_args.get('filepath')} ({line_count} lines)\n{'-' * 20}\n{target_code}\n{'-' * 20}")
+                                f"Target: {display_filepath} ({line_count} lines)\n" + "-" * 20 + f"\n{target_code}\n" + "-" * 20
+                            )
                 else:
-                    print(f"Arguments: {tool_args}")
+                    print(f"Arguments: {display_args}")
 
                 approval = input("Allow this action? (y/n/edit): ").strip().lower()
                 tool_result, tool_reinforcement = "", ""

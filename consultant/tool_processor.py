@@ -1,30 +1,11 @@
 import os
 from common.execute_tool import execute_tool
+from common.display_tools import format_tool_args_for_display
 
 # Must match the tool names actually defined in build_consultant_system_prompt().
 # Anything outside this set is a hallucinated tool (e.g. "load_file") and gets
 # rejected the same way forbidden_tools are, rather than reaching execute_tool.
 KNOWN_TOOLS = frozenset({"list_tree", "search_codebase", "read_file", "read_symbol", "run_cmd"})
-
-
-def _format_tool_args_for_display(state, tool_args):
-    """Convert tool args to display-safe format (relative paths only)."""
-    if not isinstance(tool_args, dict):
-        return str(tool_args)
-
-    formatted = {}
-    for key, value in tool_args.items():
-        if key in ("filepath", "dir_path") and os.path.isabs(value):
-            # Convert absolute to relative path for display only
-            try:
-                rel_value = os.path.relpath(value, state.session_cwd)
-                formatted[key] = rel_value
-            except ValueError:  # Different drive on Windows
-                formatted[key] = value
-        else:
-            formatted[key] = value
-
-    return str(formatted)
 
 
 def process_tool_requests(state, response_content, tool_requests, real_tool_calls_this_turn, compact_cache_hits=False, approval_callback=None):
@@ -75,7 +56,7 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
             print("\n💬 [Consult] Tool call budget reached. Skipping remaining queued tools.")
             break
 
-        display_args = _format_tool_args_for_display(state, tool_args)
+        display_args = format_tool_args_for_display(state, tool_args)
 
         # === Handle Approval via GUI callback or CLI input ===
         if approval_callback is not None:
