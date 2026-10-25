@@ -1,7 +1,8 @@
-import json
 import os
 from PyQt6.QtCore import QThread, pyqtSignal, QEventLoop
+import json
 from consultant.engine import run_consultant_turn
+from consultant.input_and_macro_handlers import handle_user_input, handle_macros
 
 
 class ConsultantWorker(QThread):
@@ -70,7 +71,7 @@ class PrepareWorker(QThread):
     chunk_received = pyqtSignal(str)
     status_received = pyqtSignal(str)
     system_message_received = pyqtSignal(str)
-    step_finished = pyqtSignal(str)  # <-- New signal for step finalization
+    step_finished = pyqtSignal(str)
     macro_finished = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
 
@@ -89,21 +90,47 @@ class PrepareWorker(QThread):
 
         try:
             with open(self.macro_file_path, 'r', encoding='utf-8') as f:
-                macro_content = f.read()
-
-            input_queue = [line.strip() for line in macro_content.split('\n')
-                           if line.strip() and not line.strip().startswith('#')]
+                lines = f.readlines()
         except Exception as e:
             self.error_occurred.emit(f"Failed to read macro file: {e}")
             return
+
+        # Parse macro lines into discrete steps (grouping multi-line prompts via /send)
+        steps = []
+        current_chunk = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            if stripped.startswith('/') and stripped != '/send':
+                if current_chunk:
+                    steps.append('\n'.join(current_chunk))
+                    current_chunk = []
+                steps.append(stripped)
+            elif stripped == '/send':
+                if current_chunk:
+                    steps.append('\n'.join(current_chunk))
+                    current_chunk = []
+            else:
+                current_chunk.append(line.rstrip('\n\r'))
+        if current_chunk:
+            steps.append('\n'.join(current_chunk))
 
         original_cwd = os.getcwd()
         self.state.consult_read_cache.clear()
 
         try:
-            total_steps = len(input_queue)
-            for idx, next_input in enumerate(input_queue, 1):
-                self.system_message_received.emit(f"[Prepare Step {idx}/{total_steps}] Executing: {next_input}")
+            total_steps = len(steps)
+            for idx, step_input in enumerate(steps, 1):
+                self.system_message_received.emit(f"[Prepare Step {idx}/{total_steps}] Executing: {step_input}")
+
+                if step_input.startswith('/'):
+                    if handle_user_input(self.state, step_input, self.coder_system_prompt, self.switcher):
+                        self.step_finished.emit("Step Done")
+                        continue
+                    if handle_macros(self.state, step_input, self.coder_system_prompt, self.reasoner_system_prompt, self.switcher):
+                        self.step_finished.emit("Step Done")
+                        continue
 
                 active_model_key = self.state.reasoning_model_key if self.state.active_mode == "think" else self.state.primary_model_key
                 llm, context_window = self.switcher.load(active_model_key)
@@ -115,7 +142,7 @@ class PrepareWorker(QThread):
 
                 run_consultant_turn(
                     state=self.state,
-                    user_input=next_input,
+                    user_input=step_input,
                     llm=llm,
                     context_window=context_window,
                     is_reasoner=is_reasoner,
@@ -125,7 +152,6 @@ class PrepareWorker(QThread):
                     approval_callback=macro_approval_callback
                 )
 
-                # Finalize the assistant message block for this specific step
                 self.step_finished.emit("Step Done")
 
             self.macro_finished.emit("Workflow completed. Context is now ready for interactive use.")
