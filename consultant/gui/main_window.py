@@ -40,6 +40,10 @@ class ConsultantMainWindow(QMainWindow):
         main_layout = QVBoxLayout(central_widget)
 
         self.web_view = QWebEngineView()
+        # Enable JavaScript clipboard access
+        self.web_view.settings().setAttribute(
+            self.web_view.settings().WebAttribute.JavascriptCanAccessClipboard, True
+        )
         self.load_chat_html()
         main_layout.addWidget(self.web_view, stretch=4)
 
@@ -292,8 +296,25 @@ class ConsultantMainWindow(QMainWindow):
                             btn.innerText = 'Copy';
                             btn.onclick = () => {
                                 const textToCopy = code ? code.innerText : pre.innerText;
-                                navigator.clipboard.writeText(textToCopy);
-                                btn.innerText = 'Copied!';
+                                
+                                // Robust clipboard fallback for QWebEngineView
+                                const textarea = document.createElement('textarea');
+                                textarea.value = textToCopy;
+                                textarea.style.position = 'fixed';  // Prevent scrolling to bottom
+                                textarea.style.opacity = '0';
+                                document.body.appendChild(textarea);
+                                textarea.focus();
+                                textarea.select();
+                                
+                                try {
+                                    const successful = document.execCommand('copy');
+                                    btn.innerText = successful ? 'Copied!' : 'Failed';
+                                } catch (err) {
+                                    console.error('Failed to copy text: ', err);
+                                    btn.innerText = 'Error';
+                                }
+                                
+                                document.body.removeChild(textarea);
                                 setTimeout(() => btn.innerText = 'Copy', 2000);
                             };
                             header.appendChild(btn);

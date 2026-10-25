@@ -1,21 +1,17 @@
 import os
-import json
 import glob
 import time
 
 from pathlib import Path
 
 from common.input_handler import get_user_prompt
-from common.output_handler import stream_agent_response
-from common.guardrail_tools import check_context_guardrail
-from common.context_hygiene_utils import render_token_footer, get_tokens_used
+from common.context_hygiene_utils import render_token_footer
 
 from consultant.system_prompt_builder import build_consultant_system_prompt, build_diagnose_system_prompt
 from consultant.input_and_macro_handlers import handle_user_input, handle_macros
-from consultant.guardrail_tools import sanitize_response, is_pure_load_request
 from consultant.model_switcher import ModelSwitcher
-from consultant.tool_parser import extract_tool_requests
-from consultant.tool_processor import process_tool_requests
+
+from consultant.engine import run_consultant_turn
 
 from cli import parse_cli_arguments
 from model_registry import MODEL_REGISTRY
@@ -167,10 +163,7 @@ def handle_prepare_macro(state, user_input, coder_system_prompt, reasoner_system
     return False
 
 
-def main_loop(state,
-              coder_system_prompt,
-              reasoner_system_prompt,
-              switcher):
+def main_loop(state, coder_system_prompt, reasoner_system_prompt, switcher):
     while True:
         user_input = get_user_prompt()
 
@@ -199,224 +192,41 @@ def main_loop(state,
                     print(f"⚠️  Failed to delete stale cache {cf}: {e}")
 
         llm, context_window = switcher.load(active_model_key)
-
-        msg_content = user_input
-
-        # a nudge for the model not to forget about loading multiple files, if requested
-        if is_pure_load_request(user_input):
-            msg_content += "\n\n[NOTE: If multiple files or targets are requested above, you MUST issue a separate <tool_call> for EACH file or target in this single response.]"
-
-        state.messages.append({"role": "user", "content": msg_content})
-
-        real_tool_calls_this_turn = 0
-        state.expect_plain_text = False
-        state.answering_violations = 0
-        state.last_directive = None
-        state.consecutive_reading_turns = 0
-
         is_reasoner = (state.active_mode == "think")
 
-        # === Save KV cache after first successful turn with this model ===
+        # === Save KV cache after model load/start ===
         if state.cache_persistence_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
             cache_filename = f"{active_model_key}_{int(time.time())}.bin"
             cache_file_path = os.path.join(switcher.cache_dir, cache_filename)
+            switcher.save_current_context(cache_file_path)
 
-            # Save KV cache to file for next turn
-            if switcher.save_current_context(cache_file_path):
-                # print(f"\n💾 [KV Cache] Saved context to {cache_file_path}")
-                pass
+        # === Restore KV cache if available ===
+        if state.cache_persistence_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
+            pattern = f"{active_model_key}_*.bin"
+            existing_cache_files = glob.glob(os.path.join(switcher.cache_dir, pattern))
+            if len(existing_cache_files) > 0:
+                existing_cache_files.sort(reverse=True)
+                latest_cache_file = existing_cache_files[0]
+                if switcher.restore_previous_context(latest_cache_file):
+                    try:
+                        os.remove(latest_cache_file)
+                    except Exception as e:
+                        print(f"⚠️  Failed to cleanup old cache after restore: {e}")
 
-        while True:
-            check_context_guardrail(state.messages, llm, context_window)
-
-            try:
-                # Dynamically assign streaming parameters based on active mode
-                stream_kwargs = {
-                    "agent_label": "\n🧠 [Agent]: " if is_reasoner else "\n💻 [Agent]: "
-                }
-
-                # === NEW: Restore KV cache before processing each turn (except first) ===
-                if state.cache_persistence_enabled and switcher.cache_dir and os.path.exists(switcher.cache_dir):
-                    pattern = f"{active_model_key}_*.bin"
-                    existing_cache_files = glob.glob(os.path.join(switcher.cache_dir, pattern))
-
-                    # Restore most recent cache file for this model
-                    if len(existing_cache_files) > 0:
-                        # Sort by filename (timestamp embedded), take latest
-                        existing_cache_files.sort(reverse=True)
-                        latest_cache_file = existing_cache_files[0]
-
-                        # print(f"\n📂 [KV Cache] Restoring from {os.path.basename(latest_cache_file)}...")
-
-                        if switcher.restore_previous_context(latest_cache_file):
-                            # Successfully restored - remove old file to avoid duplicates
-                            try:
-                                os.remove(latest_cache_file)
-                                # print(f"✅ KV cache restored successfully. Old file cleaned up.")
-                            except Exception as e:
-                                print(f"⚠️  Failed to cleanup old cache after restore: {e}")
-                        else:
-                            # Restore failed - log but continue normally (degrade gracefully)
-                            print(f"\n❌ [KV Cache] Restore failed. Loading fresh context.")
-
-                if is_reasoner:
-                    stream_kwargs["repeat_penalty"] = 1.15
-                    stream_kwargs["enforce_duplicate_payload_check"] = False
-
-                # === NEW: Track generation timing for /stats ===
-                state.last_turn_timestamp = time.time()
-
-                # === NEW: Track tokens for /stats ===
-                state.turn_start_tokens = sum(len(msg.get("content", ""))
-                                              for msg in state.messages)
-
-                response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages, context_window,
-                                                                                    **stream_kwargs)
-
-
-                if interrupted:
-                    break
-
-                response_content = sanitize_response(response_content)
-                state.messages.append({"role": "assistant", "content": response_content})
-
-                tool_requests = extract_tool_requests(response_content)
-
-                if tool_requests:
-                    if state.expect_plain_text:
-                        state.answering_violations += 1
-                        print(f"\n🛑 [Consult Guardrail] Model attempted tool call(s) in Answering Mode "
-                              f"(violation {state.answering_violations}/{MAX_ANSWERING_VIOLATIONS_PER_TURN}). Blocked.")
-
-                        if state.answering_violations >= MAX_ANSWERING_VIOLATIONS_PER_TURN:
-                            reminder = state.last_directive or (
-                                "Using only the context already retrieved above, answer the original "
-                                "question directly."
-                            )
-                            state.messages.append({
-                                "role": "user",
-                                "content": (f"{reminder}\n\nDo not call any tools, and do not mention tools, "
-                                            "rules, states, or these instructions — just give the answer "
-                                            "as you would to a colleague.")
-                            })
-                            print("\n💬 [Consult] Forcing plain-text answer after repeated Answering Mode violations.")
-                            check_context_guardrail(state.messages, llm, context_window)
-                            try:
-                                response_content, is_truncated, interrupted = stream_agent_response(llm, state.messages, context_window,
-                                                                                                    **stream_kwargs)
-                                render_token_footer(state.messages, llm, context_window)
-                                if not interrupted:
-                                    response_content = sanitize_response(response_content)
-                                    if extract_tool_requests(response_content):
-                                        fallback = (
-                                            "I wasn't able to produce a plain-text answer after "
-                                            "repeated attempts. The context should already be loaded "
-                                            "above — try rephrasing your request."
-                                        )
-                                        print(f"\n[Agent]: {fallback}")
-                                        state.messages.append({"role": "assistant", "content": fallback})
-                                        print("\n⚠️  [Consult] Forced attempt still tried to call a tool "
-                                              "— used a fallback message instead.")
-                                    else:
-                                        state.messages.append({"role": "assistant", "content": response_content})
-                                        print("\n💬 [Consult] Agent finished (forced). Awaiting your next question.")
-                            except Exception as e:
-                                print(f"\n[Error during forced generation]: {e}")
-                            break
-
-                        reminder = state.last_directive or (
-                            "The context you need is already available above in this conversation — "
-                            "no need to fetch it again. Please answer the original question now."
-                        )
-                        state.messages.append({
-                            "role": "user",
-                            "content": (f"{reminder}\n\nNo need to fetch anything again — everything needed "
-                                        "is already above. Answer now, directly and in plain text, without "
-                                        "mentioning tools, rules, or these instructions.")
-                        })
-                        continue
-
-                    perfect_history = "\n".join(
-                        [f'<tool_call>{json.dumps(req)}</tool_call>' for req in tool_requests])
-                    state.messages[-1] = {"role": "assistant", "content": perfect_history}
-                else:
-                    print("\n💬 [Consult] Agent finished. Awaiting your next question.")
-                    break
-
-                combined_results, real_tool_calls_this_turn = process_tool_requests(state, response_content,
-                                                                                    tool_requests,
-                                                                                    real_tool_calls_this_turn)
-
-                if combined_results.strip():
-                    if is_pure_load_request(user_input):
-                        # Inject the actual tool results (file contents) into the context first
-                        state.messages.append({
-                            "role": "user",
-                            "content": f"Tool Execution Results:\n{combined_results.strip()}"
-                        })
-
-                        summary = summarize_loaded_targets(tool_requests)
-                        synthesized_answer = (
-                            f"Context loaded — {summary} is now available. "
-                            f"What would you like to do next?"
-                        )
-                        print(f"\n[Agent]: {synthesized_answer}")
-
-                        # Then append the agent's acknowledgment
-                        state.messages.append({"role": "assistant", "content": synthesized_answer})
-
-                        print("\n💬 [Consult] Agent finished. Awaiting your next question.")
-                        state.expect_plain_text = False
-                        state.answering_violations = 0
-                        state.last_directive = None
-                        break
-
-                    # === NEW: Increment and check reading turns cap ===
-                    state.consecutive_reading_turns += 1
-
-                    if state.consecutive_reading_turns >= state.max_consecutive_reading_turns:
-                        print(
-                            f"\n🛑 [Consult Guardrail] Maximum consecutive reading turns ({state.max_consecutive_reading_turns}) reached. Forcing answer.")
-                        directive = (
-                            f'[SYSTEM DIRECTIVE: Maximum reading rounds reached. Fulfill the user\'s explicit request now: '
-                            f'"{user_input}". Provide the complete solution or answer directly. DO NOT output any tool calls.]'
-                        )
-                        state.messages.append({
-                            "role": "user",
-                            "content": f"Tool Execution Results:\n{combined_results.strip()}\n\n{directive}"
-                        })
-                        state.expect_plain_text = True
-                        state.last_directive = directive
-                        continue
-
-                    # Append tool results normally and let the loop continue (multi-step reading enabled)
-                    state.messages.append({
-                        "role": "user",
-                        "content": f"Tool Execution Results:\n{combined_results.strip()}"
-                    })
-
-                if real_tool_calls_this_turn >= state.max_tool_calls_per_turn:
-                    state.messages.append({
-                        "role": "user",
-                        "content": "Tool limit reached for this turn. Provide your final answer in plain text based on the retrieved context."
-                    })
-                    state.expect_plain_text = True
-
-            except json.JSONDecodeError as e:
-                print(f"\n❌ [Parser Interceptor] Halted syntax loop.")
-                state.messages.append({"role": "user",
-                                       "content": f"Formatting Failure: {e}\nRemember to use raw unescaped content, no extra wrapping."})
-                break
-            except Exception as e:
-                print(f"\n[Error during generation]: {e}")
-                break
-            finally:
-                render_token_footer(state.messages, llm, context_window)
-
-
-        # === NEW: Reset timestamp for next turn tracking ===
-        state.last_turn_timestamp = None
-        state.turn_start_tokens = 0
+        try:
+            run_consultant_turn(
+                state=state,
+                user_input=user_input,
+                llm=llm,
+                context_window=context_window,
+                is_reasoner=is_reasoner
+            )
+        except Exception as e:
+            print(f"\n[Error during generation]: {e}")
+        finally:
+            render_token_footer(state.messages, llm, context_window)
+            state.last_turn_timestamp = None
+            state.turn_start_tokens = 0
 
 
 def main(state):
