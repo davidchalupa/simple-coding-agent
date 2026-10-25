@@ -127,7 +127,7 @@ class ConsultantMainWindow(QMainWindow):
         <html>
         <head>
             <meta charset="utf-8">
-            <script src="https://cdn.jsdelivr.net/npm/marked/marked.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
             <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css">
             <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
             <style>
@@ -137,10 +137,52 @@ class ConsultantMainWindow(QMainWindow):
                 .assistant { background: #252526; border-left: 4px solid #4ec9b0; }
                 .status-badge { color: #888; font-style: italic; font-size: 13px; margin: 10px 0; padding: 4px 8px; }
                 .system-notification { background: #222; border-left: 4px solid #cca700; padding: 8px 12px; border-radius: 4px; margin-bottom: 20px; font-size: 13px; color: #dcdcaa; }
-                pre { position: relative; background: #1e1e1e; padding: 12px; border-radius: 6px; overflow-x: auto; margin-top: 10px; margin-bottom: 10px; }
+
+                /* Code Snippet Wrapper & Header Styling */
+                .code-wrapper {
+                    background: #1e1e1e;
+                    border: 1px solid #333;
+                    border-radius: 6px;
+                    margin: 14px 0;
+                    overflow: hidden;
+                }
+                .code-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    background: #2d2d2d;
+                    padding: 6px 12px;
+                    font-size: 11px;
+                    color: #858585;
+                    border-bottom: 1px solid #333;
+                }
+                .code-lang {
+                    font-weight: bold;
+                    letter-spacing: 0.5px;
+                }
+                .copy-btn {
+                    background: #3c3c3c;
+                    color: #cccccc;
+                    border: none;
+                    padding: 3px 8px;
+                    border-radius: 3px;
+                    cursor: pointer;
+                    font-size: 11px;
+                    transition: background 0.2s, color 0.2s;
+                }
+                .copy-btn:hover {
+                    background: #0e639c;
+                    color: #ffffff;
+                }
+                pre {
+                    margin: 0 !important;
+                    background: #1e1e1e !important;
+                    padding: 12px !important;
+                    border-radius: 0 !important;
+                    border: none !important;
+                    overflow-x: auto;
+                }
                 code { font-family: Consolas, monospace; }
-                .copy-btn { position: absolute; top: 8px; right: 8px; background: #333; color: #fff; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-                .copy-btn:hover { background: #555; }
             </style>
         </head>
         <body>
@@ -148,7 +190,7 @@ class ConsultantMainWindow(QMainWindow):
             <script>
                 let currentAssistantDiv = null;
 
-                function appendUserMessage(text) {
+                window.appendUserMessage = function(text) {
                     clearStatus();
                     const container = document.getElementById('chat-container');
                     const div = document.createElement('div');
@@ -156,9 +198,9 @@ class ConsultantMainWindow(QMainWindow):
                     div.innerText = text;
                     container.appendChild(div);
                     window.scrollTo(0, document.body.scrollHeight);
-                }
+                };
 
-                function appendSystemMessage(text) {
+                window.appendSystemMessage = function(text) {
                     clearStatus();
                     const container = document.getElementById('chat-container');
                     const div = document.createElement('div');
@@ -166,9 +208,9 @@ class ConsultantMainWindow(QMainWindow):
                     div.innerText = '⚙️ ' + text;
                     container.appendChild(div);
                     window.scrollTo(0, document.body.scrollHeight);
-                }
+                };
 
-                function showStatus(text) {
+                window.showStatus = function(text) {
                     const container = document.getElementById('chat-container');
                     let statusDiv = document.getElementById('active-status');
                     if (!statusDiv) {
@@ -179,7 +221,7 @@ class ConsultantMainWindow(QMainWindow):
                     }
                     statusDiv.innerText = text;
                     window.scrollTo(0, document.body.scrollHeight);
-                }
+                };
 
                 function clearStatus() {
                     const statusDiv = document.getElementById('active-status');
@@ -194,15 +236,15 @@ class ConsultantMainWindow(QMainWindow):
                     container.appendChild(currentAssistantDiv);
                 }
 
-                function appendChunk(text) {
+                window.appendChunk = function(text) {
                     if (!currentAssistantDiv) {
                         startAssistantMessage();
                     }
                     currentAssistantDiv.innerText += text;
                     window.scrollTo(0, document.body.scrollHeight);
-                }
+                };
 
-                function finalizeAssistantMessage(fullText) {
+                window.finalizeAssistantMessage = function(fullText) {
                     clearStatus();
                     if (!currentAssistantDiv) {
                         startAssistantMessage();
@@ -211,40 +253,67 @@ class ConsultantMainWindow(QMainWindow):
                     let cleanedText = fullText.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
                     if (!cleanedText) cleanedText = fullText;
 
+                    // 1. Native Markdown parsing via marked.js
                     let parsedHtml = '';
                     if (typeof marked !== 'undefined') {
                         parsedHtml = marked.parse(cleanedText);
                     } else {
-                        parsedHtml = '<pre style="white-space: pre-wrap;">' + 
-                                     cleanedText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + 
-                                     '</pre>';
+                        parsedHtml = '<pre><code>' + cleanedText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</code></pre>';
                     }
 
                     currentAssistantDiv.innerHTML = parsedHtml;
 
+                    // 2. Post-process DOM to wrap <pre> blocks with IDE header and Copy button
+                    currentAssistantDiv.querySelectorAll('pre').forEach(pre => {
+                        if (!pre.parentNode.classList.contains('code-wrapper')) {
+                            const code = pre.querySelector('code');
+                            let lang = 'CODE';
+                            if (code) {
+                                const classList = Array.from(code.classList);
+                                const langClass = classList.find(c => c.startsWith('language-'));
+                                if (langClass) {
+                                    lang = langClass.replace('language-', '').toUpperCase();
+                                }
+                            }
+
+                            const wrapper = document.createElement('div');
+                            wrapper.className = 'code-wrapper';
+
+                            const header = document.createElement('div');
+                            header.className = 'code-header';
+
+                            const titleSpan = document.createElement('span');
+                            titleSpan.className = 'code-lang';
+                            titleSpan.innerText = lang;
+                            header.appendChild(titleSpan);
+
+                            const btn = document.createElement('button');
+                            btn.className = 'copy-btn';
+                            btn.innerText = 'Copy';
+                            btn.onclick = () => {
+                                const textToCopy = code ? code.innerText : pre.innerText;
+                                navigator.clipboard.writeText(textToCopy);
+                                btn.innerText = 'Copied!';
+                                setTimeout(() => btn.innerText = 'Copy', 2000);
+                            };
+                            header.appendChild(btn);
+
+                            pre.parentNode.insertBefore(wrapper, pre);
+                            wrapper.appendChild(header);
+                            wrapper.appendChild(pre);
+                        }
+                    });
+
+                    // 3. Apply syntax highlighting
                     if (typeof hljs !== 'undefined') {
                         currentAssistantDiv.querySelectorAll('pre code').forEach((block) => {
                             hljs.highlightElement(block);
                         });
                     }
 
-                    currentAssistantDiv.querySelectorAll('pre').forEach(pre => {
-                        if (!pre.querySelector('.copy-btn')) {
-                            const btn = document.createElement('button');
-                            btn.className = 'copy-btn';
-                            btn.innerText = 'Copy';
-                            btn.onclick = () => {
-                                const codeBlock = pre.querySelector('code') || pre;
-                                navigator.clipboard.writeText(codeBlock.innerText);
-                                btn.innerText = 'Copied!';
-                                setTimeout(() => btn.innerText = 'Copy', 2000);
-                            };
-                            pre.appendChild(btn);
-                        }
-                    });
                     currentAssistantDiv = null;
                     window.scrollTo(0, document.body.scrollHeight);
-                }
+                };
             </script>
         </body>
         </html>
