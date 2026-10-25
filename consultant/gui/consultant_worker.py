@@ -1,5 +1,6 @@
-from PyQt6.QtCore import QThread, pyqtSignal, QEventLoop
 import json
+import os
+from PyQt6.QtCore import QThread, pyqtSignal, QEventLoop
 from consultant.engine import run_consultant_turn
 
 
@@ -63,3 +64,74 @@ class ConsultantWorker(QThread):
             import traceback
             traceback.print_exc()
             self.error_occurred.emit(str(e))
+
+
+class PrepareWorker(QThread):
+    chunk_received = pyqtSignal(str)
+    status_received = pyqtSignal(str)
+    system_message_received = pyqtSignal(str)
+    step_finished = pyqtSignal(str)  # <-- New signal for step finalization
+    macro_finished = pyqtSignal(str)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, state, macro_file_path, coder_system_prompt, reasoner_system_prompt, switcher):
+        super().__init__()
+        self.state = state
+        self.macro_file_path = macro_file_path
+        self.coder_system_prompt = coder_system_prompt
+        self.reasoner_system_prompt = reasoner_system_prompt
+        self.switcher = switcher
+
+    def run(self):
+        if not os.path.exists(self.macro_file_path):
+            self.error_occurred.emit(f"Prepare file not found: {self.macro_file_path}")
+            return
+
+        try:
+            with open(self.macro_file_path, 'r', encoding='utf-8') as f:
+                macro_content = f.read()
+
+            input_queue = [line.strip() for line in macro_content.split('\n')
+                           if line.strip() and not line.strip().startswith('#')]
+        except Exception as e:
+            self.error_occurred.emit(f"Failed to read macro file: {e}")
+            return
+
+        original_cwd = os.getcwd()
+        self.state.consult_read_cache.clear()
+
+        try:
+            total_steps = len(input_queue)
+            for idx, next_input in enumerate(input_queue, 1):
+                self.system_message_received.emit(f"[Prepare Step {idx}/{total_steps}] Executing: {next_input}")
+
+                active_model_key = self.state.reasoning_model_key if self.state.active_mode == "think" else self.state.primary_model_key
+                llm, context_window = self.switcher.load(active_model_key)
+                is_reasoner = (self.state.active_mode == "think")
+
+                def macro_approval_callback(tool_name, display_args):
+                    self.system_message_received.emit(f"[Prepare] Auto-approving tool call: {tool_name}")
+                    return ('y', '')
+
+                run_consultant_turn(
+                    state=self.state,
+                    user_input=next_input,
+                    llm=llm,
+                    context_window=context_window,
+                    is_reasoner=is_reasoner,
+                    on_chunk=self.chunk_received.emit,
+                    on_status=self.status_received.emit,
+                    on_message=lambda msg: self.status_received.emit(msg.strip()),
+                    approval_callback=macro_approval_callback
+                )
+
+                # Finalize the assistant message block for this specific step
+                self.step_finished.emit("Step Done")
+
+            self.macro_finished.emit("Workflow completed. Context is now ready for interactive use.")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.error_occurred.emit(str(e))
+        finally:
+            os.chdir(original_cwd)

@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
-from consultant.gui.consultant_worker import ConsultantWorker
+from consultant.gui.consultant_worker import ConsultantWorker, PrepareWorker
 from consultant.system_prompt_builder import build_consultant_system_prompt, build_diagnose_system_prompt
 from model_registry import MODEL_REGISTRY
 from consultant.model_switcher import ModelSwitcher
@@ -401,6 +401,26 @@ class ConsultantMainWindow(QMainWindow):
                 self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
                 return
 
+        if user_text.startswith("/prepare "):
+            macro_file_path = user_text[len("/prepare "):].strip()
+            self.input_box.clear()
+
+            escaped_json = json.dumps(user_text)
+            self.web_view.page().runJavaScript(f"appendUserMessage({escaped_json});")
+
+            self.send_button.setEnabled(False)
+            self.worker = PrepareWorker(
+                self.state, macro_file_path, self.coder_prompt, self.reasoner_prompt, self.switcher
+            )
+            self.worker.chunk_received.connect(self.on_chunk)
+            self.worker.status_received.connect(self.on_status)
+            self.worker.system_message_received.connect(self.on_system_message)
+            self.worker.step_finished.connect(self.on_turn_finished)
+            self.worker.macro_finished.connect(self.on_macro_finished)
+            self.worker.error_occurred.connect(self.on_error)
+            self.worker.start()
+            return
+
         if user_text == "/clear":
             self.state.messages = [{"role": "system", "content": self.coder_prompt}]
             self.web_view.page().runJavaScript("document.getElementById('chat-container').innerHTML = '';")
@@ -445,3 +465,12 @@ class ConsultantMainWindow(QMainWindow):
         error_text = f"⚠️ Error: {err_msg}"
         escaped_json = json.dumps(error_text)
         self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
+
+    def on_system_message(self, msg):
+        escaped_json = json.dumps(msg)
+        self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+
+    def on_macro_finished(self, msg):
+        self.send_button.setEnabled(True)
+        escaped_json = json.dumps(msg)
+        self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
