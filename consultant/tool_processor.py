@@ -27,7 +27,7 @@ def _format_tool_args_for_display(state, tool_args):
     return str(formatted)
 
 
-def process_tool_requests(state, response_content, tool_requests, real_tool_calls_this_turn, compact_cache_hits=False):
+def process_tool_requests(state, response_content, tool_requests, real_tool_calls_this_turn, compact_cache_hits=False, approval_callback=None):
     combined_results = ""
 
     for tool_request in tool_requests:
@@ -63,17 +63,11 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
             )
             if cache_key in state.consult_read_cache:
                 if compact_cache_hits:
-                    print(f"📎 [Consult Cache] {tool_name} on {tool_args.get('filepath')} already available "
-                          f"— not re-pasting into the gather transcript (it's already in context and will be "
-                          f"included in the analysis automatically).")
                     combined_results += (
                         f"Note: {tool_name} result for {tool_args.get('filepath')} is already available from "
-                        f"earlier in this session and will automatically be included in the analysis. "
-                        f"No need to request it again.\n\n"
+                        f"earlier in this session and will automatically be included in the analysis.\n\n"
                     )
                 else:
-                    print(
-                        f"📎 [Consult Cache] Reusing cached result for {tool_name} on {tool_args.get('filepath')}.")
                     combined_results += f"Result for {tool_name}:\n[Note: Content already loaded in context history]\n{state.consult_read_cache[cache_key]}\n\n"
                 continue
 
@@ -81,23 +75,21 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
             print("\n💬 [Consult] Tool call budget reached. Skipping remaining queued tools.")
             break
 
-        print(f"\n⚠️  CONSULTANT REQUESTS EXECUTION: {tool_name}")
         display_args = _format_tool_args_for_display(state, tool_args)
-        print(f"Arguments (relative): {display_args}")
 
-        approval = input("Allow this action? (y/n/edit): ").strip().lower()
+        # === Handle Approval via GUI callback or CLI input ===
+        if approval_callback is not None:
+            approval, feedback = approval_callback(tool_name, display_args)
+        else:
+            print(f"\n⚠️  CONSULTANT REQUESTS EXECUTION: {tool_name}")
+            print(f"Arguments (relative): {display_args}")
+            approval = input("Allow this action? (y/n/edit): ").strip().lower()
+            feedback = input('Feedback: ') if approval == 'edit' else ''
 
         if approval == 'y':
             tool_result, tool_reinforcement, _ = execute_tool(tool_name, tool_args, is_split_mode=False)
             real_tool_calls_this_turn += 1
-            print(f"⚙️  Tool execution finished.")
-
-            MAX_RESULT_PREVIEW = 400
-            if len(tool_result) > MAX_RESULT_PREVIEW:
-                print(
-                    f"   Result ({len(tool_result)} chars, truncated): {tool_result[:MAX_RESULT_PREVIEW]}...")
-            else:
-                print(f"   Result: {tool_result}")
+            print(f"⚙️  Tool execution finished.") if approval_callback is None else None
 
             if cache_key:
                 state.consult_read_cache[cache_key] = tool_result
@@ -105,10 +97,8 @@ def process_tool_requests(state, response_content, tool_requests, real_tool_call
             combined_results += f"Result for {tool_name}:\n{tool_result}{tool_reinforcement}\n\n"
 
         elif approval == 'edit':
-            feedback = input('Feedback: ')
             combined_results += f"User denied {tool_name}. Feedback: {feedback}\n\n"
         else:
-            print("🛑 Action blocked.")
             combined_results += f"User denied permission for {tool_name}.\n\n"
 
     return combined_results, real_tool_calls_this_turn

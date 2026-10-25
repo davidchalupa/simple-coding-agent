@@ -1,5 +1,5 @@
 import os
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, QEventLoop
 from common.guardrail_tools import check_context_guardrail
 from common.output_handler import stream_agent_response
 from consultant.tool_parser import extract_tool_requests
@@ -12,6 +12,7 @@ class ConsultantWorker(QThread):
     status_received = pyqtSignal(str)
     turn_finished = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    approval_requested = pyqtSignal(str, str)  # tool_name, display_args
 
     def __init__(self, state, user_input, coder_system_prompt, reasoner_system_prompt, switcher):
         super().__init__()
@@ -20,6 +21,22 @@ class ConsultantWorker(QThread):
         self.coder_system_prompt = coder_system_prompt
         self.reasoner_system_prompt = reasoner_system_prompt
         self.switcher = switcher
+
+        self._approval_result = ('n', '')
+        self._approval_loop = None
+
+    def provide_approval(self, action, feedback=""):
+        """Called by main window when user clicks Allow/Deny/Submit Feedback"""
+        self._approval_result = (action, feedback)
+        if self._approval_loop:
+            self._approval_loop.quit()
+
+    def _gui_approval_callback(self, tool_name, display_args):
+        """Blocks worker thread safely using QEventLoop while waiting for GUI response"""
+        self._approval_loop = QEventLoop()
+        self.approval_requested.emit(tool_name, display_args)
+        self._approval_loop.exec()
+        return self._approval_result
 
     def run(self):
         try:
@@ -48,7 +65,6 @@ class ConsultantWorker(QThread):
                 def step_on_chunk(text):
                     step_content.append(text)
                     current_text = "".join(step_content)
-                    # Only stream to chat if we are NOT currently outputting a tool call block
                     if "<tool_call>" not in current_text:
                         self.chunk_received.emit(text)
 
@@ -77,12 +93,13 @@ class ConsultantWorker(QThread):
                 if not tool_requests:
                     break
 
-                # Emit a clean status indicator instead of raw tool JSON
                 summary = self.summarize_targets(tool_requests)
                 self.status_received.emit(f"🔍 Reading {summary}...")
 
+                # Pass the GUI approval callback into process_tool_requests
                 combined_results, real_tool_calls_this_turn = process_tool_requests(
-                    state, response_content, tool_requests, real_tool_calls_this_turn
+                    state, response_content, tool_requests, real_tool_calls_this_turn,
+                    approval_callback=self._gui_approval_callback
                 )
 
                 if combined_results.strip():

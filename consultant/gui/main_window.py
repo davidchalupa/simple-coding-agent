@@ -2,7 +2,7 @@ import json
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout,
-    QHBoxLayout, QTextEdit, QPushButton
+    QHBoxLayout, QTextEdit, QPushButton, QLabel, QLineEdit
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
@@ -42,6 +42,71 @@ class ConsultantMainWindow(QMainWindow):
         self.web_view = QWebEngineView()
         self.load_chat_html()
         main_layout.addWidget(self.web_view, stretch=4)
+
+        # === Approval Banner Widget (Initially Hidden) ===
+        self.approval_widget = QWidget()
+        self.approval_widget.setStyleSheet("""
+            QWidget {
+                background: #252526;
+                border: 1px solid #cca700;
+                border-radius: 6px;
+                padding: 8px;
+                color: #dcdcaa;
+            }
+            QPushButton {
+                background: #333;
+                color: #fff;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background: #444; }
+            QPushButton#allow-btn { background: #0e639c; }
+            QPushButton#allow-btn:hover { background: #1177bb; }
+            QPushButton#deny-btn { background: #a1260d; }
+            QPushButton#deny-btn:hover { background: #c53013; }
+        """)
+        approval_layout = QVBoxLayout(self.approval_widget)
+
+        self.approval_label = QLabel()
+        self.approval_label.setWordWrap(True)
+        approval_layout.addWidget(self.approval_label)
+
+        approval_btn_layout = QHBoxLayout()
+        self.allow_btn = QPushButton("Allow (y)")
+        self.allow_btn.setObjectName("allow-btn")
+        self.allow_btn.clicked.connect(self.on_approval_allow)
+
+        self.deny_btn = QPushButton("Deny (n)")
+        self.deny_btn.setObjectName("deny-btn")
+        self.deny_btn.clicked.connect(self.on_approval_deny)
+
+        self.edit_btn = QPushButton("Edit / Feedback")
+        self.edit_btn.clicked.connect(self.on_approval_edit_mode)
+
+        approval_btn_layout.addWidget(self.allow_btn)
+        approval_btn_layout.addWidget(self.deny_btn)
+        approval_btn_layout.addWidget(self.edit_btn)
+        approval_btn_layout.addStretch()
+        approval_layout.addLayout(approval_btn_layout)
+
+        # Feedback input row (hidden by default)
+        self.feedback_container = QWidget()
+        feedback_layout = QHBoxLayout(self.feedback_container)
+        feedback_layout.setContentsMargins(0, 5, 0, 0)
+        self.feedback_input = QLineEdit()
+        self.feedback_input.setPlaceholderText("Enter feedback for denial / edit...")
+        self.submit_feedback_btn = QPushButton("Submit Feedback")
+        self.submit_feedback_btn.clicked.connect(self.on_approval_submit_feedback)
+        feedback_layout.addWidget(self.feedback_input)
+        feedback_layout.addWidget(self.submit_feedback_btn)
+        self.feedback_container.hide()
+        approval_layout.addWidget(self.feedback_container)
+
+        self.approval_widget.hide()
+        main_layout.addWidget(self.approval_widget)
+        # ===============================================
 
         input_layout = QHBoxLayout()
         self.input_box = QTextEdit()
@@ -186,6 +251,36 @@ class ConsultantMainWindow(QMainWindow):
         """
         self.web_view.setHtml(html_content, QUrl("http://localhost"))
 
+    # === Approval Banner Handlers ===
+    def show_approval_panel(self, tool_name, display_args):
+        self.approval_label.setText(
+            f"<b>⚠️ Consultant requests execution of:</b> <code>{tool_name}</code><br/><b>Arguments:</b> {display_args}")
+        self.feedback_container.hide()
+        self.feedback_input.clear()
+        self.approval_widget.show()
+
+    def on_approval_allow(self):
+        self.approval_widget.hide()
+        if self.worker:
+            self.worker.provide_approval('y')
+
+    def on_approval_deny(self):
+        self.approval_widget.hide()
+        if self.worker:
+            self.worker.provide_approval('n')
+
+    def on_approval_edit_mode(self):
+        self.feedback_container.show()
+        self.feedback_input.setFocus()
+
+    def on_approval_submit_feedback(self):
+        feedback = self.feedback_input.text().strip()
+        self.approval_widget.hide()
+        if self.worker:
+            self.worker.provide_approval('edit', feedback)
+
+    # ===============================
+
     def handle_send(self):
         user_text = self.input_box.toPlainText().strip()
         if not user_text or (self.worker and self.worker.isRunning()):
@@ -193,7 +288,6 @@ class ConsultantMainWindow(QMainWindow):
 
         self.input_box.clear()
 
-        # Intercept commands & macros
         if user_text.startswith("/mode "):
             mode = user_text[len("/mode "):].strip()
             if mode in ["think", "code"]:
@@ -204,8 +298,6 @@ class ConsultantMainWindow(QMainWindow):
 
                 self.state.active_mode = mode
                 active_model = self.state.reasoning_model_key if mode == "think" else self.state.primary_model_key
-
-                # Immediately load model into VRAM and trigger console logs
                 self.switcher.load(active_model)
 
                 display_name = MODEL_REGISTRY.get(active_model, {}).get("display_name", active_model)
@@ -240,6 +332,7 @@ class ConsultantMainWindow(QMainWindow):
         self.worker.status_received.connect(self.on_status)
         self.worker.turn_finished.connect(self.on_turn_finished)
         self.worker.error_occurred.connect(self.on_error)
+        self.worker.approval_requested.connect(self.show_approval_panel)
         self.worker.start()
 
     def on_chunk(self, text):
