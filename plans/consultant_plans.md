@@ -28,8 +28,8 @@ The primary goal is to enhance the consultant's ability to assist with:
 ### **Tier 2: Workflow Enhancements (Human-in-the-Loop)** 🔄 *High Value*
 
 | Feature | Impact | Priority | Effort | Description |
-|---------|---------|----------|--------|-------------|
-| Clipboard & Direct Patch Handoff | High | High | Low | Implement `/copy` (system clipboard) and `git diff -u` output formats. Allows you to apply changes instantly without copying/pasting from the chat window. |
+|---------|---------|-------|--------|-------------|
+| Clipboard & Direct Patch Handoff | High | Done | Low | GUI provides one-click copy buttons on all code blocks. CLI fallback: `/copy` macro (deprecated). |
 | Diagnostic Root-Cause Triage (`/diagnose`) | Medium | Medium | Medium | Optimize stack trace analysis by feeding only relevant file paths/symbols rather than whole files. Focuses the 9B model on logic bugs, not syntax. |
 
 ---
