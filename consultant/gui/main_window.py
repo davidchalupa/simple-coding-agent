@@ -1,8 +1,8 @@
 import json
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QUrl, QTimer
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout,
-    QHBoxLayout, QTextEdit, QPushButton, QLabel, QLineEdit
+    QHBoxLayout, QTextEdit, QPushButton, QLabel, QLineEdit, QApplication
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
@@ -26,6 +26,12 @@ class ConsultantMainWindow(QMainWindow):
 
         self.state.messages = [{"role": "system", "content": self.coder_prompt}]
         self.worker = None
+
+        # Track processing state for cursor feedback
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)  # Start with wait cursor if needed
+        self._is_processing = False
+
+        self._in_prepare_mode = False
 
         self.init_ui()
 
@@ -124,6 +130,18 @@ class ConsultantMainWindow(QMainWindow):
         input_layout.addWidget(self.input_box)
         input_layout.addWidget(self.send_button)
         main_layout.addLayout(input_layout, stretch=1)
+
+    def enterEvent(self, event):
+        """Change cursor when entering the main window"""
+        if not self._is_processing and (not self.worker or self.send_button.isEnabled()):
+            QApplication.restoreOverrideCursor()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        """Restore cursor when leaving the main window"""
+        if self._is_processing:
+            QApplication.restoreOverrideCursor()
+        super().leaveEvent(event)
 
     def load_chat_html(self):
         html_content = """
@@ -376,6 +394,12 @@ class ConsultantMainWindow(QMainWindow):
         if not user_text or (self.worker and self.worker.isRunning()):
             return
 
+        # Track processing start for cursor feedback
+        self._is_processing = True
+
+        # ALWAYS show wait cursor when starting processing
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)  # <-- Remove the if condition!
+
         self.input_box.clear()
 
         if user_text.startswith("/mode "):
@@ -395,6 +419,11 @@ class ConsultantMainWindow(QMainWindow):
 
                 escaped_json = json.dumps(f"Switched active mode to: {mode} ({display_name})")
                 self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+
+                # Restore normal cursor and enable send button for mode switch
+                QApplication.restoreOverrideCursor()
+                self.send_button.setEnabled(True)
+
                 return
             else:
                 escaped_json = json.dumps("Unknown mode. Use '/mode code' or '/mode think'.")
@@ -409,6 +438,11 @@ class ConsultantMainWindow(QMainWindow):
             self.web_view.page().runJavaScript(f"appendUserMessage({escaped_json});")
 
             self.send_button.setEnabled(False)
+
+            # Track processing for cursor feedback
+            self._is_processing = True
+            self._in_prepare_mode = True
+
             self.worker = PrepareWorker(
                 self.state, macro_file_path, self.coder_prompt, self.reasoner_prompt, self.switcher
             )
@@ -432,6 +466,9 @@ class ConsultantMainWindow(QMainWindow):
             self.close()
             return
 
+        # Track processing for cursor feedback
+        self._is_processing = True
+
         escaped_json = json.dumps(user_text)
         self.web_view.page().runJavaScript(f"appendUserMessage({escaped_json});")
 
@@ -454,13 +491,23 @@ class ConsultantMainWindow(QMainWindow):
         self.web_view.page().runJavaScript(f"showStatus({escaped_json});")
 
     def on_turn_finished(self, _):
+        # Restore normal cursor when done processing (skip during prepare macro)
+        if self._is_processing and not self._in_prepare_mode:
+            QApplication.restoreOverrideCursor()
+
+        QTimer.singleShot(10, lambda: self.send_button.setEnabled(True))
         self.send_button.setEnabled(True)
+
         if self.state.messages and self.state.messages[-1]["role"] == "assistant":
             last_msg = self.state.messages[-1]["content"]
             escaped_json = json.dumps(last_msg)
             self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
 
     def on_error(self, err_msg):
+        # Skip cursor restoration during prepare macro (let it finish naturally)
+        if self._is_processing and not self._in_prepare_mode:
+            QApplication.restoreOverrideCursor()
+
         self.send_button.setEnabled(True)
         error_text = f"⚠️ Error: {err_msg}"
         escaped_json = json.dumps(error_text)
@@ -471,6 +518,16 @@ class ConsultantMainWindow(QMainWindow):
         self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
 
     def on_macro_finished(self, msg):
+        # Restore normal cursor when done processing
+        if self._is_processing:
+            QApplication.restoreOverrideCursor()
+
         self.send_button.setEnabled(True)
+
+        # reset the flag for /prepare macro (harmless in case of other macro)
+        self._in_prepare_mode = False
+        # processing also needs to be reset
+        self._is_processing = False
+
         escaped_json = json.dumps(msg)
         self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")

@@ -1,0 +1,8 @@
+load coding_consultant.py into context
+/send
+
+load consultant/engine.py into context
+/send
+
+load consultant/gui/consultant_worker.py and consultant/gui/main_window.py into context
+/send
