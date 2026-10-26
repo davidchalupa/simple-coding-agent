@@ -64,8 +64,10 @@ def stream_agent_response(llm, messages,
             print(text, end="", flush=True)
 
     try:
-        if max_output_tokens is None or max_output_tokens > 4096:
-            max_output_tokens = min(3584, context_window - get_tokens_used(messages, llm))
+        max_output_tokens_by_context_window = int(0.2 * context_window)
+
+        if max_output_tokens is None or max_output_tokens > max_output_tokens_by_context_window:
+            max_output_tokens = min(max_output_tokens_by_context_window, context_window - get_tokens_used(messages, llm))
 
         for chunk in llm.create_chat_completion(
                 messages=messages,
