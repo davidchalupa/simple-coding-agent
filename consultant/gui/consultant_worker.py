@@ -3,6 +3,7 @@ from PyQt6.QtCore import QThread, pyqtSignal, QEventLoop
 import json
 from consultant.engine import run_consultant_turn
 from consultant.input_and_macro_handlers import handle_user_input, handle_macros
+from common.context_hygiene_utils import get_token_footer
 
 
 class ConsultantWorker(QThread):
@@ -60,14 +61,7 @@ class ConsultantWorker(QThread):
                 approval_callback=self._gui_approval_callback
             )
 
-            from common.context_hygiene_utils import get_tokens_used
-
-            tokens_used = get_tokens_used(state.messages, llm)
-            usage_pct = tokens_used / context_window * 100
-            status_color = "🟢" if usage_pct < 80 else "🟡" if usage_pct < 95 else "🔴"
-            footer_text = f"\n{status_color} Tokens used: {tokens_used}/{context_window} ({usage_pct:.1f}%)"
-
-            # ADD THIS LINE HERE:
+            footer_text = get_token_footer(state.messages, llm, context_window)
             self.token_footer_received.emit(footer_text)
 
             self.turn_finished.emit("Done")
@@ -168,11 +162,7 @@ class PrepareWorker(QThread):
 
             self.macro_finished.emit("Workflow completed. Context is now ready for interactive use.")
 
-            from common.context_hygiene_utils import get_tokens_used
-            tokens_used = get_tokens_used(self.state.messages, llm) or 0
-            usage_pct = (tokens_used / context_window * 100) if context_window > 0 else 0
-            status_color = "🟢" if usage_pct < 80 else "🟡" if usage_pct < 95 else "🔴"
-            footer_text = f"\n{status_color} Tokens used: {tokens_used}/{context_window} ({usage_pct:.1f}%)"
+            footer_text = get_token_footer(self.state.messages, llm, context_window)
             self.token_footer_received.emit(footer_text)
         except Exception as e:
             import traceback

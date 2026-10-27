@@ -10,6 +10,7 @@ from consultant.gui.consultant_worker import ConsultantWorker, PrepareWorker
 from consultant.system_prompt_builder import build_consultant_system_prompt, build_diagnose_system_prompt
 from model_registry import MODEL_REGISTRY
 from consultant.model_switcher import ModelSwitcher
+from common.context_hygiene_utils import get_token_footer
 
 
 class ConsultantMainWindow(QMainWindow):
@@ -436,12 +437,8 @@ class ConsultantMainWindow(QMainWindow):
                 escaped_json = json.dumps(f"Switched active mode to: {mode} ({display_name})")
                 self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
 
-                # emit token info for mode switch too:
-                from common.context_hygiene_utils import get_tokens_used
-                tokens_used = get_tokens_used(self.state.messages, llm) or 0
-                usage_pct = (tokens_used / context_window * 100) if context_window > 0 else 0
-                status_color = "🟢" if usage_pct < 80 else "🟡" if usage_pct < 95 else "🔴"
-                footer_text = f"\n{status_color} Tokens used: {tokens_used}/{context_window} ({usage_pct:.1f}%)"
+                # emit token info for mode switch
+                footer_text = get_token_footer(self.state.messages, llm, context_window)
 
                 # Create a temporary worker just to emit the footer (or call directly)
                 self.token_status_label.setText(footer_text.strip())  # Direct update for mode switch
