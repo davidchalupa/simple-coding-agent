@@ -11,6 +11,7 @@ class ConsultantWorker(QThread):
     turn_finished = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
     approval_requested = pyqtSignal(str, str)  # tool_name, display_args
+    token_footer_received = pyqtSignal(str)
 
     def __init__(self, state, user_input, coder_system_prompt, reasoner_system_prompt, switcher):
         super().__init__()
@@ -59,6 +60,16 @@ class ConsultantWorker(QThread):
                 approval_callback=self._gui_approval_callback
             )
 
+            from common.context_hygiene_utils import get_tokens_used
+
+            tokens_used = get_tokens_used(state.messages, llm)
+            usage_pct = tokens_used / context_window * 100
+            status_color = "🟢" if usage_pct < 80 else "🟡" if usage_pct < 95 else "🔴"
+            footer_text = f"\n{status_color} Tokens used: {tokens_used}/{context_window} ({usage_pct:.1f}%)"
+
+            # ADD THIS LINE HERE:
+            self.token_footer_received.emit(footer_text)
+
             self.turn_finished.emit("Done")
 
         except Exception as e:
@@ -74,6 +85,7 @@ class PrepareWorker(QThread):
     step_finished = pyqtSignal(str)
     macro_finished = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    token_footer_received = pyqtSignal(str)
 
     def __init__(self, state, macro_file_path, coder_system_prompt, reasoner_system_prompt, switcher):
         super().__init__()
@@ -155,6 +167,13 @@ class PrepareWorker(QThread):
                 self.step_finished.emit("Step Done")
 
             self.macro_finished.emit("Workflow completed. Context is now ready for interactive use.")
+
+            from common.context_hygiene_utils import get_tokens_used
+            tokens_used = get_tokens_used(self.state.messages, llm) or 0
+            usage_pct = (tokens_used / context_window * 100) if context_window > 0 else 0
+            status_color = "🟢" if usage_pct < 80 else "🟡" if usage_pct < 95 else "🔴"
+            footer_text = f"\n{status_color} Tokens used: {tokens_used}/{context_window} ({usage_pct:.1f}%)"
+            self.token_footer_received.emit(footer_text)
         except Exception as e:
             import traceback
             traceback.print_exc()

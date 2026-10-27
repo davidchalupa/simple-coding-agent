@@ -129,6 +129,22 @@ class ConsultantMainWindow(QMainWindow):
 
         input_layout.addWidget(self.input_box)
         input_layout.addWidget(self.send_button)
+
+        # Create status label at bottom of window
+        self.token_status_label = QLabel()
+        self.token_status_label.setStyleSheet("""
+            QLabel {
+                background: #1e1e1e;
+                color: #888;
+                font-style: italic;
+                font-size: 13px;
+                padding: 6px 12px;
+                border-top: 1px solid #333;
+            }
+        """)
+        self.token_status_label.setText("Ready")
+        main_layout.addWidget(self.token_status_label)
+
         main_layout.addLayout(input_layout, stretch=1)
 
     def enterEvent(self, event):
@@ -412,13 +428,23 @@ class ConsultantMainWindow(QMainWindow):
 
                 self.state.active_mode = mode
                 active_model = self.state.reasoning_model_key if mode == "think" else self.state.primary_model_key
-                self.switcher.load(active_model)
+                llm, context_window = self.switcher.load(active_model)
 
                 display_name = MODEL_REGISTRY.get(active_model, {}).get("display_name", active_model)
                 self.setWindowTitle(f"Coding Consultant ({display_name}) - [{mode.upper()} MODE]")
 
                 escaped_json = json.dumps(f"Switched active mode to: {mode} ({display_name})")
                 self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+
+                # emit token info for mode switch too:
+                from common.context_hygiene_utils import get_tokens_used
+                tokens_used = get_tokens_used(self.state.messages, llm) or 0
+                usage_pct = (tokens_used / context_window * 100) if context_window > 0 else 0
+                status_color = "🟢" if usage_pct < 80 else "🟡" if usage_pct < 95 else "🔴"
+                footer_text = f"\n{status_color} Tokens used: {tokens_used}/{context_window} ({usage_pct:.1f}%)"
+
+                # Create a temporary worker just to emit the footer (or call directly)
+                self.token_status_label.setText(footer_text.strip())  # Direct update for mode switch
 
                 # Restore normal cursor and enable send button for mode switch
                 QApplication.restoreOverrideCursor()
@@ -452,6 +478,7 @@ class ConsultantMainWindow(QMainWindow):
             self.worker.step_finished.connect(self.on_turn_finished)
             self.worker.macro_finished.connect(self.on_macro_finished)
             self.worker.error_occurred.connect(self.on_error)
+            self.worker.token_footer_received.connect(self.on_token_footer)
             self.worker.start()
             return
 
@@ -478,6 +505,7 @@ class ConsultantMainWindow(QMainWindow):
         self.worker.chunk_received.connect(self.on_chunk)
         self.worker.status_received.connect(self.on_status)
         self.worker.turn_finished.connect(self.on_turn_finished)
+        self.worker.token_footer_received.connect(self.on_token_footer)
         self.worker.error_occurred.connect(self.on_error)
         self.worker.approval_requested.connect(self.show_approval_panel)
         self.worker.start()
@@ -516,6 +544,10 @@ class ConsultantMainWindow(QMainWindow):
     def on_system_message(self, msg):
         escaped_json = json.dumps(msg)
         self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+
+    def on_token_footer(self, footer_text):
+        # Update the status label at bottom of window
+        self.token_status_label.setText(footer_text.strip())
 
     def on_macro_finished(self, msg):
         # Restore normal cursor when done processing
