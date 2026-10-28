@@ -1,8 +1,9 @@
+import os
 import json
 from PyQt6.QtCore import Qt, QUrl, QTimer
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout,
-    QHBoxLayout, QTextEdit, QPushButton, QLabel, QLineEdit, QApplication
+    QHBoxLayout, QTextEdit, QPushButton, QLabel, QLineEdit, QApplication, QFileDialog
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
@@ -29,9 +30,8 @@ class ConsultantMainWindow(QMainWindow):
         self.worker = None
 
         # Track processing state for cursor feedback
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)  # Start with wait cursor if needed
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self._is_processing = False
-
         self._in_prepare_mode = False
 
         self.init_ui()
@@ -41,6 +41,9 @@ class ConsultantMainWindow(QMainWindow):
                                                                                 self.state.primary_model_key)
         self.setWindowTitle(f"Coding Consultant ({display_name})")
         self.resize(1100, 800)
+
+        # === Initialize Menu Bar ===
+        self.init_menu()
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -147,6 +150,62 @@ class ConsultantMainWindow(QMainWindow):
         main_layout.addWidget(self.token_status_label)
 
         main_layout.addLayout(input_layout, stretch=1)
+
+    def init_menu(self):
+        """Creates the application menu bar with File operations."""
+        menubar = self.menuBar()
+
+        # File Menu
+        file_menu = menubar.addMenu("&File")
+
+        load_workflow_action = file_menu.addAction("&Load Prepared Workflow...")
+        load_workflow_action.setShortcut("Ctrl+O")
+        load_workflow_action.triggered.connect(self.open_prepare_file_dialog)
+
+        file_menu.addSeparator()
+
+        exit_action = file_menu.addAction("E&xit")
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+
+    def open_prepare_file_dialog(self):
+        """Opens a file picker dialog to select and run a prepared workflow file."""
+        if self.worker and self.worker.isRunning():
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Prepared Workflow File",
+            os.getcwd(),
+            "Workflow/Text Files (*.txt *.md);;All Files (*)"
+        )
+
+        if file_path:
+            self.run_prepare_workflow(file_path)
+
+    def run_prepare_workflow(self, macro_file_path):
+        """Shared worker initializer for both /prepare macro text and File menu dialog."""
+        user_text = f"/prepare {macro_file_path}"
+        escaped_json = json.dumps(user_text)
+        self.web_view.page().runJavaScript(f"appendUserMessage({escaped_json});")
+
+        self.send_button.setEnabled(False)
+
+        # Track processing for cursor feedback
+        self._is_processing = True
+        self._in_prepare_mode = True
+
+        self.worker = PrepareWorker(
+            self.state, macro_file_path, self.coder_prompt, self.reasoner_prompt, self.switcher
+        )
+        self.worker.chunk_received.connect(self.on_chunk)
+        self.worker.status_received.connect(self.on_status)
+        self.worker.system_message_received.connect(self.on_system_message)
+        self.worker.step_finished.connect(self.on_turn_finished)
+        self.worker.macro_finished.connect(self.on_macro_finished)
+        self.worker.error_occurred.connect(self.on_error)
+        self.worker.token_footer_received.connect(self.on_token_footer)
+        self.worker.start()
 
     def enterEvent(self, event):
         """Change cursor when entering the main window"""
@@ -456,27 +515,7 @@ class ConsultantMainWindow(QMainWindow):
         if user_text.startswith("/prepare "):
             macro_file_path = user_text[len("/prepare "):].strip()
             self.input_box.clear()
-
-            escaped_json = json.dumps(user_text)
-            self.web_view.page().runJavaScript(f"appendUserMessage({escaped_json});")
-
-            self.send_button.setEnabled(False)
-
-            # Track processing for cursor feedback
-            self._is_processing = True
-            self._in_prepare_mode = True
-
-            self.worker = PrepareWorker(
-                self.state, macro_file_path, self.coder_prompt, self.reasoner_prompt, self.switcher
-            )
-            self.worker.chunk_received.connect(self.on_chunk)
-            self.worker.status_received.connect(self.on_status)
-            self.worker.system_message_received.connect(self.on_system_message)
-            self.worker.step_finished.connect(self.on_turn_finished)
-            self.worker.macro_finished.connect(self.on_macro_finished)
-            self.worker.error_occurred.connect(self.on_error)
-            self.worker.token_footer_received.connect(self.on_token_footer)
-            self.worker.start()
+            self.run_prepare_workflow(macro_file_path)
             return
 
         if user_text == "/clear":
