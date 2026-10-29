@@ -34,6 +34,8 @@ class ConsultantMainWindow(QMainWindow):
         self._is_processing = False
         self._in_prepare_mode = False
 
+        self._workflow_prompts = []
+
         self.init_ui()
 
     def init_ui(self):
@@ -162,6 +164,10 @@ class ConsultantMainWindow(QMainWindow):
         load_workflow_action.setShortcut("Ctrl+O")
         load_workflow_action.triggered.connect(self.open_prepare_file_dialog)
 
+        save_workflow_action = file_menu.addAction("&Save Prepared Workflow...")
+        save_workflow_action.setShortcut("Ctrl+S")
+        save_workflow_action.triggered.connect(self.save_prepare_workflow)
+
         file_menu.addSeparator()
 
         exit_action = file_menu.addAction("E&xit")
@@ -182,6 +188,51 @@ class ConsultantMainWindow(QMainWindow):
 
         if file_path:
             self.run_prepare_workflow(file_path)
+
+    def save_prepare_workflow(self, file_path=None):
+        """Save current conversation history as a prepared workflow."""
+        if self.worker and self.worker.isRunning():
+            return
+
+        # If no path provided, show save dialog
+        if not file_path:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Prepared Workflow",
+                os.getcwd(),
+                "Workflow/Text Files (*.txt *.md);;All Files (*)"
+            )
+
+        if not file_path:
+            return
+
+        # Only check that parent directory exists (file itself doesn't need to exist)
+        parent_dir = os.path.dirname(file_path)
+        if parent_dir and not os.path.exists(parent_dir):
+            print(f"Warning: Directory does not exist, attempting save anyway...")
+
+        # Build workflow content from conversation history - USER PROMPTS ONLY
+        workflow_lines = []
+
+        for msg in self._workflow_prompts:
+            workflow_lines.append(msg)
+
+            # Add /send separator BEFORE each user message (except first)
+            if workflow_lines:  # If there are already lines, add /send before this one
+                workflow_lines.append("/send")
+
+        workflow_text = '\n'.join(workflow_lines) + '\n'
+
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(workflow_text)
+
+            escaped_json = json.dumps(f"✅ Workflow saved to {file_path}")
+            self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+        except Exception as e:
+            error_msg = f"Failed to save workflow: {e}"
+            escaped_json = json.dumps(error_msg)
+            self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
 
     def run_prepare_workflow(self, macro_file_path):
         """Shared worker initializer for both /prepare macro text and File menu dialog."""
@@ -469,6 +520,8 @@ class ConsultantMainWindow(QMainWindow):
         user_text = self.input_box.toPlainText().strip()
         if not user_text or (self.worker and self.worker.isRunning()):
             return
+
+        self._workflow_prompts.append(user_text)
 
         # Track processing start for cursor feedback
         self._is_processing = True
