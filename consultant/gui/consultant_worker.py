@@ -1,6 +1,7 @@
 import os
 from PyQt6.QtCore import QThread, pyqtSignal, QEventLoop
 import json
+import time
 from consultant.engine import run_consultant_turn
 from consultant.input_and_macro_handlers import handle_user_input, handle_macros
 from common.context_hygiene_utils import get_token_footer
@@ -42,6 +43,20 @@ class ConsultantWorker(QThread):
 
     def run(self):
         try:
+            import threading
+
+            stop_event = threading.Event()
+
+            def check_stop():
+                while not stop_event.is_set() and not self.isFinished():
+                    time.sleep(0.1)
+
+                if stop_event.is_set():
+                    raise KeyboardInterrupt("User requested stop")
+
+            thread = threading.Thread(target=check_stop, daemon=True)
+            thread.start()
+
             state = self.state
             switcher = self.switcher
 
@@ -49,17 +64,31 @@ class ConsultantWorker(QThread):
             llm, context_window = switcher.load(active_model_key)
             is_reasoner = (state.active_mode == "think")
 
-            run_consultant_turn(
-                state=state,
-                user_input=self.user_input,
-                llm=llm,
-                context_window=context_window,
-                is_reasoner=is_reasoner,
-                on_chunk=self.chunk_received.emit,
-                on_status=self.status_received.emit,
-                on_message=lambda msg: self.status_received.emit(msg.strip()),
-                approval_callback=self._gui_approval_callback
-            )
+            # Add periodic stop checks inside the loop
+            import time
+
+            def run_with_stop_checks():
+                from consultant.engine import run_consultant_turn
+
+                while not stop_event.is_set() and not self.isFinished():
+                    try:
+                        run_consultant_turn(
+                            state=state,
+                            user_input=self.user_input,
+                            llm=llm,
+                            context_window=context_window,
+                            is_reasoner=is_reasoner,
+                            on_chunk=self.chunk_received.emit,
+                            on_status=self.status_received.emit,
+                            on_message=lambda msg: self.status_received.emit(msg.strip()),
+                            approval_callback=self._gui_approval_callback
+                        )
+                    except KeyboardInterrupt as e:
+                        if str(e) == "User requested stop":
+                            raise
+                        continue
+
+            run_with_stop_checks()
 
             footer_text = get_token_footer(state.messages, llm, context_window)
             self.token_footer_received.emit(footer_text)

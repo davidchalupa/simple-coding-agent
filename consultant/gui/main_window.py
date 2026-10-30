@@ -133,8 +133,14 @@ class ConsultantMainWindow(QMainWindow):
         self.send_button.clicked.connect(self.handle_send)
         self.send_button.setMinimumHeight(40)
 
+        # After self.send_button creation, add stop button
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.clicked.connect(self.handle_stop)
+        self.stop_button.setMinimumHeight(40)
+
         input_layout.addWidget(self.input_box)
         input_layout.addWidget(self.send_button)
+        input_layout.addWidget(self.stop_button)
 
         # Create status label at bottom of window
         self.token_status_label = QLabel()
@@ -591,6 +597,9 @@ class ConsultantMainWindow(QMainWindow):
         self.worker = ConsultantWorker(
             self.state, user_text, self.coder_prompt, self.reasoner_prompt, self.switcher
         )
+
+        # self.stop_button.setEnabled(False)
+
         self.worker.chunk_received.connect(self.on_chunk)
         self.worker.status_received.connect(self.on_status)
         self.worker.turn_finished.connect(self.on_turn_finished)
@@ -598,6 +607,27 @@ class ConsultantMainWindow(QMainWindow):
         self.worker.error_occurred.connect(self.on_error)
         self.worker.approval_requested.connect(self.show_approval_panel)
         self.worker.start()
+
+    def handle_stop(self):
+        if self.worker and self.worker.isRunning():
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
+            # Set a flag that the worker can check
+            import threading
+            stop_flag = threading.Event()
+            stop_flag.set()  # Signal to stop immediately
+
+            # Try graceful quit first, then force kill if needed
+            self.worker.quit()
+            self.worker.wait(500)
+
+            if not self.worker.isFinished():
+                QApplication.restoreOverrideCursor()
+                self.send_button.setEnabled(True)
+
+                error_text = "⚠️ Response stopped by user"
+                escaped_json = json.dumps(error_text)
+                self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
 
     def on_chunk(self, text):
         escaped_json = json.dumps(text)
@@ -615,6 +645,8 @@ class ConsultantMainWindow(QMainWindow):
         QTimer.singleShot(10, lambda: self.send_button.setEnabled(True))
         self.send_button.setEnabled(True)
 
+        self.stop_button.setEnabled(True)
+
         if self.state.messages and self.state.messages[-1]["role"] == "assistant":
             last_msg = self.state.messages[-1]["content"]
             escaped_json = json.dumps(last_msg)
@@ -626,6 +658,8 @@ class ConsultantMainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
 
         self.send_button.setEnabled(True)
+        self.stop_button.setEnabled(True)
+
         error_text = f"⚠️ Error: {err_msg}"
         escaped_json = json.dumps(error_text)
         self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
