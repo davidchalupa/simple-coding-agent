@@ -44,7 +44,8 @@ def run_consultant_turn(
     on_chunk=None,
     on_status=None,
     on_message=None,
-    approval_callback=None
+    approval_callback=None,
+    stop_event=None
 ):
     """Unified execution loop containing all guardrails, violations tracking, and tool caps."""
     msg_content = user_input
@@ -85,7 +86,7 @@ def run_consultant_turn(
         state.turn_start_tokens = sum(len(msg.get("content", "")) for msg in state.messages)
 
         response_content, is_truncated, interrupted = stream_agent_response(
-            llm, state.messages, context_window, **stream_kwargs
+            llm, state.messages, context_window, stop_event=stop_event, **stream_kwargs
         )
 
         if interrupted:

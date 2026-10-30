@@ -44,7 +44,8 @@ def stream_agent_response(llm, messages,
                           max_output_tokens: int = None,
                           # === NEW: Output callbacks for GUI decoupling ===
                           on_chunk=None,
-                          on_status=None):
+                          on_status=None,
+                          stop_event=None):
     # Default console print if no callback provided
     def default_status(msg, end="\n", flush=False):
         print(msg, end=end, flush=flush)
@@ -77,6 +78,10 @@ def stream_agent_response(llm, messages,
                 max_tokens=max_output_tokens,
                 stop=stop or []
         ):
+            # === NEW: Check if Stop button was pressed ===
+            if stop_event is not None and stop_event.is_set():
+                raise KeyboardInterrupt("User requested stop")
+
             choice = chunk['choices'][0]
             finish_reason = choice.get('finish_reason') or finish_reason
             if 'content' in (delta := choice.get('delta', {})):

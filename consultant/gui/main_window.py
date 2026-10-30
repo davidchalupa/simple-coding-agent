@@ -610,24 +610,19 @@ class ConsultantMainWindow(QMainWindow):
 
     def handle_stop(self):
         if self.worker and self.worker.isRunning():
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            # Signal the worker thread to stop immediately via its stop_event
+            self.worker.stop()
 
-            # Set a flag that the worker can check
-            import threading
-            stop_flag = threading.Event()
-            stop_flag.set()  # Signal to stop immediately
+            # Wait briefly for thread to wrap up the interrupted turn
+            self.worker.wait(1000)
 
-            # Try graceful quit first, then force kill if needed
-            self.worker.quit()
-            self.worker.wait(500)
+            QApplication.restoreOverrideCursor()
+            self.send_button.setEnabled(True)
+            self.stop_button.setEnabled(True)
 
-            if not self.worker.isFinished():
-                QApplication.restoreOverrideCursor()
-                self.send_button.setEnabled(True)
-
-                error_text = "⚠️ Response stopped by user"
-                escaped_json = json.dumps(error_text)
-                self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
+            error_text = "⚠️ Response stopped by user"
+            escaped_json = json.dumps(error_text)
+            self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
 
     def on_chunk(self, text):
         escaped_json = json.dumps(text)
