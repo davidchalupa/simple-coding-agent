@@ -51,6 +51,8 @@ class ConsultantMainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(8)
 
         self.web_view = QWebEngineView()
         # Enable JavaScript clipboard access
@@ -58,7 +60,7 @@ class ConsultantMainWindow(QMainWindow):
             self.web_view.settings().WebAttribute.JavascriptCanAccessClipboard, True
         )
         self.load_chat_html()
-        main_layout.addWidget(self.web_view, stretch=4)
+        main_layout.addWidget(self.web_view, stretch=1)
 
         # === Approval Banner Widget (Initially Hidden) ===
         self.approval_widget = QWidget()
@@ -125,20 +127,99 @@ class ConsultantMainWindow(QMainWindow):
         main_layout.addWidget(self.approval_widget)
         # ===============================================
 
+        from PyQt6.QtWidgets import QButtonGroup, QSizePolicy
+
         input_area = QHBoxLayout()
         self.input_box = QTextEdit()
         self.input_box.setPlaceholderText("Type your prompt here... (Press Send or Ctrl+Enter)")
+        self.input_box.setMinimumHeight(60)
         self.input_box.setMaximumHeight(120)
+        self.input_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         button_layout = QVBoxLayout()
-        self.send_button = QPushButton("Send")
+        button_layout.setSpacing(6)
+
+        # === Mode Toggle Buttons Layout ===
+        mode_layout = QHBoxLayout()
+        mode_layout.setSpacing(6)
+
+        self.code_mode_btn = QPushButton("💻")
+        self.code_mode_btn.setToolTip("Coding mode")
+        self.code_mode_btn.setCheckable(True)
+        self.code_mode_btn.setChecked(True)  # Code mode default
+        self.code_mode_btn.setMinimumHeight(36)  # ~10% larger
+        self.code_mode_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.code_mode_btn.setStyleSheet("""
+                    QPushButton {
+                        background: #1e1e1e;
+                        color: #555555;
+                        border: 1px solid #2d2d2d;
+                        border-radius: 6px;
+                        font-size: 17px;
+                    }
+                    QPushButton:hover {
+                        background: #282828;
+                        color: #aaaaaa;
+                        border-color: #444444;
+                    }
+                    QPushButton:checked {
+                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #094771, stop:1 #0e639c);
+                        color: #ffffff;
+                        border: 3px solid #4ec9b0;
+                        border-radius: 6px;
+                    }
+                """)
+        self.code_mode_btn.clicked.connect(lambda: self.switch_mode("code"))
+
+        self.think_mode_btn = QPushButton("💡")
+        self.think_mode_btn.setToolTip("Thinking mode")
+        self.think_mode_btn.setCheckable(True)
+        self.think_mode_btn.setChecked(False)
+        self.think_mode_btn.setMinimumHeight(36)  # ~10% larger
+        self.think_mode_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.think_mode_btn.setStyleSheet("""
+                    QPushButton {
+                        background: #1e1e1e;
+                        color: #555555;
+                        border: 1px solid #2d2d2d;
+                        border-radius: 6px;
+                        font-size: 17px;
+                    }
+                    QPushButton:hover {
+                        background: #282828;
+                        color: #aaaaaa;
+                        border-color: #444444;
+                    }
+                    QPushButton:checked {
+                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4a3e10, stop:1 #6e5c18);
+                        color: #ffffff;
+                        border: 3px solid #ffd700;
+                        border-radius: 6px;
+                    }
+                """)
+        self.think_mode_btn.clicked.connect(lambda: self.switch_mode("think"))
+
+        # Group them to make them mutually exclusive (radio behavior)
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.setExclusive(True)
+        self.mode_group.addButton(self.code_mode_btn)
+        self.mode_group.addButton(self.think_mode_btn)
+
+        mode_layout.addWidget(self.code_mode_btn, stretch=1)
+        mode_layout.addWidget(self.think_mode_btn, stretch=1)
+        button_layout.addLayout(mode_layout)
+        # =================================
+
+        self.send_button = QPushButton()
+        self.set_action_button_state(is_stop=False)  # Initialize as Send
         self.send_button.clicked.connect(self.handle_action)
-        self.send_button.setMinimumHeight(40)
+        self.send_button.setMinimumHeight(42)
+        self.send_button.setMinimumWidth(115)
+        self.send_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
+        button_layout.addWidget(self.send_button)
 
-        button_layout.addWidget(self.send_button)  # Vertical stacking
-
-        input_area.addWidget(self.input_box, stretch=1)  # Input box takes available space
+        input_area.addWidget(self.input_box, stretch=1)
         input_area.addLayout(button_layout)
 
         # Create status label at bottom of window
@@ -154,9 +235,9 @@ class ConsultantMainWindow(QMainWindow):
             }
         """)
         self.token_status_label.setText("Ready")
-        main_layout.addWidget(self.token_status_label)
 
-        main_layout.addLayout(input_area, stretch=1)
+        main_layout.addWidget(self.token_status_label)
+        main_layout.addLayout(input_area)  # <--- Removed stretch=1 so it takes its natural height!
 
     def init_menu(self):
         """Creates the application menu bar with File operations."""
@@ -250,7 +331,7 @@ class ConsultantMainWindow(QMainWindow):
         self._in_prepare_mode = True
         self._new_step_pending = True  # Force first step to create a new box
 
-        self.send_button.setText("Stop")
+        self.set_action_button_state(is_stop=True)
         self.send_button.setEnabled(True)  # Keep enabled so user can click it to stop
 
         self.worker = PrepareWorker(
@@ -264,6 +345,37 @@ class ConsultantMainWindow(QMainWindow):
         self.worker.error_occurred.connect(self.on_error)
         self.worker.token_footer_received.connect(self.on_token_footer)
         self.worker.start()
+
+    def switch_mode(self, mode):
+        """Switches between 'code' and 'think' modes and updates UI/models."""
+        if mode not in ["think", "code"]:
+            return
+
+        if mode == "think" and self.state.reasoning_model_key is None:
+            escaped_json = json.dumps("⚠️ Reasoning model is not configured. Cannot switch to think mode.")
+            self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+            # Revert button state back to code
+            self.code_mode_btn.setChecked(True)
+            return
+
+        self.state.active_mode = mode
+        active_model = self.state.reasoning_model_key if mode == "think" else self.state.primary_model_key
+        llm, context_window = self.switcher.load(active_model)
+
+        display_name = MODEL_REGISTRY.get(active_model, {}).get("display_name", active_model)
+        self.setWindowTitle(f"Coding Consultant ({display_name}) - [{mode.upper()} MODE]")
+
+        escaped_json = json.dumps(f"Switched active mode to: {mode} ({display_name})")
+        self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+
+        footer_text = get_token_footer(self.state.messages, llm, context_window)
+        self.token_status_label.setText(footer_text.strip())
+
+        # Sync button toggle states visually
+        if mode == "code":
+            self.code_mode_btn.setChecked(True)
+        else:
+            self.think_mode_btn.setChecked(True)
 
     def handle_action(self):
         """Unified handler: acts as Stop if processing, or Send if idle."""
@@ -350,7 +462,7 @@ class ConsultantMainWindow(QMainWindow):
         </head>
         <body>
             <div id="chat-container"></div>
-<script>
+                <script>
                 let currentAssistantDiv = null;
 
                 window.appendUserMessage = function(text) {
@@ -544,23 +656,7 @@ class ConsultantMainWindow(QMainWindow):
         if user_text.startswith("/mode "):
             mode = user_text[len("/mode "):].strip()
             if mode in ["think", "code"]:
-                if mode == "think" and self.state.reasoning_model_key is None:
-                    escaped_json = json.dumps("⚠️ Reasoning model is not configured. Cannot switch to think mode.")
-                    self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
-                    return
-
-                self.state.active_mode = mode
-                active_model = self.state.reasoning_model_key if mode == "think" else self.state.primary_model_key
-                llm, context_window = self.switcher.load(active_model)
-
-                display_name = MODEL_REGISTRY.get(active_model, {}).get("display_name", active_model)
-                self.setWindowTitle(f"Coding Consultant ({display_name}) - [{mode.upper()} MODE]")
-
-                escaped_json = json.dumps(f"Switched active mode to: {mode} ({display_name})")
-                self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
-
-                footer_text = get_token_footer(self.state.messages, llm, context_window)
-                self.token_status_label.setText(footer_text.strip())
+                self.switch_mode(mode)
                 return
             else:
                 escaped_json = json.dumps("Unknown mode. Use '/mode code' or '/mode think'.")
@@ -586,7 +682,7 @@ class ConsultantMainWindow(QMainWindow):
         # === Actual worker processing starts here ===
         self._is_processing = True
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self.send_button.setText("Stop")
+        self.set_action_button_state(is_stop=True)
         self.send_button.setEnabled(True)
 
         escaped_json = json.dumps(user_text)
@@ -611,7 +707,7 @@ class ConsultantMainWindow(QMainWindow):
 
         QApplication.restoreOverrideCursor()
         self.send_button.setEnabled(True)
-        self.send_button.setText("Send")  # Revert text back to Send
+        self.set_action_button_state(is_stop=False)
         self._is_processing = False
         self._in_prepare_mode = False
 
@@ -632,7 +728,7 @@ class ConsultantMainWindow(QMainWindow):
         if not self._in_prepare_mode:
             QTimer.singleShot(10, lambda: self.send_button.setEnabled(True))
             self.send_button.setEnabled(True)
-            self.send_button.setText("Send")
+            self.set_action_button_state(is_stop=False)
             self._is_processing = False
         else:
             # Prepare mode: mark next step pending for assistant box separation
@@ -643,7 +739,7 @@ class ConsultantMainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
 
         self.send_button.setEnabled(True)
-        self.send_button.setText("Send")
+        self.set_action_button_state(is_stop=False)
         self._is_processing = False
         self._in_prepare_mode = False  # Clear prepare mode on error
 
@@ -656,7 +752,7 @@ class ConsultantMainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
 
         self.send_button.setEnabled(True)
-        self.send_button.setText("Send")  # Revert text back to Send
+        self.set_action_button_state(is_stop=False)
 
         self._in_prepare_mode = False
         self._is_processing = False
@@ -688,3 +784,39 @@ class ConsultantMainWindow(QMainWindow):
     def on_token_footer(self, footer_text):
         # Update the status label at bottom of window
         self.token_status_label.setText(footer_text.strip())
+
+    def set_action_button_state(self, is_stop: bool):
+        """Centralized helper to update the Send/Stop button text, style, and width."""
+        if is_stop:
+            self.send_button.setText("⏹️ Stop")
+            self.send_button.setStyleSheet("""
+                QPushButton {
+                    background: #a1260d;
+                    color: #ffffff;
+                    border: 1px solid #c53013;
+                    border-radius: 6px;
+                    font-size: 14px;
+                    font-weight: bold;
+                    padding: 10px 25px;
+                }
+                QPushButton:hover {
+                    background: #c53013;
+                }
+            """)
+        else:
+            self.send_button.setText("✈️ Send")
+            self.send_button.setStyleSheet("""
+                QPushButton {
+                    background: #252526;
+                    color: #ffffff;
+                    border: 1px solid #333333;
+                    border-radius: 6px;
+                    font-size: 14px;
+                    font-weight: bold;
+                    padding: 10px 25px;
+                }
+                QPushButton:hover {
+                    background: #2d2d2d;
+                    border-color: #0e639c;
+                }
+            """)
