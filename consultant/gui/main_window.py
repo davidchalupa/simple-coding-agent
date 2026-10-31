@@ -124,11 +124,12 @@ class ConsultantMainWindow(QMainWindow):
         main_layout.addWidget(self.approval_widget)
         # ===============================================
 
-        input_layout = QHBoxLayout()
+        input_area = QHBoxLayout()
         self.input_box = QTextEdit()
         self.input_box.setPlaceholderText("Type your prompt here... (Press Send or Ctrl+Enter)")
         self.input_box.setMaximumHeight(120)
 
+        button_layout = QVBoxLayout()
         self.send_button = QPushButton("Send")
         self.send_button.clicked.connect(self.handle_send)
         self.send_button.setMinimumHeight(40)
@@ -138,9 +139,11 @@ class ConsultantMainWindow(QMainWindow):
         self.stop_button.clicked.connect(self.handle_stop)
         self.stop_button.setMinimumHeight(40)
 
-        input_layout.addWidget(self.input_box)
-        input_layout.addWidget(self.send_button)
-        input_layout.addWidget(self.stop_button)
+        button_layout.addWidget(self.send_button)  # Vertical stacking
+        button_layout.addWidget(self.stop_button)
+
+        input_area.addWidget(self.input_box, stretch=1)  # Input box takes available space
+        input_area.addLayout(button_layout)
 
         # Create status label at bottom of window
         self.token_status_label = QLabel()
@@ -157,7 +160,7 @@ class ConsultantMainWindow(QMainWindow):
         self.token_status_label.setText("Ready")
         main_layout.addWidget(self.token_status_label)
 
-        main_layout.addLayout(input_layout, stretch=1)
+        main_layout.addLayout(input_area, stretch=1)
 
     def init_menu(self):
         """Creates the application menu bar with File operations."""
