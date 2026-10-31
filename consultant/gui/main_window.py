@@ -132,16 +132,11 @@ class ConsultantMainWindow(QMainWindow):
 
         button_layout = QVBoxLayout()
         self.send_button = QPushButton("Send")
-        self.send_button.clicked.connect(self.handle_send)
+        self.send_button.clicked.connect(self.handle_action)
         self.send_button.setMinimumHeight(40)
 
-        # After self.send_button creation, add stop button
-        self.stop_button = QPushButton("Stop")
-        self.stop_button.clicked.connect(self.handle_stop)
-        self.stop_button.setMinimumHeight(40)
 
         button_layout.addWidget(self.send_button)  # Vertical stacking
-        button_layout.addWidget(self.stop_button)
 
         input_area.addWidget(self.input_box, stretch=1)  # Input box takes available space
         input_area.addLayout(button_layout)
@@ -250,12 +245,13 @@ class ConsultantMainWindow(QMainWindow):
         escaped_json = json.dumps(user_text)
         self.web_view.page().runJavaScript(f"appendUserMessage({escaped_json});")
 
-        self.send_button.setEnabled(False)
-
-        # Track processing for cursor feedback
+        # Track processing for cursor feedback & toggle button to Stop
         self._is_processing = True
         self._in_prepare_mode = True
-        self._new_step_pending = True  # <--- Force first step to create a new box
+        self._new_step_pending = True  # Force first step to create a new box
+
+        self.send_button.setText("Stop")
+        self.send_button.setEnabled(True)  # Keep enabled so user can click it to stop
 
         self.worker = PrepareWorker(
             self.state, macro_file_path, self.coder_prompt, self.reasoner_prompt, self.switcher
@@ -268,6 +264,13 @@ class ConsultantMainWindow(QMainWindow):
         self.worker.error_occurred.connect(self.on_error)
         self.worker.token_footer_received.connect(self.on_token_footer)
         self.worker.start()
+
+    def handle_action(self):
+        """Unified handler: acts as Stop if processing, or Send if idle."""
+        if self._is_processing or (self.worker and self.worker.isRunning()):
+            self.handle_stop()
+        else:
+            self.handle_send()
 
     def enterEvent(self, event):
         """Change cursor when entering the main window"""
@@ -535,15 +538,9 @@ class ConsultantMainWindow(QMainWindow):
             return
 
         self._workflow_prompts.append(user_text)
-
-        # Track processing start for cursor feedback
-        self._is_processing = True
-
-        # ALWAYS show wait cursor when starting processing
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)  # <-- Remove the if condition!
-
         self.input_box.clear()
 
+        # Handle quick commands first (before setting processing state)
         if user_text.startswith("/mode "):
             mode = user_text[len("/mode "):].strip()
             if mode in ["think", "code"]:
@@ -562,16 +559,8 @@ class ConsultantMainWindow(QMainWindow):
                 escaped_json = json.dumps(f"Switched active mode to: {mode} ({display_name})")
                 self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
 
-                # emit token info for mode switch
                 footer_text = get_token_footer(self.state.messages, llm, context_window)
-
-                # Create a temporary worker just to emit the footer (or call directly)
-                self.token_status_label.setText(footer_text.strip())  # Direct update for mode switch
-
-                # Restore normal cursor and enable send button for mode switch
-                QApplication.restoreOverrideCursor()
-                self.send_button.setEnabled(True)
-
+                self.token_status_label.setText(footer_text.strip())
                 return
             else:
                 escaped_json = json.dumps("Unknown mode. Use '/mode code' or '/mode think'.")
@@ -580,7 +569,6 @@ class ConsultantMainWindow(QMainWindow):
 
         if user_text.startswith("/prepare "):
             macro_file_path = user_text[len("/prepare "):].strip()
-            self.input_box.clear()
             self.run_prepare_workflow(macro_file_path)
             return
 
@@ -595,8 +583,11 @@ class ConsultantMainWindow(QMainWindow):
             self.close()
             return
 
-        # Track processing for cursor feedback
+        # === Actual worker processing starts here ===
         self._is_processing = True
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.send_button.setText("Stop")
+        self.send_button.setEnabled(True)
 
         escaped_json = json.dumps(user_text)
         self.web_view.page().runJavaScript(f"appendUserMessage({escaped_json});")
@@ -604,8 +595,6 @@ class ConsultantMainWindow(QMainWindow):
         self.worker = ConsultantWorker(
             self.state, user_text, self.coder_prompt, self.reasoner_prompt, self.switcher
         )
-
-        # self.stop_button.setEnabled(False)
 
         self.worker.chunk_received.connect(self.on_chunk)
         self.worker.status_received.connect(self.on_status)
@@ -617,19 +606,64 @@ class ConsultantMainWindow(QMainWindow):
 
     def handle_stop(self):
         if self.worker and self.worker.isRunning():
-            # Signal the worker thread to stop immediately via its stop_event
             self.worker.stop()
-
-            # Wait briefly for thread to wrap up the interrupted turn
             self.worker.wait(1000)
 
-            QApplication.restoreOverrideCursor()
-            self.send_button.setEnabled(True)
-            self.stop_button.setEnabled(True)
+        QApplication.restoreOverrideCursor()
+        self.send_button.setEnabled(True)
+        self.send_button.setText("Send")  # Revert text back to Send
+        self._is_processing = False
+        self._in_prepare_mode = False
 
-            error_text = "⚠️ Response stopped by user"
-            escaped_json = json.dumps(error_text)
+        error_text = "⚠️ Response stopped by user"
+        escaped_json = json.dumps(error_text)
+        self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
+
+    def on_turn_finished(self, _):
+        if self._is_processing and not self._in_prepare_mode:
+            QApplication.restoreOverrideCursor()
+
+        if self.state.messages and self.state.messages[-1]["role"] == "assistant":
+            last_msg = self.state.messages[-1]["content"]
+            escaped_json = json.dumps(last_msg)
             self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
+
+        # Only reset button and finish state if this is NOT a prepare workflow step
+        if not self._in_prepare_mode:
+            QTimer.singleShot(10, lambda: self.send_button.setEnabled(True))
+            self.send_button.setEnabled(True)
+            self.send_button.setText("Send")
+            self._is_processing = False
+        else:
+            # Prepare mode: mark next step pending for assistant box separation
+            self._new_step_pending = True
+
+    def on_error(self, err_msg):
+        if self._is_processing and not self._in_prepare_mode:
+            QApplication.restoreOverrideCursor()
+
+        self.send_button.setEnabled(True)
+        self.send_button.setText("Send")
+        self._is_processing = False
+        self._in_prepare_mode = False  # Clear prepare mode on error
+
+        error_text = f"⚠️ Error: {err_msg}"
+        escaped_json = json.dumps(error_text)
+        self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
+
+    def on_macro_finished(self, msg):
+        if self._is_processing:
+            QApplication.restoreOverrideCursor()
+
+        self.send_button.setEnabled(True)
+        self.send_button.setText("Send")  # Revert text back to Send
+
+        self._in_prepare_mode = False
+        self._is_processing = False
+        self._new_step_pending = False
+
+        escaped_json = json.dumps(msg)
+        self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
 
     def on_chunk(self, text):
         if self._in_prepare_mode and self._new_step_pending:
@@ -647,37 +681,6 @@ class ConsultantMainWindow(QMainWindow):
         escaped_json = json.dumps(msg)
         self.web_view.page().runJavaScript(f"showStatus({escaped_json});")
 
-    def on_turn_finished(self, _):
-        # Restore normal cursor when done processing (skip during prepare macro)
-        if self._is_processing and not self._in_prepare_mode:
-            QApplication.restoreOverrideCursor()
-
-        QTimer.singleShot(10, lambda: self.send_button.setEnabled(True))
-        self.send_button.setEnabled(True)
-
-        self.stop_button.setEnabled(True)
-
-        if self.state.messages and self.state.messages[-1]["role"] == "assistant":
-            last_msg = self.state.messages[-1]["content"]
-            escaped_json = json.dumps(last_msg)
-            self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
-
-        # Mark that the next incoming activity belongs to a new prepare step
-        if self._in_prepare_mode:
-            self._new_step_pending = True
-
-    def on_error(self, err_msg):
-        # Skip cursor restoration during prepare macro (let it finish naturally)
-        if self._is_processing and not self._in_prepare_mode:
-            QApplication.restoreOverrideCursor()
-
-        self.send_button.setEnabled(True)
-        self.stop_button.setEnabled(True)
-
-        error_text = f"⚠️ Error: {err_msg}"
-        escaped_json = json.dumps(error_text)
-        self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
-
     def on_system_message(self, msg):
         escaped_json = json.dumps(msg)
         self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
@@ -685,18 +688,3 @@ class ConsultantMainWindow(QMainWindow):
     def on_token_footer(self, footer_text):
         # Update the status label at bottom of window
         self.token_status_label.setText(footer_text.strip())
-
-    def on_macro_finished(self, msg):
-        # Restore normal cursor when done processing
-        if self._is_processing:
-            QApplication.restoreOverrideCursor()
-
-        self.send_button.setEnabled(True)
-
-        # reset flags
-        self._in_prepare_mode = False
-        self._is_processing = False
-        self._new_step_pending = False
-
-        escaped_json = json.dumps(msg)
-        self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
