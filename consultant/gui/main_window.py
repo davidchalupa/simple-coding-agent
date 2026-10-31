@@ -33,6 +33,7 @@ class ConsultantMainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self._is_processing = False
         self._in_prepare_mode = False
+        self._new_step_pending = False
 
         self._workflow_prompts = []
 
@@ -254,6 +255,7 @@ class ConsultantMainWindow(QMainWindow):
         # Track processing for cursor feedback
         self._is_processing = True
         self._in_prepare_mode = True
+        self._new_step_pending = True  # <--- Force first step to create a new box
 
         self.worker = PrepareWorker(
             self.state, macro_file_path, self.coder_prompt, self.reasoner_prompt, self.switcher
@@ -345,7 +347,7 @@ class ConsultantMainWindow(QMainWindow):
         </head>
         <body>
             <div id="chat-container"></div>
-            <script>
+<script>
                 let currentAssistantDiv = null;
 
                 window.appendUserMessage = function(text) {
@@ -394,12 +396,21 @@ class ConsultantMainWindow(QMainWindow):
                     container.appendChild(currentAssistantDiv);
                 }
 
+                // Called directly by Python when a new prepare step starts
+                window.startNewAssistantBox = function() {
+                    clearStatus();
+                    const container = document.getElementById('chat-container');
+                    currentAssistantDiv = document.createElement('div');
+                    currentAssistantDiv.className = 'message assistant';
+                    container.appendChild(currentAssistantDiv);
+                    window.scrollTo(0, document.body.scrollHeight);
+                };
+
                 window.appendChunk = function(text) {
                     if (!currentAssistantDiv) {
                         startAssistantMessage();
                     }
                     currentAssistantDiv.innerText += text;
-                    window.scrollTo(0, document.body.scrollHeight);
                 };
 
                 window.finalizeAssistantMessage = function(fullText) {
@@ -411,7 +422,6 @@ class ConsultantMainWindow(QMainWindow):
                     let cleanedText = fullText.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
                     if (!cleanedText) cleanedText = fullText;
 
-                    // 1. Native Markdown parsing via marked.js
                     let parsedHtml = '';
                     if (typeof marked !== 'undefined') {
                         parsedHtml = marked.parse(cleanedText);
@@ -421,7 +431,7 @@ class ConsultantMainWindow(QMainWindow):
 
                     currentAssistantDiv.innerHTML = parsedHtml;
 
-                    // 2. Post-process DOM to wrap <pre> blocks with IDE header and Copy button
+                    // Post-process DOM to wrap <pre> blocks with IDE header and Copy button
                     currentAssistantDiv.querySelectorAll('pre').forEach(pre => {
                         if (!pre.parentNode.classList.contains('code-wrapper')) {
                             const code = pre.querySelector('code');
@@ -450,24 +460,19 @@ class ConsultantMainWindow(QMainWindow):
                             btn.innerText = 'Copy';
                             btn.onclick = () => {
                                 const textToCopy = code ? code.innerText : pre.innerText;
-                                
-                                // Robust clipboard fallback for QWebEngineView
                                 const textarea = document.createElement('textarea');
                                 textarea.value = textToCopy;
-                                textarea.style.position = 'fixed';  // Prevent scrolling to bottom
+                                textarea.style.position = 'fixed';
                                 textarea.style.opacity = '0';
                                 document.body.appendChild(textarea);
                                 textarea.focus();
                                 textarea.select();
-                                
                                 try {
                                     const successful = document.execCommand('copy');
                                     btn.innerText = successful ? 'Copied!' : 'Failed';
                                 } catch (err) {
-                                    console.error('Failed to copy text: ', err);
                                     btn.innerText = 'Error';
                                 }
-                                
                                 document.body.removeChild(textarea);
                                 setTimeout(() => btn.innerText = 'Copy', 2000);
                             };
@@ -479,7 +484,6 @@ class ConsultantMainWindow(QMainWindow):
                         }
                     });
 
-                    // 3. Apply syntax highlighting
                     if (typeof hljs !== 'undefined') {
                         currentAssistantDiv.querySelectorAll('pre code').forEach((block) => {
                             hljs.highlightElement(block);
@@ -628,10 +632,18 @@ class ConsultantMainWindow(QMainWindow):
             self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
 
     def on_chunk(self, text):
+        if self._in_prepare_mode and self._new_step_pending:
+            self.web_view.page().runJavaScript("startNewAssistantBox();")
+            self._new_step_pending = False
+
         escaped_json = json.dumps(text)
         self.web_view.page().runJavaScript(f"appendChunk({escaped_json});")
 
     def on_status(self, msg):
+        if self._in_prepare_mode and self._new_step_pending:
+            self.web_view.page().runJavaScript("startNewAssistantBox();")
+            self._new_step_pending = False
+
         escaped_json = json.dumps(msg)
         self.web_view.page().runJavaScript(f"showStatus({escaped_json});")
 
@@ -649,6 +661,10 @@ class ConsultantMainWindow(QMainWindow):
             last_msg = self.state.messages[-1]["content"]
             escaped_json = json.dumps(last_msg)
             self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
+
+        # Mark that the next incoming activity belongs to a new prepare step
+        if self._in_prepare_mode:
+            self._new_step_pending = True
 
     def on_error(self, err_msg):
         # Skip cursor restoration during prepare macro (let it finish naturally)
@@ -677,10 +693,10 @@ class ConsultantMainWindow(QMainWindow):
 
         self.send_button.setEnabled(True)
 
-        # reset the flag for /prepare macro (harmless in case of other macro)
+        # reset flags
         self._in_prepare_mode = False
-        # processing also needs to be reset
         self._is_processing = False
+        self._new_step_pending = False
 
         escaped_json = json.dumps(msg)
         self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
