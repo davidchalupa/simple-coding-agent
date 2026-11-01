@@ -746,8 +746,8 @@ class ConsultantMainWindow(QMainWindow):
             self._new_step_pending = True
 
     def on_error(self, err_msg):
-        if self._is_processing and not self._in_prepare_mode:
-            QApplication.restoreOverrideCursor()
+        # error should really trigger switch to default cursor unconditionally
+        QApplication.restoreOverrideCursor()
 
         self.send_button.setEnabled(True)
         self.set_action_button_state(is_stop=False)

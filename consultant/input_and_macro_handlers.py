@@ -49,9 +49,8 @@ def handle_user_input(state, user_input, system_prompt, switcher):
 
     return False
 
-
-def show_stats(state, switcher):
-    """Display telemetry and context hygiene stats"""
+def compute_stats(state, switcher):
+    """Compute telemetry and context hygiene stats"""
     total_tokens = get_tokens_used(state.messages, switcher.llm)
     context_window = getattr(switcher, 'context_window', None) or 32768
     usage_pct = (total_tokens / context_window * 100) if context_window else 0.0
@@ -91,22 +90,39 @@ def show_stats(state, switcher):
             except Exception:
                 pass
 
+    return {
+        "total_tokens": total_tokens,
+        "context_window": context_window,
+        "usage_pct": usage_pct,
+        "headroom": headroom,
+        "system_tokens": system_tokens,
+        "tool_tokens": tool_tokens,
+        "chat_tokens": chat_tokens,
+        "disk_cache_files": disk_cache_files,
+        "total_disk_size_mb": total_disk_size_mb
+    }
+
+
+def show_stats(state, switcher):
+    """Display telemetry and context hygiene stats"""
+    stats = compute_stats(state, switcher)
+
     print("\n📊 [Stats & Context Hygiene]")
     print(f"   Mode: {state.active_mode.upper()}")
     print(f"   Messages: {len(state.messages)} turns")
-    print(f"   Context Used: ~{total_tokens:,} / {context_window:,} tokens ({usage_pct:.1f}%)")
-    print(f"   Headroom Left: ~{headroom:,} tokens")
+    print(f"   Context Used: ~{stats['total_tokens']:,} / {stats['context_window']:,} tokens ({stats['usage_pct']:.1f}%)")
+    print(f"   Headroom Left: ~{stats['headroom']:,} tokens")
 
     print("\n📦 [Context Breakdown]")
-    print(f"   • Loaded Code / Tool Results : ~{tool_tokens:,} tokens ({tool_tokens / max(1, total_tokens) * 100:.1f}%)")
-    print(f"   • Conversation History       : ~{chat_tokens:,} tokens ({chat_tokens / max(1, total_tokens) * 100:.1f}%)")
-    print(f"   • System Instructions        : ~{system_tokens:,} tokens ({system_tokens / max(1, total_tokens) * 100:.1f}%)")
+    print(f"   • Loaded Code / Tool Results : ~{stats['tool_tokens']:,} tokens ({stats['tool_tokens'] / max(1, stats['total_tokens']) * 100:.1f}%)")
+    print(f"   • Conversation History       : ~{stats['chat_tokens']:,} tokens ({stats['chat_tokens'] / max(1, stats['total_tokens']) * 100:.1f}%)")
+    print(f"   • System Instructions        : ~{stats['system_tokens']:,} tokens ({stats['system_tokens'] / max(1, stats['total_tokens']) * 100:.1f}%)")
 
-    if disk_cache_files:
-        latest_cache = sorted(disk_cache_files, reverse=True)[0]
+    if stats['disk_cache_files']:
+        latest_cache = sorted(stats['disk_cache_files'], reverse=True)[0]
         print(f"\n💾 [KV Cache Persistence]")
         print(f"   • Active Disk Cache : {latest_cache[0]} ({latest_cache[1]:.2f} MB)")
-        print(f"   • Total Cache Space : {total_disk_size_mb:.2f} MB")
+        print(f"   • Total Cache Space : {stats['total_disk_size_mb']:.2f} MB")
 
     # Generation Speed
     if hasattr(state, 'last_turn_timestamp') and state.last_turn_timestamp:
