@@ -3,7 +3,7 @@ import json
 from PyQt6.QtCore import Qt, QUrl, QTimer
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout,
-    QHBoxLayout, QTextEdit, QPushButton, QLabel, QLineEdit, QApplication, QFileDialog
+    QHBoxLayout, QTextEdit, QPushButton, QLabel, QLineEdit, QApplication, QFileDialog, QDialog
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
@@ -12,6 +12,52 @@ from consultant.system_prompt_builder import build_consultant_system_prompt, bui
 from model_registry import MODEL_REGISTRY
 from consultant.model_switcher import ModelSwitcher
 from common.context_hygiene_utils import get_token_footer
+
+
+class StatsDialog(QDialog):
+    def __init__(self, state, switcher, parent=None):
+        super().__init__(parent)
+        self.state = state
+        self.switcher = switcher
+
+        self.setWindowTitle("📊 Statistics & Context Hygiene")
+        self.setMinimumSize(500, 400)
+
+        layout = QVBoxLayout(self)
+
+        # Stats content area with scrollable text
+        self.stats_text = QTextEdit()
+        self.stats_text.setReadOnly(True)
+        self.stats_text.setMaximumHeight(300)
+        layout.addWidget(self.stats_text)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+    def populate_stats(self):
+        from consultant.input_and_macro_handlers import compute_stats, show_stats
+
+        stats = compute_stats(self.state, self.switcher)
+
+        text = f"""📊 [Stats & Context Hygiene]
+   Mode: {self.state.active_mode.upper()}
+   Messages: {len(self.state.messages)} turns
+   Context Used: ~{stats['total_tokens']:,} / {stats['context_window']:,} tokens ({stats['usage_pct']:.1f}%)
+   Headroom Left: ~{stats['headroom']:,} tokens
+
+📦 [Context Breakdown]
+   • Loaded Code / Tool Results : ~{stats['tool_tokens']:,} tokens ({stats['tool_tokens'] / max(1, stats['total_tokens']) * 100:.1f}%)
+   • Conversation History       : ~{stats['chat_tokens']:,} tokens ({stats['chat_tokens'] / max(1, stats['total_tokens']) * 100:.1f}%)
+   • System Instructions        : ~{stats['system_tokens']:,} tokens ({stats['system_tokens'] / max(1, stats['total_tokens']) * 100:.1f}%)"""
+
+        if stats['disk_cache_files']:
+            text += f"\n\n💾 [KV Cache Persistence]"
+            latest_cache = sorted(stats['disk_cache_files'], reverse=True)[0]
+            text += f"\n   • Active Disk Cache : {latest_cache[0]} ({latest_cache[1]:.2f} MB)"
+            text += f"\n   • Total Cache Space : {stats['total_disk_size_mb']:.2f} MB"
+
+        self.stats_text.setText(text)
 
 
 class ConsultantMainWindow(QMainWindow):
@@ -259,6 +305,14 @@ class ConsultantMainWindow(QMainWindow):
         exit_action = file_menu.addAction("E&xit")
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
+
+        # Tools Menu
+        tools_menu = menubar.addMenu("&Tools")
+
+        stats_action = tools_menu.addAction("S&tatistics")
+        stats_action.setShortcut("Ctrl+Shift+S")
+        stats_action.triggered.connect(lambda: self.show_stats_dialog())
+
 
     def open_prepare_file_dialog(self):
         """Opens a file picker dialog to select and run a prepared workflow file."""
@@ -831,3 +885,9 @@ class ConsultantMainWindow(QMainWindow):
                     border-color: #0e639c;
                 }
             """)
+
+    def show_stats_dialog(self):
+        """Opens a modal window displaying statistics and context hygiene info."""
+        dialog = StatsDialog(self.state, self.switcher)
+        dialog.populate_stats()
+        dialog.exec()
