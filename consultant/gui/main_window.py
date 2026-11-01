@@ -351,31 +351,38 @@ class ConsultantMainWindow(QMainWindow):
         if mode not in ["think", "code"]:
             return
 
-        if mode == "think" and self.state.reasoning_model_key is None:
-            escaped_json = json.dumps("⚠️ Reasoning model is not configured. Cannot switch to think mode.")
+        # Set wait cursor during model loading (this is where the work happens)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
+        try:
+            if mode == "think" and self.state.reasoning_model_key is None:
+                escaped_json = json.dumps("⚠️ Reasoning model is not configured. Cannot switch to think mode.")
+                self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
+                # Revert button state back to code
+                self.code_mode_btn.setChecked(True)
+                return
+
+            self.state.active_mode = mode
+            active_model = self.state.reasoning_model_key if mode == "think" else self.state.primary_model_key
+            llm, context_window = self.switcher.load(active_model)
+
+            display_name = MODEL_REGISTRY.get(active_model, {}).get("display_name", active_model)
+            self.setWindowTitle(f"Coding Consultant ({display_name}) - [{mode.upper()} MODE]")
+
+            escaped_json = json.dumps(f"Switched active mode to: {mode} ({display_name})")
             self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
-            # Revert button state back to code
-            self.code_mode_btn.setChecked(True)
-            return
 
-        self.state.active_mode = mode
-        active_model = self.state.reasoning_model_key if mode == "think" else self.state.primary_model_key
-        llm, context_window = self.switcher.load(active_model)
+            footer_text = get_token_footer(self.state.messages, llm, context_window)
+            self.token_status_label.setText(footer_text.strip())
 
-        display_name = MODEL_REGISTRY.get(active_model, {}).get("display_name", active_model)
-        self.setWindowTitle(f"Coding Consultant ({display_name}) - [{mode.upper()} MODE]")
-
-        escaped_json = json.dumps(f"Switched active mode to: {mode} ({display_name})")
-        self.web_view.page().runJavaScript(f"appendSystemMessage({escaped_json});")
-
-        footer_text = get_token_footer(self.state.messages, llm, context_window)
-        self.token_status_label.setText(footer_text.strip())
-
-        # Sync button toggle states visually
-        if mode == "code":
-            self.code_mode_btn.setChecked(True)
-        else:
-            self.think_mode_btn.setChecked(True)
+            # Sync button toggle states visually
+            if mode == "code":
+                self.code_mode_btn.setChecked(True)
+            else:
+                self.think_mode_btn.setChecked(True)
+        finally:
+            # Always restore cursor, even on early returns or errors
+            QApplication.restoreOverrideCursor()
 
     def handle_action(self):
         """Unified handler: acts as Stop if processing, or Send if idle."""
