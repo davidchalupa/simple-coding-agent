@@ -328,6 +328,8 @@ class ConsultantMainWindow(QMainWindow):
 
         # Track processing for cursor feedback & toggle button to Stop
         self._is_processing = True
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
         self._in_prepare_mode = True
         self._new_step_pending = True  # Force first step to create a new box
 
@@ -393,13 +395,15 @@ class ConsultantMainWindow(QMainWindow):
 
     def enterEvent(self, event):
         """Change cursor when entering the main window"""
-        if not self._is_processing and (not self.worker or self.send_button.isEnabled()):
+        # Only restore default cursor if NOT processing OR if in stop mode (user clicked Stop)
+        if not self._is_processing or not self.send_button.isEnabled():
             QApplication.restoreOverrideCursor()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         """Restore cursor when leaving the main window"""
-        if self._is_processing:
+        # Only restore default cursor if NOT processing OR in stop mode
+        if not self._is_processing or not self.send_button.isEnabled():
             QApplication.restoreOverrideCursor()
         super().leaveEvent(event)
 
