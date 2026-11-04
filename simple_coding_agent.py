@@ -8,7 +8,7 @@ from common.input_handler import get_user_prompt
 from common.execute_tool import execute_tool
 from common.guardrail_tools import check_context_guardrail
 from common.output_handler import stream_agent_response
-from common.context_hygiene_utils import render_token_footer
+from common.context_hygiene_utils import render_token_footer, prune_stale_symbol_reads
 from common.display_tools import format_tool_args_for_display
 
 from coding_agent.welcome_banner import display_welcome_banner
@@ -390,6 +390,9 @@ def main(state, execution_state):
                     if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"] and was_mod:
                         agent_flags.awaiting_fix = False
                     print(f"⚙️  Tool execution finished.")
+
+                    # Prune stale symbol reads from history before adding the fresh one ---
+                    prune_stale_symbol_reads(state.messages, tool_name, tool_args)
 
                     # Auxiliary output of the tool_result, useful for debugging
                     MAX_RESULT_PREVIEW = 400
