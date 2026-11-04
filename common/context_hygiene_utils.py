@@ -19,30 +19,56 @@ def render_token_footer(messages, llm, total_budget):
     print(get_token_footer(messages, llm, total_budget))
 
 
-def prune_stale_symbol_reads(messages: list, tool_name: str, tool_args: dict):
+def prune_stale_reads(messages: list, tool_name: str, tool_args: dict, tool_result: str):
     """
-    Supersedes older read_symbol outputs for the exact same symbol name
-    in state.messages to prevent attention dilution and context bloat for small models.
+    Supersedes older read_symbol or full read_file outputs in state.messages
+    to prevent attention dilution and context bloat for small models.
     """
-    if tool_name != "read_symbol":
+    if tool_result.startswith("Error"):
         return
 
-    symbol_name = tool_args.get("symbol_name")
-    filepath = tool_args.get("filepath")
-    if not symbol_name:
-        return
+    if tool_name == "read_symbol":
+        symbol_name = tool_args.get("symbol_name")
+        filepath = tool_args.get("filepath")
+        if not symbol_name:
+            return
 
-    for msg in messages:
-        if msg.get("role") == "user" and "Tool Execution Result:" in msg.get("content", ""):
-            content = msg["content"]
-            # Match the standard read_symbol header format
-            if f"Symbol: '{symbol_name}'" in content or f'Symbol: "{symbol_name}"' in content:
-                # If filepath is provided, ensure it matches the same file
-                if filepath and os.path.basename(filepath) not in content:
-                    continue
+        for msg in messages:
+            if msg.get("role") == "user" and "Tool Execution Result:" in msg.get("content", ""):
+                content = msg["content"]
+                if f"Symbol: '{symbol_name}'" in content or f'Symbol: "{symbol_name}"' in content:
+                    if filepath and os.path.basename(filepath) not in content:
+                        continue
+                    msg["content"] = (
+                        f"Tool Execution Result:\n"
+                        f"[Superseded: A newer read_symbol for '{symbol_name}' was performed later "
+                        f"in this session. Full content omitted to save context.]"
+                    )
 
-                msg["content"] = (
-                    f"Tool Execution Result:\n"
-                    f"[Superseded: A newer read_symbol for '{symbol_name}' was performed later "
-                    f"in this session. Full content omitted to save context.]"
-                )
+    elif tool_name == "read_file":
+        filepath = tool_args.get("filepath")
+        max_lines = tool_args.get("max_lines", 100)
+        if not filepath:
+            return
+
+        # Only prune on full/broad file reads (max_lines == -1) to preserve sequential chunk reading
+        try:
+            is_full_read = int(max_lines) == -1
+        except (ValueError, TypeError):
+            is_full_read = False
+
+        if not is_full_read:
+            return
+
+        filename = os.path.basename(filepath)
+
+        for msg in messages:
+            if msg.get("role") == "user" and "Tool Execution Result:" in msg.get("content", ""):
+                content = msg["content"]
+                # Match the read_file header or content block for this specific file
+                if f"--- File: {filepath}" in content or f"--- File: {filename}" in content:
+                    msg["content"] = (
+                        f"Tool Execution Result:\n"
+                        f"[Superseded: A newer full read_file for '{filename}' was performed later "
+                        f"in this session. Full content omitted to save context.]"
+                    )

@@ -39,7 +39,10 @@ def read_file(filepath, start_line=1, max_lines=100):
         if total_lines > end_idx:
             content += f"\n\n... [TRUNCATED: Lines {end_idx + 1} to {total_lines} remain. Use read_file with start_line={end_idx + 1} if needed] ..."
 
-        return content
+        # --- ADDED: Consistent header for identification and hygiene ---
+        header = f"--- File: {filepath} | Lines {start_idx + 1}-{end_idx} of {total_lines} ---\n"
+
+        return header + content
     except Exception as e:
         return f"Error reading file: {e}"
 

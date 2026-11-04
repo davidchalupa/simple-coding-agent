@@ -50,3 +50,30 @@ def test_agent_load_file_into_context():
         max_calls_limit=30,
         agent_output_validator=check_tool_call,
     )
+
+
+def test_agent_load_file_into_context_twice():
+    """
+    Serves as a test reproducing the behavior for context hygiene utility prune_stale_symbol_reads whether
+    the repeated tool call does not bloat the context.
+    """
+    target_file = "coding_consultant.py"
+
+    input_queue = [
+        "Load `coding_consultant.py` into context. ",
+        "/send",
+
+        "Load `coding_consultant.py` into context. ",
+        "/send",
+
+        "/quit"
+    ]
+
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        zip_file_path=None,  # We are hooking into the directory copy directly!
+        repo_name="simple-coding-agent",
+        setup_sandbox_hook=prepare_self_repo_sandbox,
+        target_file_path=target_file,
+        max_calls_limit=30,
+    )
