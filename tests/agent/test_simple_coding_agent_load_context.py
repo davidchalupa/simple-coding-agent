@@ -20,13 +20,13 @@ def prepare_self_repo_sandbox(target_dir):
 
 
 def test_agent_load_file_into_context():
-    def check_regurgitation(stdout: str):
+    def check_tool_call(stdout: str):
         """
-        We must verify the agent didn't just dump code.
-        If the agent's output contained a markdown block with 'class Minesweeper', it failed to follow instructions properly.
+        We must verify the agent didn't just spill out some generic instructions on how to load into context
+        instead of issuing the real tool call.
         """
-        if "```python" in stdout:
-            raise AssertionError("FAIL: Agent regurgitated source code instead of performing the requested action.")
+        if "read_file" not in stdout:
+            raise AssertionError("FAIL: Agent did not issue a `read_file` tool call.")
 
     """
     Serves as a guard test for a behavior when the LLM sometimes misunderstands and just recites some Minesweeper code.
@@ -34,7 +34,8 @@ def test_agent_load_file_into_context():
     target_file = "coding_consultant.py"
 
     input_queue = [
-        "Load `coding_consultant.py` into context. ",
+        "load simple_coding_agent.py into context",
+        # "Load `coding_consultant.py` into context. ",
         "/send",
 
         "/quit"
@@ -47,5 +48,5 @@ def test_agent_load_file_into_context():
         setup_sandbox_hook=prepare_self_repo_sandbox,
         target_file_path=target_file,
         max_calls_limit=30,
-        agent_output_validator=check_regurgitation,
+        agent_output_validator=check_tool_call,
     )
