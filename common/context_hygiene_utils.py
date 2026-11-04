@@ -44,6 +44,7 @@ def prune_stale_reads(messages: list, tool_name: str, tool_args: dict, tool_resu
                         f"[Superseded: A newer read_symbol for '{symbol_name}' was performed later "
                         f"in this session. Full content omitted to save context.]"
                     )
+                    print(f"🧹 [Context Hygiene] Superseded stale read_symbol for '{symbol_name}'")
 
     elif tool_name == "read_file":
         filepath = tool_args.get("filepath")
@@ -51,7 +52,6 @@ def prune_stale_reads(messages: list, tool_name: str, tool_args: dict, tool_resu
         if not filepath:
             return
 
-        # Only prune on full/broad file reads (max_lines == -1) to preserve sequential chunk reading
         try:
             is_full_read = int(max_lines) == -1
         except (ValueError, TypeError):
@@ -65,10 +65,10 @@ def prune_stale_reads(messages: list, tool_name: str, tool_args: dict, tool_resu
         for msg in messages:
             if msg.get("role") == "user" and "Tool Execution Result:" in msg.get("content", ""):
                 content = msg["content"]
-                # Match the read_file header or content block for this specific file
                 if f"--- File: {filepath}" in content or f"--- File: {filename}" in content:
                     msg["content"] = (
                         f"Tool Execution Result:\n"
                         f"[Superseded: A newer full read_file for '{filename}' was performed later "
                         f"in this session. Full content omitted to save context.]"
                     )
+                    print(f"🧹 [Context Hygiene] Superseded stale full read_file for '{filename}'")

@@ -54,10 +54,15 @@ def test_agent_load_file_into_context():
 
 def test_agent_load_file_into_context_twice():
     """
-    Serves as a test reproducing the behavior for context hygiene utility prune_stale_symbol_reads whether
-    the repeated tool call does not bloat the context.
+    Serves as a test reproducing the behavior for context hygiene utility prune_stale_reads whether
+    the repeated tool call does not bloat the context, and validates that hygiene kicked in.
     """
     target_file = "coding_consultant.py"
+
+    def check_hygiene_triggered(stdout: str):
+        """Callback to assert that the context hygiene pruner successfully fired on the second read."""
+        if "[Context Hygiene]" not in stdout:
+            raise AssertionError("FAIL: Context hygiene pruner did not trigger on the second full-file read.")
 
     input_queue = [
         "Load `coding_consultant.py` into context. ",
@@ -76,4 +81,5 @@ def test_agent_load_file_into_context_twice():
         setup_sandbox_hook=prepare_self_repo_sandbox,
         target_file_path=target_file,
         max_calls_limit=30,
+        agent_output_validator=check_hygiene_triggered,
     )
