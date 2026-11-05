@@ -165,3 +165,105 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal_les
         script_output_validator=check_benchmark_success_rates,
         max_calls_limit=60
     )
+
+def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal_goal_oriented():
+    """
+    Works on minesweeper-solve-with-changes.zip that already has required changes in minesweeper.py.
+    Further ablation: Consolidates instructions into a high-level engineering specification
+    while preserving import stability for 7B models.
+    """
+    zip_target = "test_data/minesweeper-solve-with-changes.zip"
+    repo_name = "minesweeper-solve"
+
+    input_queue = [
+        "Use the `list_tree` tool to view the project structure and locate all relevant Python files.",
+        "/send",
+
+        "Inspect `minesweeper.py` using your `read_file` tool. "
+        "CRITICAL: Set `start_line: 1` and `max_lines: -1` so you read the entire file.",
+        "/send",
+
+        "Based on the repository files, write a standalone script named `benchmark.py` to evaluate and compare the rule-based agent and the DFS agent. "
+        "CRITICAL GUIDELINES:\n"
+        "1. Import the necessary engine functions (`place_mines`, `compute_counts`, `handle_click`, `run_game_loop`, `board_size`) from `minesweeper.py` "
+        "and the agent action callbacks (`ai_get_action`, `dfs_get_action`) from `action_ai_agent.py`.\n"
+        "2. Run exactly 10 automated games per agent sequentially when executed directly. Do not use `argparse`, interactive inputs, or manual prompts.\n"
+        "3. Compute and print each agent's final results clearly using an 'X/10 games won' format.\n"
+        "\n"
+        "Just output the python code in a standard ```python markdown block. "
+        "DO NOT use the `write_file` tool yet.",
+        "/send",
+
+        "Now save the code you just generated into `benchmark.py` using the `write_file` tool. "
+        "Do not output the code again. "
+        "Do not use a <payload> block. "
+        "Use the normal write_file JSON format with the complete code in the `content` field.",
+        "/send",
+
+        "Looks good, task complete.",
+        "/send",
+
+        "/quit"
+    ]
+
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        zip_file_path=zip_target,
+        repo_name=repo_name,
+        expected_file="benchmark.py",
+        run_script_file="benchmark.py",
+        expected_keywords=["import"],
+        script_output_validator=check_benchmark_success_rates,
+        max_calls_limit=60
+    )
+
+
+def test_agent_minesweeper_stats_write_script_read_main_only_premade_no_explicit_imports():
+    """
+    Works on minesweeper-solve-with-changes.zip that already has required changes in minesweeper.py.
+    Further ablation: Removes explicit function name lists from imports, relying on
+    the model's context from the file read step.
+    """
+    zip_target = "test_data/minesweeper-solve-with-changes.zip"
+    repo_name = "minesweeper-solve"
+
+    input_queue = [
+        "Use the `list_tree` tool to view the project structure and locate all relevant Python files.",
+        "/send",
+
+        "Inspect `minesweeper.py` using your `read_file` tool. "
+        "CRITICAL: Set `start_line: 1` and `max_lines: -1` so you read the entire file.",
+        "/send",
+
+        "Based on the repository files you just inspected, write a standalone script named `benchmark.py` to evaluate the rule-based and DFS agents. "
+        "Requirements:\n"
+        "1. Import all required game engine functions from `minesweeper.py` and agent action callbacks from `action_ai_agent.py`.\n"
+        "2. Automatically run exactly 10 non-interactive games per agent sequentially when executed directly (no `argparse` or manual prompt inputs).\n"
+        "3. Print each agent's final results strictly in the 'X/10 games won' format.\n"
+        "\n"
+        "Just output the python code in a standard ```python markdown block. "
+        "DO NOT use the `write_file` tool yet.",
+        "/send",
+
+        "Now save the code you just generated into `benchmark.py` using the `write_file` tool. "
+        "Do not output the code again. "
+        "Do not use a <payload> block. "
+        "Use the normal write_file JSON format with the complete code in the `content` field.",
+        "/send",
+
+        "Looks good, task complete.",
+        "/send",
+
+        "/quit"
+    ]
+
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        zip_file_path=zip_target,
+        repo_name=repo_name,
+        expected_file="benchmark.py",
+        run_script_file="benchmark.py",
+        expected_keywords=["import"],
+        script_output_validator=check_benchmark_success_rates,
+        max_calls_limit=60
+    )
