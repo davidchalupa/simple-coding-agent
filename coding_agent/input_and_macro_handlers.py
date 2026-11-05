@@ -11,6 +11,9 @@ from coding_agent.guardrails.tools import verify_sandbox_health
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import split_tools
 
+# ToDo: refactor to common instead of consultant
+from consultant.guardrail_tools import is_pure_load_request
+
 
 def handle_user_input(state, user_input, system_prompt):
     if user_input == "/quit":
@@ -30,6 +33,21 @@ def handle_user_input(state, user_input, system_prompt):
 
     if not user_input:
         return True
+
+    # Add nudge for pure load requests
+    if is_pure_load_request(user_input):
+        # ToDo: refactor to use the same nudge in both agent and consultant
+        state.messages.append({
+            "role": "user",
+            "content": (
+                f"System Alert: Pure file loading request detected.\n\n"
+                f"User said: '{user_input}'\n\n"
+                "You MUST use `read_file` or `read_symbol` tool to load this content. \n"
+                "- For entire files: Use read_file with filepath and max_lines=-1\n"
+                "- For specific symbols/functions: Use read_symbol with filepath and symbol_name\n"
+                f"\nDO NOT output generic instructions like 'I can help you...' without first making a tool call."
+            )
+        })
 
     return False
 
