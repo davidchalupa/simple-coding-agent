@@ -1,7 +1,11 @@
 
 # Simple Coding Agent & Consultant
 
-A local, self-contained AI coding assistant suite designed for privacy-first development. It leverages lightweight Large Language Models (LLMs) to assist with code generation, refactoring, testing, and documentation without requiring cloud infrastructure or even an internet connection. The system consists of two distinct tools: the **Simple Coding Agent** (for writing/editing code) and the **Read-Only Coding Consultant** (for analyzing existing codebases).
+A local, self-contained AI coding assistant suite designed for privacy-first development. It leverages lightweight Large Language Models (LLMs) to assist with code generation, refactoring, testing, and documentation without requiring cloud infrastructure or even an internet connection.
+
+The system consists of two distinct tools:
+*   **Simple Coding Agent**: A local tool for writing/editing code - great for algorithms, Leetcode-style exercises, unit test writing, README generation or localized code edits.
+*   **Read-Only Coding Consultant**: A read-only local coding assistant - great for analyzing repositories, debugging, processing of logs or multi-file refactoring.
 
 ## 🌟 Project Overview
 
@@ -9,7 +13,8 @@ The project provides a robust environment for local AI-assisted software develop
 
 ### Core Components
 1.  **Simple Coding Agent (`simple_coding_agent.py`)**: An interactive coding assistant capable of generating code, modifying files safely using guardrails and self-verification, refactoring monolithic code via AST analysis, and automating test generation.
-2.  **Read-Only Coding Consultant (`coding_consultant.py`)**: A diagnostic tool designed for analyzing existing repositories. It retrieves context (files, symbols) to answer questions or generate documentation without modifying the source code.
+2.  **Read-Only Coding Consultant (`coding_consultant.py`)**: A tool designed for analyzing existing repositories and consulting on changes in them. It retrieves context (files, symbols) to answer questions or generate documentation without modifying the source code.
+3.  **Read-Only Coding Consultant GUI (`coding_consultant_gui.py`)**: A GUI application for the coding consultant, featuring a chat UI with syntax highlighting, possibility to copy code snippets, mode switching (Code/Think), and prepared workflow execution and saving. Provides an IDE-like experience for AI-assisted human-in-the-loop coding.
 
 ## 🛠️ Installation
 
