@@ -132,14 +132,13 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal_les
         "/send",
 
         "Based on the repository files, write a script named `benchmark.py` that evaluates the rule-based agent and the DFS agent. "
-        "CRITICAL CONSTRAINTS:\n"
-        "1. Keep the implementation minimalistic, self-contained, and ensure all used symbols are properly imported or defined.\n"
-        "2. Do NOT redefine existing game engine classes/functions; import and utilize them directly from the project modules.\n"
-        "3. Do NOT use `argparse` or require command-line arguments.\n"
-        "4. When executed directly, automatically run exactly 10 games for the Rule-based agent and exactly 10 games for the DFS agent sequentially.\n"
-        "5. Ensure the first click logic is handled correctly and safely per game initialization.\n"
-        "6. Calculate and print their success rates, including the result for each agent strictly in the format 'X/10 games won' (e.g., '7/10 games won').\n"
-        "7. Avoid interactive launchers or UI callbacks; pass the appropriate action callbacks directly to the game loop.\n"
+        "CRITICAL REQUIREMENTS:\n"
+        "1. Import `place_mines`, `compute_counts`, `handle_click`, `run_game_loop`, and `board_size` from `minesweeper.py`, "
+        "and import `ai_get_action` and `dfs_get_action` from `action_ai_agent.py`.\n"
+        "2. Do NOT use `argparse`, interactive inputs, or `prompt_first_click`. Programmatically compute the first click ONCE per game "
+        "using `first_r, first_c = random.randrange(board_size), random.randrange(board_size)` and pass that same pair to `place_mines` and `handle_click`.\n"
+        "3. Automatically run exactly 10 games for the Rule-based agent and exactly 10 games for the DFS agent sequentially when executed directly.\n"
+        "4. Calculate and print the results for each agent strictly matching the format 'X/10 games won' (e.g., '7/10 games won').\n"
         "\n"
         "Just output the python code in a standard ```python markdown block. "
         "DO NOT use the `write_file` tool yet.",
