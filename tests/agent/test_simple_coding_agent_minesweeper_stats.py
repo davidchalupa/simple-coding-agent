@@ -123,11 +123,10 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal_les
     repo_name = "minesweeper-solve"
 
     input_queue = [
-        "Use the `list_tree` tool to view the project structure and locate all relevant Python files "
-        "(including game logic and agent implementations).",
+        "Use the `list_tree` tool to view the project structure and locate all relevant Python files.",
         "/send",
 
-        "Inspect the main game file using your `read_file` tool. "
+        "Inspect `minesweeper.py` using your `read_file` tool. "
         "CRITICAL: Set `start_line: 1` and `max_lines: -1` so you read the entire file.",
         "/send",
 
@@ -135,8 +134,8 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal_les
         "CRITICAL REQUIREMENTS:\n"
         "1. Import `place_mines`, `compute_counts`, `handle_click`, `run_game_loop`, and `board_size` from `minesweeper.py`, "
         "and import `ai_get_action` and `dfs_get_action` from `action_ai_agent.py`.\n"
-        "2. Do NOT use `argparse`, interactive inputs, or `prompt_first_click`. Programmatically compute the first click ONCE per game "
-        "using `first_r, first_c = random.randrange(board_size), random.randrange(board_size)` and pass that same pair to `place_mines` and `handle_click`.\n"
+        "2. Do NOT use `argparse`, interactive inputs, or `prompt_first_click`. Programmatically generate and pass consistent first-click "
+        "coordinates for board initialization and initial handling per game.\n"
         "3. Automatically run exactly 10 games for the Rule-based agent and exactly 10 games for the DFS agent sequentially when executed directly.\n"
         "4. Calculate and print the results for each agent strictly matching the format 'X/10 games won' (e.g., '7/10 games won').\n"
         "\n"
