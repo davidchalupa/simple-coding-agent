@@ -1,11 +1,11 @@
 import os
 import json
 import time
-from common.guardrail_tools import check_context_guardrail
+from common.guardrail_tools import check_context_guardrail, is_pure_load_request
 from common.output_handler import stream_agent_response
 from consultant.tool_parser import extract_tool_requests
 from consultant.tool_processor import process_tool_requests
-from consultant.guardrail_tools import sanitize_response, is_pure_load_request
+from consultant.guardrail_tools import sanitize_response
 
 MAX_ANSWERING_VIOLATIONS_PER_TURN = 3
 

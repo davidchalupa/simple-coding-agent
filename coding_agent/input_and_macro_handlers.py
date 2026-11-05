@@ -3,6 +3,7 @@ import os
 import shutil
 
 from common.tool_definitions import read_file
+from common.guardrail_tools import is_pure_load_request
 
 from coding_agent.native_helpers import (get_repo_structure, generate_requirements_native, gather_deep_context,
                                          gather_deep_context_ast)
@@ -10,9 +11,6 @@ from coding_agent.native_helpers import (get_repo_structure, generate_requiremen
 from coding_agent.guardrails.tools import verify_sandbox_health
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import split_tools
-
-# ToDo: refactor to common instead of consultant
-from consultant.guardrail_tools import is_pure_load_request
 
 
 def handle_user_input(state, user_input, system_prompt):
@@ -36,7 +34,6 @@ def handle_user_input(state, user_input, system_prompt):
 
     # Add nudge for pure load requests
     if is_pure_load_request(user_input):
-        # ToDo: refactor to use the same nudge in both agent and consultant
         state.messages.append({
             "role": "user",
             "content": (

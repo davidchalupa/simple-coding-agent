@@ -77,30 +77,6 @@ def sanitize_response(response_content: str) -> str:
     return cleaned.strip()
 
 
-BACKTICK_SPAN_RE = re.compile(r'`[^`]*`')
-
-
-def is_pure_load_request(user_input: str) -> bool:
-    """Checks if the user prompt is strictly requesting to load/read context without asking a task."""
-    # Strip backtick-quoted spans (filenames, symbols, paths) before keyword
-    # matching. Otherwise a quoted identifier that happens to contain a task
-    # word — e.g. `test_..._refactor.py` — falsely triggers the task-keyword
-    # check and misclassifies a plain load request as a task request, which
-    # then tells the model to "provide the complete solution directly" and
-    # it dumps the whole file back instead of just acknowledging the load.
-    stripped = BACKTICK_SPAN_RE.sub(' ', user_input)
-    lowered = stripped.strip().lower()
-    load_keywords = ("load ", "read ", "bring ", "fetch ", "show ")
-    task_keywords = ("how", "why", "change", "refactor", "modify", "add", "fix", "update", "draft", "write", "create",
-                     "implement", "start")
-
-    is_load_cmd = any(lowered.startswith(kw) or f" {kw}" in lowered for kw in load_keywords) or (
-        "into context" in lowered)
-    has_task_cmd = any(kw in lowered for kw in task_keywords) or "?" in lowered
-
-    return is_load_cmd and not has_task_cmd
-
-
 # NOTE: max_output_tokens below must track the max_tokens value passed to
 # create_chat_completion() in common/output_handler.py's stream_agent_response
 # — the output budget shares the same context window as the input on

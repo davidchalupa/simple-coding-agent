@@ -66,3 +66,27 @@ def check_context_guardrail(messages, llm, limit):
                 f"\n⚠️  [MEMORY WARNING]: Approaching context limit ({tokens}/{limit} tokens, {(tokens / limit) * 100:.1f}%).")
     except Exception:
         pass
+
+
+BACKTICK_SPAN_RE = re.compile(r'`[^`]*`')
+
+
+def is_pure_load_request(user_input: str) -> bool:
+    """Checks if the user prompt is strictly requesting to load/read context without asking a task."""
+    # Strip backtick-quoted spans (filenames, symbols, paths) before keyword
+    # matching. Otherwise a quoted identifier that happens to contain a task
+    # word — e.g. `test_..._refactor.py` — falsely triggers the task-keyword
+    # check and misclassifies a plain load request as a task request, which
+    # then tells the model to "provide the complete solution directly" and
+    # it dumps the whole file back instead of just acknowledging the load.
+    stripped = BACKTICK_SPAN_RE.sub(' ', user_input)
+    lowered = stripped.strip().lower()
+    load_keywords = ("load ", "read ", "bring ", "fetch ", "show ")
+    task_keywords = ("how", "why", "change", "refactor", "modify", "add", "fix", "update", "draft", "write", "create",
+                     "implement", "start")
+
+    is_load_cmd = any(lowered.startswith(kw) or f" {kw}" in lowered for kw in load_keywords) or (
+        "into context" in lowered)
+    has_task_cmd = any(kw in lowered for kw in task_keywords) or "?" in lowered
+
+    return is_load_cmd and not has_task_cmd
