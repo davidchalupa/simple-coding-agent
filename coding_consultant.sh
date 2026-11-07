@@ -1,4 +1,9 @@
 #!/bin/bash
-#export PYTHONPATH=$(pwd)
-source .venv/bin/activate
-python coding_consultant.py --model qwen2.5-7b-q5km --reasoning-model qwen3.5-9b
+
+# location of this script (for activation of .venv from elsewhere)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# export PYTHONPATH="$SCRIPT_DIR"
+
+source "$SCRIPT_DIR/.venv/bin/activate"
+python "$SCRIPT_DIR/coding_consultant.py" --model qwen2.5-7b-q5km --reasoning-model qwen3.5-9b
