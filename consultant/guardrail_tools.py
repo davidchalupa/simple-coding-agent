@@ -3,6 +3,30 @@ import re
 import ast
 
 
+def _is_valid_tool_name(name):
+    """General rules to filter out natural language/game content"""
+    # ToDo: maybe not needed, a heuristic for likely a legitimate json output (can also have "name" field)
+    # Rule 1: Reject multi-word names with spaces (real tools are single/hyphenated words)
+    if ' ' in name and len(name.split()) > 2:
+        return False
+
+    # Rule 2: Reject names starting with articles/prepositions
+    lower_name = name.lower()
+    article_patterns = ['^the ', '^a ', 'an ', '^of ', '^in ']
+    if any(lower_name.startswith(p) for p in article_patterns):
+        return False
+
+    # Rule 3: Reject names ending with sentence punctuation (colons, periods, etc.)
+    if re.search(r'[.!?;:]$', name):
+        return False
+
+    # Rule 4: Reject names that look like phrases/sentences
+    phrase_indicators = ['is ', 'are ', 'has ', 'have ']
+    if any(indicator in lower_name for indicator in phrase_indicators):
+        return False
+
+    return True
+
 def fuzzy_extract_tool_calls(text):
     """
     Hunts for any valid JSON object containing 'name' and 'args',
@@ -46,12 +70,18 @@ def fuzzy_extract_tool_calls(text):
                             # Try standard JSON first
                             parsed = json.loads(json_str)
                             if "name" in parsed:
+                                if "args" not in parsed:
+                                    # ToDo: maybe add a warning - this likely means that it's not a tool call
+                                    continue
                                 tools.append(parsed)
                         except json.JSONDecodeError:
                             # Fallback: Model used single quotes or trailing commas
                             try:
                                 parsed = ast.literal_eval(json_str)
                                 if isinstance(parsed, dict) and "name" in parsed:
+                                    if "args" not in parsed:
+                                        # ToDo: maybe add a warning - this likely means that it's not a tool call
+                                        continue
                                     tools.append(parsed)
                             except (ValueError, SyntaxError):
                                 pass
