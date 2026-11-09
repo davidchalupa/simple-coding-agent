@@ -61,7 +61,7 @@ def test_agent_modify_invcalc_append_bottom():
 
     input_queue = [
         # --- Turn 1: Copy File ---
-        f"Copy '{target_file}' to '{output_file}' using `run_cmd` and `cp` command.",
+        f"Copy '{target_file}' to '{output_file}'.",
         "/send",
 
         # --- Turn 2: Context & Source Inspection ---
@@ -99,7 +99,7 @@ def test_agent_modify_invcalc_append_mid_file():
 
     input_queue = [
         # --- Turn 1: Copy File ---
-        f"Copy '{target_file}' to '{output_file}' using `run_cmd` and `cp` command.",
+        f"Copy '{target_file}' to '{output_file}'.",
         "/send",
 
         # --- Turn 2: Context & Source Inspection ---
@@ -142,7 +142,7 @@ def test_agent_modify_invcalc_append_and_update():
 
     input_queue = [
         # --- Turn 1: Copy File ---
-        f"Copy '{target_file}' to '{output_file}' using `run_cmd` and `cp` command.",
+        f"Copy '{target_file}' to '{output_file}'.",
         "/send",
 
         # --- Turn 2: Context & Source Inspection ---

@@ -12,6 +12,17 @@ from coding_agent.guardrails.tools import verify_sandbox_health
 from coding_agent import hidden_readme_prompt_builder
 from coding_agent import split_tools
 
+def is_file_copy_request(user_input):
+    """
+    Detects if the user is asking to copy or duplicate a file (e.g., 'copy a.py to b.py').
+    """
+    text = user_input.lower()
+    # Matches patterns like 'copy X to Y', 'duplicate X as Y', 'back up X to Y'
+    copy_keywords = ["copy ", "duplicate ", "backup ", "back up "]
+    has_keyword = any(keyword in text for keyword in copy_keywords)
+    has_target = " to " in text or " as " in text
+    return has_keyword and has_target
+
 
 def handle_user_input(state, user_input, system_prompt):
     if user_input == "/quit":
@@ -45,6 +56,25 @@ def handle_user_input(state, user_input, system_prompt):
                 f"\nDO NOT output generic instructions like 'I can help you...' without first making a tool call."
             )
         })
+
+    if is_file_copy_request(user_input):
+        state.messages.append({
+            "role": "user",
+            "content": (
+                f"System Alert: File copy/duplication request detected.\n\n"
+                f"User said: '{user_input}'\n\n"
+                "You MUST use the `run_cmd` tool to perform this file copy operation.\n"
+                "CRITICAL: The `args` field MUST be a JSON object containing a `command` key. Never pass `args` as a raw string.\n\n"
+                "Correct format example:\n"
+                '```json\n'
+                '{"name": "run_cmd", "args": {"command": "python -c \\"import shutil; shutil.copy(\'test_data/invcalc.py\', \'test_data/invcalc_extended.py\')\\""}}\n'
+                '```\n\n'
+                "Use Python (`python -c \"import shutil; shutil.copy(...)\"`) for cross-platform reliability across Windows, macOS, and Linux."
+            )
+        })
+        return False
+
+    return False
 
     return False
 
