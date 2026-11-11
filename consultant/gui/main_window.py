@@ -60,6 +60,23 @@ class StatsDialog(QDialog):
         self.stats_text.setText(text)
 
 
+def get_version():
+    try:
+        from pathlib import Path
+
+        script_dir = Path(__file__).resolve().parent
+        repo_root = script_dir.parent.parent
+
+        version_file_path = repo_root / "VERSION"
+        if version_file_path.exists():
+            with open(version_file_path, 'r') as f:
+                return f.read().strip()
+        else:
+            return "unknown"
+    except Exception:
+        return "unknown"
+
+
 class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -70,10 +87,10 @@ class AboutDialog(QDialog):
 
         # Logo/Icon area (optional - can use QLabel with pixmap or just text)
         logo_label = QLabel()
-        logo_label.setText("""
+        logo_label.setText(f"""
 🤖
 Coding Consultant
-Version 0.1.0
+Version {get_version()}
         """)
         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo_label.setStyleSheet("font-size: 24px; font-weight: bold; padding: 10px; color: #606040;")
