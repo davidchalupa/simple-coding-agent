@@ -60,6 +60,47 @@ class StatsDialog(QDialog):
         self.stats_text.setText(text)
 
 
+class AboutDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("About Coding Consultant")
+        self.setMinimumSize(400, 250)
+
+        layout = QVBoxLayout(self)
+
+        # Logo/Icon area (optional - can use QLabel with pixmap or just text)
+        logo_label = QLabel()
+        logo_label.setText("""
+🤖
+Coding Consultant
+Version 0.1.0
+        """)
+        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo_label.setStyleSheet("font-size: 24px; font-weight: bold; padding: 10px; color: #606040;")
+        layout.addWidget(logo_label)
+
+        # Description text
+        desc_text = QLabel("""
+            <b>Features:</b><br/>
+            • Read-only code analysis and support for code modifications<br/>
+            • Multi-model support (Code & Think modes)<br/>
+            • Workflow preparation and replay<br/><br/>
+        David Chalupa, 2026
+        """)
+        desc_text.setWordWrap(True)
+        desc_text.setStyleSheet("font-size: 12px; color: #858585; padding: 0 10px;")
+        layout.addWidget(desc_text)
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+    def show_about_dialog(self):
+        """Opens the About dialog."""
+        dialog = AboutDialog(self)
+        dialog.exec()
+
 class ConsultantMainWindow(QMainWindow):
     def __init__(self, state):
         super().__init__()
@@ -312,6 +353,12 @@ class ConsultantMainWindow(QMainWindow):
         stats_action = tools_menu.addAction("S&tatistics")
         stats_action.setShortcut("Ctrl+Shift+S")
         stats_action.triggered.connect(lambda: self.show_stats_dialog())
+
+        help_menu = menubar.addMenu("&Help")
+
+        about_action = help_menu.addAction("&About...")
+        about_action.setShortcut("F1")
+        about_action.triggered.connect(lambda: self.show_about_dialog())
 
 
     def open_prepare_file_dialog(self):
@@ -890,4 +937,8 @@ class ConsultantMainWindow(QMainWindow):
         """Opens a modal window displaying statistics and context hygiene info."""
         dialog = StatsDialog(self.state, self.switcher)
         dialog.populate_stats()
+        dialog.exec()
+
+    def show_about_dialog(self):
+        dialog = AboutDialog()
         dialog.exec()
