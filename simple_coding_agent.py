@@ -16,6 +16,7 @@ from coding_agent import system_prompt_builder_light, system_prompt_builder
 from coding_agent.guardrails.tools import (check_and_handle_unread_replace_lines, check_and_handle_drastic_shrinkage,
                                            check_and_handle_identical_write, check_and_handle_loop_guardrail)
 from coding_agent.guardrails.self_verification import handle_self_verification_and_healing
+from coding_agent.guardrails.detectors import should_route_to_reasoner
 from coding_agent.input_and_macro_handlers import (handle_user_input, handle_macros, handle_ast_extraction_interception,
                                                    handle_sandbox_guardrail)
 from coding_agent.guardrail_and_verification_handlers import (handle_automated_follow_up, handle_empty_generation,
@@ -114,6 +115,11 @@ def main(state, execution_state):
 
         if handle_macros(user_input, state, execution_state, system_prompt, context_window):
             continue
+
+        # === ROUTING HEURISTIC & MODEL SWITCHING ===
+        use_reasoner, routing_reason = should_route_to_reasoner(user_input)
+        model_target = "🧠 REASONER (Qwen 3.5 9B)" if use_reasoner else f"💻 CODER ({state.loaded_model_name})"
+        print(f"\n🧭 [Router Debug] Decision: {model_target} | Reason: {routing_reason}")
 
         # Standard execution or continuation of sandbox mode
         state.messages.append({"role": "user", "content": user_input})
