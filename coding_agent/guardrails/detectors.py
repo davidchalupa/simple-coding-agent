@@ -10,7 +10,7 @@ def should_route_to_reasoner(prompt: str) -> tuple[bool, str]:
         2. Architectural / structural refactoring intent.
         3. Vague umbrella requests (Test 4 pattern).
         4. Open-ended design / conceptual questions.
-        5. Complex test suite creation, stateful mocking, and fixtures (New Gap Fix).
+        5. Complex test suite creation, stateful mocking, and fixtures.
     """
     prompt_lower = prompt.lower()
 
@@ -40,7 +40,7 @@ def should_route_to_reasoner(prompt: str) -> tuple[bool, str]:
     is_open_ended_question = bool(
         re.search(r'^(why does|how should|what is the best way to|explain how)', prompt_lower.strip()))
 
-    # E. Test suite creation, stateful mocking, or fixture orchestration (fixes the 7B-Coder test-flaking gap)
+    # E. Test suite creation, stateful mocking, or fixture orchestration
     has_test_generation_intent = bool(re.search(
         r'(write a test file|test suite|unittest|mock|side_effect|magicmock|test cases?|test_run_game_loop)',
         prompt_lower
@@ -60,8 +60,8 @@ def should_route_to_reasoner(prompt: str) -> tuple[bool, str]:
     if is_open_ended_question:
         return True, "Reasoner Trigger: Open-ended design or conceptual question."
 
-        if has_test_generation_intent:
-            return True, "Reasoner Trigger: Complex test suite writing, mocking, or fixture orchestration detected."
+    if has_test_generation_intent:
+        return True, "Reasoner Trigger: Complex test suite writing, mocking, or fixture orchestration detected."
 
     # --- 3. DEFAULT (Route to 7B-Coder) ---
     return False, "Default: High-density, compiler-friendly prompt; routing to 7B-Coder for speed."
