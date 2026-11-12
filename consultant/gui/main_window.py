@@ -834,15 +834,17 @@ class ConsultantMainWindow(QMainWindow):
             self.worker.stop()
             self.worker.wait(1000)
 
+        # Check if we're finalizing a partial assistant message
+        if self.state.messages and self.state.messages[-1]["role"] == "assistant":
+            error_text = "⚠️ Response stopped by user"
+            escaped_json = json.dumps(error_text)
+            self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
+
         QApplication.restoreOverrideCursor()
         self.send_button.setEnabled(True)
         self.set_action_button_state(is_stop=False)
         self._is_processing = False
         self._in_prepare_mode = False
-
-        error_text = "⚠️ Response stopped by user"
-        escaped_json = json.dumps(error_text)
-        self.web_view.page().runJavaScript(f"finalizeAssistantMessage({escaped_json});")
 
     def on_turn_finished(self, _):
         if self._is_processing and not self._in_prepare_mode:
