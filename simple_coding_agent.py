@@ -24,6 +24,8 @@ from coding_agent.guardrail_and_verification_handlers import (handle_automated_f
                                                               validate_tool_call, handle_literal_ellipsis_anchor,
                                                               handle_content_recovery, handle_memory_regurgitation_on_read,
                                                               manage_tool_response)
+from consultant.model_switcher import ModelSwitcher
+
 from coding_agent.types import TurnStatus
 from coding_agent import payload_parser
 
@@ -42,6 +44,11 @@ class AgentState:
         # Falls back to False if the CLI arg parser doesn't define it yet.
         self.track_guardrail_hits = parsed_args.get("track_guardrail_hits", True)
         self.light_system_prompt = parsed_args["light_system_prompt"]
+
+        # === Support for primary and reasoning models ===
+        self.primary_model_key = parsed_args["model"]
+        self.reasoning_model_key = parsed_args["reasoning_model"]
+        self.models_dir = Path(__file__).resolve().parent / "models"
 
         self.active_config = MODEL_REGISTRY[parsed_args["model"]]
 
@@ -91,14 +98,19 @@ def main(state, execution_state):
     else:
         system_prompt = system_prompt_builder.build_system_prompt(allow_patch=state.allow_patch)
 
-    initializer = LLMInitializer(state.target_path, state.loaded_model_name, state.active_config, state.kv_quantization_type)
-    initializer.initialize_agent()
-    context_window = initializer.CONTEXT_WINDOW
-    llm = initializer.llm
+    # === Initialize ModelSwitcher ===
+    switcher = ModelSwitcher(state.kv_quantization_type, state.models_dir)
+    llm, context_window = switcher.load(state.primary_model_key)
 
     state.messages = [{"role": "system", "content": system_prompt}]
 
     display_welcome_banner(state.loaded_model_name, state.allow_patch)
+
+    if state.reasoning_model_key:
+        reasoning_display = MODEL_REGISTRY[state.reasoning_model_key]["display_name"]
+        print(
+            f"💡 Multi-Model Agent mode enabled: Using Reasoner ({reasoning_display}) when complex reasoning is required.")
+    print()
 
     while True:
         # Check if we have an automated follow-up prompt queued
@@ -116,10 +128,23 @@ def main(state, execution_state):
         if handle_macros(user_input, state, execution_state, system_prompt, context_window):
             continue
 
-        # === ROUTING HEURISTIC & MODEL SWITCHING ===
+        # === ROUTING HEURISTIC & DYNAMIC MODEL SWITCHING ===
         use_reasoner, routing_reason = should_route_to_reasoner(user_input)
-        model_target = "🧠 REASONER (Qwen 3.5 9B)" if use_reasoner else f"💻 CODER ({state.loaded_model_name})"
-        print(f"\n🧭 [Router Debug] Decision: {model_target} | Reason: {routing_reason}")
+
+        if use_reasoner and state.reasoning_model_key:
+            active_model_key = state.reasoning_model_key
+            reasoning_display = MODEL_REGISTRY[state.reasoning_model_key]["display_name"]
+            print(f"\n🧭 [Router Debug] Decision: 🧠 REASONER ({reasoning_display}) | Reason: {routing_reason}")
+        else:
+            active_model_key = state.primary_model_key
+            if use_reasoner and not state.reasoning_model_key:
+                print(
+                    f"\n🧭 [Router Debug] Reasoner triggered, but no --reasoning-model provided. Falling back to coder.")
+            else:
+                print(f"\n🧭 [Router Debug] Decision: 💻 CODER ({switcher.display_name}) | Reason: {routing_reason}")
+
+        # Load the selected model for this turn via ModelSwitcher
+        llm, context_window = switcher.load(active_model_key)
 
         # Standard execution or continuation of sandbox mode
         state.messages.append({"role": "user", "content": user_input})
@@ -472,6 +497,14 @@ def main(state, execution_state):
                 break
 
             finally:
+                # === POST-TURN: Switch back to primary coder model if reasoner was used ===
+                if active_model_key != state.primary_model_key:
+                    try:
+                        llm, context_window = switcher.load(state.primary_model_key)
+                        print(f"\n💻 [Router] Turn complete. Switched back to primary coder model.")
+                    except Exception as e:
+                        print(f"\n⚠️ Failed to switch back to primary coder model: {e}")
+
                 render_token_footer(state.messages, llm, context_window)
 
         # --- Print the per-turn guardrail tally, if tracking is enabled and anything fired ---
