@@ -540,16 +540,16 @@ def check_and_handle_drastic_shrinkage(tool_args, state, agent_flags, content_ke
 
 NO_APPLY_REQUESTED_PATTERNS = re.compile(
     r"\b("
-    # Catch "just / only write / show / draft"
+    # Catch "just / only write / show / draft / output"
     r"(just|only)\s+(show|output|print|display|write(\s+down)?|provide|draft|plan)|"
-    # Catch "don't / do not modify / apply / make changes"
-    r"(do\s+not|don'?t)\s+(write|apply|save|modify|edit|change|make\s+(any\s+)?(modifications|changes|edits))|"
-    # Catch "without applying / modifying"
-    r"without\s+(writing|applying|saving|modifying|editing|making\s+changes)|"
-    # Catch explicit markdown/code requests
-    r"in a (markdown|code) block|"
+    # Catch "don't / do not use / call / write / apply / make changes"
+    r"(do\s+not|don'?t)\s+(use|call|write|apply|save|modify|edit|change|make\s+(any\s+)?(modifications|changes|edits))|"
+    # Catch "without applying / modifying / using"
+    r"without\s+(using|calling|writing|applying|saving|modifying|editing|making\s+changes)|"
+    # Catch explicit markdown/code requests (allowing optional words like "standard")
+    r"in\s+(an?|the)\s+([a-zA-Z]+\s+)*(markdown|code)\s+block|"
     r"(show|give)\s+(me\s+)?the code|"
-    r"no need to (write|apply|save|modify|edit)"
+    r"no\s+need\s+to\s+(use|call|write|apply|save|modify|edit)"
     r")\b",
     re.IGNORECASE,
 )
