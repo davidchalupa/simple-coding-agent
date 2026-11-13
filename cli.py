@@ -17,12 +17,12 @@ def has_gpu():
     )()
 
 
-def parse_cli_arguments(model_registry_keys):
+def parse_cli_arguments(model_registry_keys, requires_explicit_reasoning_model=True):
     """
     Parses CLI arguments for the Coding Agent and returns the configuration variables.
     """
     default_model = 'qwen2.5-7b-q5km' if has_gpu() else 'qwen2.5-7b'
-    default_reasoning_model = 'qwen3.5-9b' if has_gpu() else None
+    default_reasoning_model = 'qwen3.5-9b' if not requires_explicit_reasoning_model and has_gpu() else None
 
     parser = argparse.ArgumentParser(description="Coding Agent CLI")
     parser.add_argument("--model", type=str, default=default_model, choices=model_registry_keys,

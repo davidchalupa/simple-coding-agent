@@ -51,7 +51,7 @@ class ConsultantState:
         self.turn_start_tokens = 0  # Token count at start of turn
 
 
-parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys())
+parsed_args = parse_cli_arguments(MODEL_REGISTRY.keys(), requires_explicit_reasoning_model=False)
 state = ConsultantState(parsed_args)
 
 

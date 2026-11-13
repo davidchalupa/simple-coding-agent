@@ -18,11 +18,18 @@ def should_route_to_reasoner(prompt: str) -> tuple[bool, str]:
         re.IGNORECASE
     ))
 
-    # B. Architectural / structural refactoring intent
+    # B. Architectural / structural refactoring intent (using word boundaries to avoid matching 'architectural')
     architectural_keywords = [
-        "refactor", "restructure", "redesign", "architect",
-        "decouple", "state machine", "design pattern"
+        r"\brefactor\b",
+        r"\brestructure\b",
+        r"\bredesign\b",
+        r"\barchitect\b",
+        r"\barchitecture\b",
+        r"\bdecouple\b",
+        r"\bstate machine\b",
+        r"\bdesign pattern\b"
     ]
+    has_architecture_intent = any(bool(re.search(kw, prompt_lower)) for kw in architectural_keywords)
     has_architecture_intent = any(kw in prompt_lower for kw in architectural_keywords)
 
     # C. Vague umbrella requests (Test 4 pattern)
