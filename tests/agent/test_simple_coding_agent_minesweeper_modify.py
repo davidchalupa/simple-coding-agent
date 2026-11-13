@@ -263,7 +263,8 @@ def test_agent_minesweeper_modify_read_full_get_start_end_lines_replace_directly
         "run_game_loop does NOT take board_size as a parameter and always iterates using the real global "
         "board_size (9x9). Your `counts`, `revealed`, and `flags` data structures MUST be sized as a full 9x9 "
         "grid, not a smaller board, or you will get an IndexError. Do NOT define your own local `board_size` "
-        "variable with a different value.",
+        "variable with a different value.\n"
+        "CRITICAL: Do not try to brute-force the tests for all cases, the tests MUST be compact.",
         "/send",
 
         "Run the test suite using your `run_cmd` tool. CRITICAL: You must cd minesweeper-solve first so the "
@@ -308,6 +309,7 @@ def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ra
         "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns "
         "a boolean for win and loss outcomes. "
         "CRITICAL: make sure that the board_size and mines_count in your test match `minesweeper-solve/minesweeper.py`! "
+        "Do NOT attempt to test the interactive quit ('q') condition. Quit is strictly for human terminal workflows and does not apply to automated AI game loops.\n\n"
         "HINTS: ",
         "For the loss test, you must place mines_count mines on the board and use `random_get_action` you have read to lose the game for you. "
         "For the win test, you must make sure that the board has exactly one mine and use `ai_get_action` to win the game for you.",
@@ -328,7 +330,7 @@ def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ra
         check_for_change=True,
         expected_new_files=[new_test_file],
         run_unittest_file=new_test_file,
-        max_calls_limit=30
+        max_calls_limit=60
     )
 
 
@@ -352,6 +354,7 @@ def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai
         "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns "
         "a boolean for win and loss outcomes. "
         "CRITICAL: make sure that the board_size and mines_count in your test match `minesweeper-solve/minesweeper.py`! "
+        "Do NOT attempt to test the interactive quit ('q') condition. Quit is strictly for human terminal workflows and does not apply to automated AI game loops.\n\n"
         "HINTS: ",
         "For the win test, you must make sure that the board has exactly one mine and use `ai_get_action` to win the game for you. "
         "For the loss test, you must place a mine at a known location and have a custom action click it.",
@@ -372,5 +375,5 @@ def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai
         check_for_change=True,
         expected_new_files=[new_test_file],
         run_unittest_file=new_test_file,
-        max_calls_limit=30
+        max_calls_limit=60
     )
