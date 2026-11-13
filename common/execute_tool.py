@@ -289,7 +289,7 @@ def execute_tool(tool_name, tool_args, is_split_mode):
             if original_content is not None:
                 with open(filepath, 'r', encoding='utf-8') as f:
                     source_code = f.read()
-                print("The actual content:\n", source_code)
+                # print("The actual content:\n", source_code)
                 # Rollback to original content
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write(original_content)

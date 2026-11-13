@@ -5,7 +5,7 @@ def should_route_to_reasoner(prompt: str) -> tuple[bool, str]:
     """
     Balanced routing heuristic for the execution agent:
     - Default: Stay on 7B-Coder for fast, precise generation.
-    - Route to 9B-Reasoner only for genuine ambiguity, diagnostics, or fuzzy test creation.
+    - Route to 9B-Reasoner for genuine ambiguity, diagnostics, fuzzy test creation, or error fixing/debugging.
     """
     prompt_lower = prompt.lower()
 
@@ -49,6 +49,12 @@ def should_route_to_reasoner(prompt: str) -> tuple[bool, str]:
     has_vague_test_hints = bool(
         re.search(r'(hints:|make sure that the board|figure out how to|custom action click it)', prompt_lower))
 
+    # === F. NEW: Error fixing, debugging, or test failure remediation intent ===
+    has_debugging_intent = bool(re.search(
+        r'(fix.*error|fix.*fail|fix.*test|debug|failing test|test fail|errors if they fail|resolve.*error)',
+        prompt_lower
+    ))
+
     # --- 2. DECISION GATING ---
 
     if has_diagnostic_logs:
@@ -66,6 +72,9 @@ def should_route_to_reasoner(prompt: str) -> tuple[bool, str]:
     # Only route to Reasoner if it's explicitly creating a test AND lacks a recipe/uses vague hints.
     if has_test_generation_intent and (has_vague_test_hints or not has_strict_test_recipe):
         return True, "Reasoner Trigger: Fuzzy test generation request with missing recipe/explicit mock details."
+
+    if has_debugging_intent:
+        return True, "Reasoner Trigger: Error fixing or test failure debugging intent detected."
 
     # --- 3. DEFAULT (Route to 7B-Coder) ---
     return False, "Default: High-density, compiler-friendly prompt or command execution; routing to 7B-Coder."
