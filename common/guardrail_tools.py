@@ -90,3 +90,27 @@ def is_pure_load_request(user_input: str) -> bool:
     has_task_cmd = any(kw in lowered for kw in task_keywords) or "?" in lowered
 
     return is_load_cmd and not has_task_cmd
+
+
+def is_pure_load_or_inspect_request(user_input: str) -> bool:
+    """
+    Checks if the user prompt is strictly requesting to read or inspect
+    via tools (like read_file, read_symbol) without asking for a code rewrite.
+    """
+    lowered_raw = user_input.strip().lower()
+
+    # Explicitly check for tool inspection intents before backtick stripping
+    is_tool_inspection = any(tool in lowered_raw for tool in ("read_file", "read_symbol", "inspect"))
+
+    stripped = BACKTICK_SPAN_RE.sub(' ', user_input)
+    lowered = stripped.strip().lower()
+
+    inspect_keywords = ("read ", "inspect ", "examine ", "check ")
+    task_keywords = ("change", "refactor", "modify", "add", "fix", "update", "draft", "write", "create", "implement",
+                     "start")
+
+    has_inspect_intent = any(
+        lowered.startswith(kw) or f" {kw}" in lowered for kw in inspect_keywords) or is_tool_inspection
+    has_task_cmd = any(kw in lowered for kw in task_keywords) or "?" in lowered
+
+    return has_inspect_intent and not has_task_cmd

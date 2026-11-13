@@ -3,7 +3,7 @@ import os
 import shutil
 
 from common.tool_definitions import read_file
-from common.guardrail_tools import is_pure_load_request
+from common.guardrail_tools import is_pure_load_request, is_pure_load_or_inspect_request
 
 from coding_agent.native_helpers import (get_repo_structure, generate_requirements_native, gather_deep_context,
                                          gather_deep_context_ast)
@@ -56,6 +56,21 @@ def handle_user_input(state, user_input, system_prompt):
                 f"\nDO NOT output generic instructions like 'I can help you...' without first making a tool call."
             )
         })
+
+    # Add anti-rewrite nudge for pure inspection / read requests
+    if is_pure_load_or_inspect_request(user_input):
+        state.messages.append({
+            "role": "user",
+            "content": (
+                f"System Alert: Read-only inspection request detected.\n\n"
+                f"User said: '{user_input}'\n\n"
+                "You MUST call the requested tool (`read_file` or `read_symbol`) to inspect the target.\n"
+                "CRITICAL: This is a strictly read-only request. Once you receive the tool output, "
+                "acknowledge it with a brief summary or confirmation. **DO NOT** output code blocks, "
+                "unsolicited code rewrites, or refactoring solutions."
+            )
+        })
+        return False
 
     if is_file_copy_request(user_input):
         state.messages.append({
