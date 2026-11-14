@@ -133,14 +133,14 @@ def main(state, execution_state):
         if use_reasoner and state.reasoning_model_key:
             active_model_key = state.reasoning_model_key
             reasoning_display = MODEL_REGISTRY[state.reasoning_model_key]["display_name"]
-            print(f"\n🧭 [Router Debug] Decision: 🧠 REASONER ({reasoning_display}) | Reason: {routing_reason}")
+            print(f"\n🧭 [Model Router] Decision: 🧠 REASONER ({reasoning_display}) | Reason: {routing_reason}")
         else:
             active_model_key = state.primary_model_key
             if use_reasoner and not state.reasoning_model_key:
                 print(
-                    f"\n🧭 [Router Debug] Reasoner triggered, but no --reasoning-model provided. Falling back to coder.")
+                    f"\n🧭 [Model Router] Reasoner triggered, but no --reasoning-model provided. Falling back to coder.")
             else:
-                print(f"\n🧭 [Router Debug] Decision: 💻 CODER ({switcher.display_name}) | Reason: {routing_reason}")
+                print(f"\n🧭 [Model Router] Decision: 💻 CODER ({switcher.display_name}) | Reason: {routing_reason}")
 
         # Load the selected model for this turn via ModelSwitcher
         llm, context_window = switcher.load(active_model_key)
