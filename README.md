@@ -9,7 +9,9 @@ The system consists of two distinct tools:
 
 ## 🌟 Project Overview
 
-The project provides a robust environment for local AI-assisted software development, focusing on safety, accuracy, and efficiency. It supports multiple LLM architectures (Qwen, Mistral, Phi, DeepSeek) via GGUF quantization formats, allowing it to run efficiently even on consumer hardware with GPU offloading support.
+The project provides a robust environment for local AI-assisted software development, focusing on safety, accuracy, and efficiency.
+
+Both tools are primarily tuned for local Qwen models of 7B-9B size. The architecture is carefully tweaked to run efficiently even on consumer hardware with GPU offloading support. However, the tools were tested and can also be used with other lightweight LLM architectures (Mistral Nemo, Phi-4, DeepSeek).
 
 ### Core Components
 1.  **Simple Coding Agent (`simple_coding_agent.py`)**: An interactive coding assistant capable of generating code, modifying files safely using guardrails and self-verification, refactoring monolithic code via AST analysis, and automating test generation.
