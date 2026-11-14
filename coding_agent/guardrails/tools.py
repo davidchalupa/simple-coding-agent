@@ -662,32 +662,44 @@ def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
     Checks if the same tool call has been attempted recently and blocks it.
     Returns (intercepted: bool, should_break: bool)
     """
+
+    HARD_LOOP_REPEAT_COUNT = 4
+
     curr_sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
     agent_flags.recent_tool_signatures.append(curr_sig)
-    agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-6:]  # short rolling window
+    agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-6:]
 
     repeat_count = agent_flags.recent_tool_signatures.count(curr_sig)
+
     if repeat_count >= 2:
         agent_flags.record_hit("loop_guardrail", state.track_guardrail_hits)
-        agent_flags.consecutive_errors += 1
 
-        if agent_flags.consecutive_errors >= 3:
-            print("🛑 [Circuit Breaker] Agent loop detected. Forcing turn end.")
+        # Hard circuit breaker: only triggered by repeated identical tool calls.
+        # Do NOT use consecutive_errors here, as that counter is shared
+        # with unrelated error-handling mechanisms.
+        if repeat_count >= HARD_LOOP_REPEAT_COUNT:
+            print("🛑 [Circuit Breaker] Persistent identical tool-call loop detected. Forcing turn end.")
+
             alert_msg = (
                 f"🛑 CRITICAL SYSTEM INTERVENTION: You have attempted the exact same '{tool_name}' tool call "
-                f"{repeat_count} times without changing parameters or fixing errors. Tool execution is HALTED.\n"
+                f"{repeat_count} times within the recent tool-call window, without changing parameters. "
+                f"Tool execution is HALTED.\n"
                 f"DO NOT issue another tool call. Stop calling tools now and explain in plain text what went wrong and what step you will take next."
             )
-            state.messages.append({"role": "user", "content": alert_msg})
-            return True, True  # (intercepted=True, should_break=True)
 
+            state.messages.append({"role": "user", "content": alert_msg})
+            return True, True
+
+        # Soft interception: give the model another opportunity to correct itself.
         alert_msg = (
             f"System Alert: This exact tool call has been attempted {repeat_count} times "
             f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
-            f"underlying issue (e.g. re-check content/context requirements) or try a different approach."
+            f"underlying issue (e.g. re-check content/context requirements) or try a different approach. "
+            f"You have another opportunity to correct your approach."
         )
+
         state.messages.append({"role": "user", "content": alert_msg})
-        return True, False  # (intercepted=True, should_break=False)
+        return True, False
 
     return False, False
 
