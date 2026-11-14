@@ -10,7 +10,7 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 from consultant.gui.consultant_worker import ConsultantWorker, PrepareWorker
 from consultant.system_prompt_builder import build_consultant_system_prompt, build_diagnose_system_prompt
 from model_registry import MODEL_REGISTRY
-from consultant.model_switcher import ModelSwitcher
+from common.model_switcher import ModelSwitcher
 from common.context_hygiene_utils import get_token_footer
 
 
@@ -36,7 +36,7 @@ class StatsDialog(QDialog):
         layout.addWidget(close_btn)
 
     def populate_stats(self):
-        from consultant.input_and_macro_handlers import compute_stats, show_stats
+        from consultant.input_and_macro_handlers import compute_stats
 
         stats = compute_stats(self.state, self.switcher)
 

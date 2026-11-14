@@ -9,7 +9,7 @@ from common.context_hygiene_utils import render_token_footer
 
 from consultant.system_prompt_builder import build_consultant_system_prompt, build_diagnose_system_prompt
 from consultant.input_and_macro_handlers import handle_user_input, handle_macros
-from consultant.model_switcher import ModelSwitcher
+from common.model_switcher import ModelSwitcher
 
 from consultant.engine import run_consultant_turn
 

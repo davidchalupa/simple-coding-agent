@@ -23,7 +23,7 @@ from coding_agent.guardrail_and_verification_handlers import (handle_automated_f
                                                               validate_tool_call, handle_literal_ellipsis_anchor,
                                                               handle_content_recovery, handle_memory_regurgitation_on_read,
                                                               manage_tool_response)
-from consultant.model_switcher import ModelSwitcher
+from common.model_switcher import ModelSwitcher
 
 from coding_agent.types import TurnStatus
 from coding_agent import payload_parser
