@@ -7,6 +7,8 @@ The system consists of two distinct tools:
 *   **Simple Coding Agent**: A local tool for writing/editing code - great for algorithms, Leetcode-style exercises, unit test writing, README generation or localized code edits.
 *   **Read-Only Coding Consultant**: A read-only local coding assistant - great for analyzing repositories, debugging, processing of logs or multi-file refactoring.
 
+<div align="center"><img src="https://davidchalupa.github.io/coding_consultant_cli_and_gui.png" width="875" alt="Simple coding agent and consultant: CLI and GUI" /></div>
+
 ## 🌟 Project Overview
 
 The project provides a robust environment for local AI-assisted software development, focusing on safety, accuracy, and efficiency.
