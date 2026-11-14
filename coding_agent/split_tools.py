@@ -280,6 +280,36 @@ def handle_ast_extraction(content, split_file, sandbox_dir, execute_mode=None):
         valid_entries = {fn: blocks for fn, blocks in plan.items() if isinstance(blocks, list)}
         invalid_entries = {fn: blocks for fn, blocks in plan.items() if not isinstance(blocks, list)}
 
+        # 1. Parse original file to get the complete set of methods/functions
+        try:
+            with open(split_file, 'r', encoding='utf-8') as f:
+                orig_tree = ast.parse(f.read())
+            original_methods = set()
+            for node in ast.walk(orig_tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    original_methods.add(node.name)
+        except Exception as e:
+            return True, f"System Alert: Failed to parse original file AST for validation: {e}"
+
+        # 2. Collect all methods assigned in the blueprint
+        assigned_methods = set()
+        for fn, blocks in valid_entries.items():
+            for b in blocks:
+                assigned_methods.add(b)
+
+        missing_methods = original_methods - assigned_methods
+
+        # 3. Handle missing methods as a validation failure
+        if missing_methods:
+            print(f"\n❌ [System] Blueprint incomplete. Missing methods: {missing_methods}")
+            return True, (
+                f"System Alert: Incomplete blueprint. The following methods/functions from `{os.path.basename(split_file)}` "
+                f"were omitted entirely from your JSON blueprint: {sorted(list(missing_methods))}\n\n"
+                "CRITICAL RULE: Every single existing function and method from the source file "
+                "must be explicitly assigned to an output file in your blueprint. No methods can be left out.\n\n"
+                "Please output a corrected, complete ```json blueprint that includes all original methods."
+            )
+
         results = []
         if not execute_mode:
             print("\n⚙️  [System] Intercepted JSON routing plan. Generating scaffold in advisor mode...")
@@ -307,7 +337,7 @@ def handle_ast_extraction(content, split_file, sandbox_dir, execute_mode=None):
             print(f"\n❌ [System] Rejected malformed blueprint entries: {invalid_entries}")
             return True, (
                 "System Alert: Blueprint schema error. The following entries were REJECTED "
-                f"because their value must be a LIST of function/method names, not a string "
+                f"porque their value must be a LIST of function/method names, not a string "
                 f"or other type: {invalid_entries}\n\n"
                 + (f"Valid entries were still processed:\n{report}\n\n" if results else "")
                 + "This ```json blueprint format is ONLY for extracting existing functions/methods "
