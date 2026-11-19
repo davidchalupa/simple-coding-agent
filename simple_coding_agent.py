@@ -112,6 +112,29 @@ def main(state, execution_state):
     print()
 
     while True:
+        # Preventative step: once in a retry/repair state, drop back to the primary
+        # coder model so the reasoner doesn't over-elaborate or brute-force fixes.
+        current_flags = locals().get("agent_flags")
+        current_model_key = locals().get("active_model_key")
+        in_recovery = bool(
+            current_flags
+            and (current_flags.consecutive_errors >= 1 or current_flags.awaiting_fix)
+        )
+        if current_model_key:
+            desired_model_key = (
+                state.primary_model_key
+                if in_recovery and current_model_key != state.primary_model_key
+                else current_model_key
+            )
+            if desired_model_key != current_model_key:
+                active_model_key = desired_model_key
+                llm, context_window = switcher.load(active_model_key)
+                if current_flags:
+                    current_flags.record_hit("demoted_reasoner_on_retry", state.track_guardrail_hits)
+                print(f"\n💻 [Model Router] Recovery retry -> switched to coder ({switcher.display_name})")
+
+        check_context_guardrail(state.messages, llm, context_window)
+
         # Check if we have an automated follow-up prompt queued
         if execution_state.automated_followup:
             user_input = execution_state.automated_followup
