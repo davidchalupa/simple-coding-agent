@@ -38,6 +38,103 @@ def record_recovery_progress(tool_name, tool_result, was_mod, agent_flags) -> bo
     return True
 
 
+def _normalise_verification_path(filepath, state):
+    if not isinstance(filepath, str) or not filepath.strip():
+        return None
+
+    absolute = (
+        filepath
+        if os.path.isabs(filepath)
+        else os.path.join(state.session_cwd, filepath)
+    )
+    return os.path.normcase(os.path.realpath(absolute))
+
+
+def mark_post_edit_verification_required(
+    tool_name, tool_args, was_mod, agent_flags, state
+):
+    """Require read-back after a successful Python source edit."""
+    modifying_tools = {
+        "write_file", "append_file", "patch_file", "replace_lines"
+    }
+
+    if tool_name not in modifying_tools or not was_mod:
+        return
+
+    filepath = _normalise_verification_path(
+        tool_args.get("filepath"), state
+    )
+
+    if filepath and Path(filepath).suffix.lower() in {".py", ".pyi"}:
+        agent_flags.post_edit_verification_pending.add(filepath)
+
+
+def record_post_edit_readback(
+    tool_name, tool_args, tool_result, agent_flags, state
+):
+    """Clear a pending requirement only after reading back that same file."""
+    if tool_name not in {"read_file", "read_symbol"}:
+        return None
+
+    filepath = _normalise_verification_path(
+        tool_args.get("filepath"), state
+    )
+    if not filepath:
+        return None
+
+    pending = agent_flags.post_edit_verification_pending
+    if filepath not in pending:
+        return None
+
+    result_text = str(tool_result).lstrip().lower()
+
+    # Match the failure conventions already used by record_recovery_progress.
+    if not result_text or result_text.startswith((
+        "error:", "❌", "⚠️ action failed", "traceback",
+        "file not found", "symbol not found"
+    )):
+        return None
+
+    pending.remove(filepath)
+    return filepath
+
+
+def handle_pending_post_edit_readback(state, agent_flags) -> TurnStatus:
+    """Prevent the agent from ending a turn before reading back its edits."""
+    pending = getattr(agent_flags, "post_edit_verification_pending", set())
+
+    if not pending:
+        return TurnStatus.OK
+
+    paths = "\n".join(f"- {path}" for path in sorted(pending))
+
+    agent_flags.record_hit(
+        "post_edit_readback_required",
+        state.track_guardrail_hits
+    )
+
+    state.messages.append({
+        "role": "user",
+        "content": (
+            "SYSTEM ALERT: POST-EDIT READ-BACK REQUIRED\n\n"
+            "You successfully modified Python source code, but have not yet "
+            "read back the saved version. The task is NOT ready for completion.\n\n"
+            f"File(s) requiring read-back:\n{paths}\n\n"
+            "REQUIRED ACTION:\n"
+            "1. Call read_symbol for the modified function or class, where possible. "
+            "Otherwise use read_file to inspect the changed code.\n"
+            "2. Inspect the actual saved contents, not the replacement payload "
+            "you intended to write.\n"
+            "3. Compare the saved implementation against the user's original "
+            "requirements.\n"
+            "4. If anything is missing or incorrect, fix it and read it back again.\n\n"
+            "Do not declare Task Complete until the read-back has been inspected."
+        )
+    })
+
+    return TurnStatus.TRY_AGAIN
+
+
 def handle_automated_follow_up(state, agent_flags, execution_state, tool_args):
     """Automated follow-up trigger"""
     if state.force_testing and agent_flags.file_was_modified and not execution_state.is_split_mode:

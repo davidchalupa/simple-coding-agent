@@ -23,7 +23,9 @@ from coding_agent.guardrail_and_verification_handlers import (handle_automated_f
                                                               validate_tool_call, handle_literal_ellipsis_anchor,
                                                               handle_content_recovery, handle_memory_regurgitation_on_read,
                                                               manage_tool_response, handle_partial_symbol_replacement,
-                                                              record_recovery_progress)
+                                                              record_recovery_progress, handle_pending_post_edit_readback,
+                                                              mark_post_edit_verification_required,
+                                                              record_post_edit_readback)
 from common.model_switcher import ModelSwitcher
 
 from coding_agent.types import TurnStatus
@@ -73,6 +75,7 @@ class AgentFlags:
         self.last_tool_call_signature = None  # Track the last tool run
         self.consecutive_errors = 0  # Track infinite loop traps
         self.recovery_pending = None
+        self.post_edit_verification_pending = set()
         self.consecutive_lint_failures = 0  # Track repeated self-verification failures on the same turn
         self.last_verification_failure = None  # Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
         self.recent_tool_signatures = []  # Loop Guardrail: track recent signatures, not just the immediately previous one
@@ -241,6 +244,12 @@ def main(state, execution_state):
                             break
 
                         turn_status = handle_unapplied_code_change(response_content, state, agent_flags)
+                        if turn_status == TurnStatus.TRY_AGAIN:
+                            continue
+                        if turn_status == TurnStatus.END_TURN:
+                            break
+
+                        turn_status = handle_pending_post_edit_readback(state, agent_flags)
                         if turn_status == TurnStatus.TRY_AGAIN:
                             continue
                         if turn_status == TurnStatus.END_TURN:
@@ -481,6 +490,25 @@ def main(state, execution_state):
                         tool_reinforcement += f"\n\nSystem Alert: Tool executed successfully."
 
                         tool_reinforcement = manage_tool_response(tool_name, tool_args, tool_result, agent_flags, state, tool_reinforcement)
+
+                        # A successful source edit creates a mandatory read-back requirement.
+                        mark_post_edit_verification_required(
+                            tool_name, tool_args, was_mod, agent_flags, state
+                        )
+
+                        # A successful read of the same file satisfies the read-back requirement.
+                        readback_path = record_post_edit_readback(
+                            tool_name, tool_args, tool_result, agent_flags, state
+                        )
+
+                        if readback_path:
+                            tool_reinforcement += (
+                                "\n\n[Post-edit verification] The saved file has now been read back. "
+                                "Inspect the actual saved implementation above and compare it against "
+                                "the user's original requirements. Do not assume that the intended "
+                                "replacement payload and saved code are necessarily identical. "
+                                "Repair any problems before declaring completion."
+                            )
 
                     elif approval == 'edit':
                         tool_result = f"User denied and provided feedback: {input('Feedback: ')}"
