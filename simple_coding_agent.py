@@ -76,6 +76,7 @@ class AgentFlags:
         self.consecutive_errors = 0  # Track infinite loop traps
         self.recovery_pending = None
         self.post_edit_verification_pending = set()
+        self.pending_return_consistency_files = set()
         self.consecutive_lint_failures = 0  # Track repeated self-verification failures on the same turn
         self.last_verification_failure = None  # Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
         self.recent_tool_signatures = []  # Loop Guardrail: track recent signatures, not just the immediately previous one
@@ -507,7 +508,13 @@ def main(state, execution_state):
                                 "Inspect the actual saved implementation above and compare it against "
                                 "the user's original requirements. Do not assume that the intended "
                                 "replacement payload and saved code are necessarily identical. "
-                                "Repair any problems before declaring completion."
+
+                                "If the implementation satisfies the user's requirements, respond "
+                                "with 'Task Complete' in plain text. Do not reproduce the implementation "
+                                "in a Markdown code block, rewrite the file, or make additional changes. "
+
+                                "If you identify a specific defect, make only the necessary targeted "
+                                "correction and verify it again."
                             )
 
                     elif approval == 'edit':

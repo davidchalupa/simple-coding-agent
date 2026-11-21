@@ -10,6 +10,8 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
     fp = tool_args.get("filepath", "")
     is_python_file = isinstance(fp, str) and fp.lower().endswith(".py")
 
+    fp_key = os.path.normcase(os.path.realpath(fp))
+
     if (
         state.self_verify_py_writes
         and was_mod
@@ -44,6 +46,11 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
                 if tool_name == "replace_lines":
                     line_range = (tool_args.get("start_line"), tool_args.get("end_line"))
                 return_warnings = check_return_consistency(fp, line_range)
+
+            # If this file previously had a return-consistency failure,
+            # always recheck the entire file before allowing that failure to clear.
+            if fp_key in agent_flags.pending_return_consistency_files:
+                return_warnings = check_return_consistency(fp, None)
 
         def _amnesia_patch():
             # Redacts the model's own prior assistant message to prevent it re-deriving
@@ -181,6 +188,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
             agent_flags.repair_required = True
             agent_flags.last_action_was_unresolved_alert = True
             agent_flags.record_hit("return_consistency", state.track_guardrail_hits)
+            agent_flags.pending_return_consistency_files.add(fp_key)
             agent_flags.consecutive_lint_failures += 1
             msg = "\n".join(return_warnings)
             print(f"🚨 [Self-Verification] Inconsistent return paths in {os.path.basename(fp)}:\n{msg}")
@@ -191,11 +199,24 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
                 state.messages.append(
                     {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
                 return False, tool_reinforcement
-        else:
-            if agent_flags.consecutive_lint_failures > 0:
-                print(f"✅ {os.path.basename(fp)} now passes checks.")
-            agent_flags.consecutive_lint_failures, agent_flags.last_verification_failure = 0, None
-            agent_flags.last_action_was_unresolved_alert = False
-            return True, tool_reinforcement
+            else:
+                if agent_flags.consecutive_lint_failures > 0:
+                    print(f"✅ {os.path.basename(fp)} now passes checks.")
+
+                agent_flags.consecutive_lint_failures = 0
+                agent_flags.last_verification_failure = None
+
+                # Clear only this file's outstanding return-consistency failure.
+                agent_flags.pending_return_consistency_files.discard(fp_key)
+
+                # Do not clear unresolved repair state while other return failures remain.
+                agent_flags.last_action_was_unresolved_alert = bool(
+                    agent_flags.pending_return_consistency_files
+                )
+                agent_flags.repair_required = bool(
+                    agent_flags.pending_return_consistency_files
+                )
+
+                return True, tool_reinforcement
 
     return True, tool_reinforcement
