@@ -22,7 +22,7 @@ from coding_agent.guardrail_and_verification_handlers import (handle_automated_f
                                                               handle_unresolved_verification_alert, handle_unapplied_code_change,
                                                               validate_tool_call, handle_literal_ellipsis_anchor,
                                                               handle_content_recovery, handle_memory_regurgitation_on_read,
-                                                              manage_tool_response)
+                                                              manage_tool_response, handle_partial_symbol_replacement)
 from common.model_switcher import ModelSwitcher
 
 from coding_agent.types import TurnStatus
@@ -315,6 +315,12 @@ def main(state, execution_state):
                                 continue
                             if check_and_handle_drastic_shrinkage(tool_args, state, agent_flags, content_key):
                                 continue
+
+                    turn_status = handle_partial_symbol_replacement(tool_name, tool_args, agent_flags, state)
+                    if turn_status == TurnStatus.TRY_AGAIN:
+                        continue
+                    if turn_status == TurnStatus.END_TURN:
+                        break
 
                     if tool_name == "write_file" and agent_flags.repair_required and os.path.isfile(tool_args.get("filepath", "")):
                         agent_flags.record_hit("repair_required_write_block", state.track_guardrail_hits)

@@ -7,6 +7,7 @@ from pathlib import Path
 from coding_agent.guardrails.tools import (find_last_code_block, looks_like_unapplied_code_change,
                                            looks_like_memory_regurgitation_on_read_request)
 from coding_agent.guardrails.definitions import READ_ONLY_TOOLS, TOOL_FORBIDDEN_FIELDS, TOOL_REQUIRED_FIELDS
+from coding_agent.guardrails.symbol_integrity import detect_partial_symbol_redefinition
 from coding_agent.types import TurnStatus
 
 
@@ -262,3 +263,78 @@ def manage_tool_response(tool_name, tool_args, tool_result, agent_flags, state, 
         agent_flags.last_run_cmd_error = tool_result
 
     return tool_reinforcement
+
+
+def handle_partial_symbol_replacement(tool_name, tool_args, agent_flags, state) -> TurnStatus:
+    """Block replace_lines calls that redefine only part of an existing symbol.
+
+    This specifically prevents a replacement from starting inside a function or
+    class, leaving its original header/docstring in place, and inserting a second
+    same-named definition that becomes nested inside the original symbol.
+    """
+    if tool_name != "replace_lines":
+        return TurnStatus.OK
+
+    filepath = tool_args.get("filepath", "")
+    if not isinstance(filepath, str) or Path(filepath).suffix.lower() not in {".py", ".pyi"}:
+        return TurnStatus.OK
+
+    start_line = tool_args.get("start_line")
+    end_line = tool_args.get("end_line")
+    replacement_content = tool_args.get("content", "")
+
+    filepath_abs = filepath if os.path.isabs(filepath) else os.path.abspath(
+        os.path.join(state.session_cwd, filepath)
+    )
+    issue = detect_partial_symbol_redefinition(
+        filepath=filepath_abs,
+        start_line=start_line,
+        end_line=end_line,
+        replacement_content=replacement_content,
+    )
+    if issue is None:
+        return TurnStatus.OK
+
+    agent_flags.record_hit("partial_symbol_replacement", state.track_guardrail_hits)
+    agent_flags.consecutive_errors += 1
+
+    indent_description = (
+        f"{issue.indentation_column} column(s)"
+        if issue.indentation
+        else "column 0 (module level)"
+    )
+    alert = (
+        "SYSTEM ALERT: STRUCTURAL REPLACEMENT VIOLATION\n\n"
+        "Your `replace_lines` operation was rejected before execution. No file changes were made.\n\n"
+        f"The requested range ({issue.requested_start_line}-{issue.requested_end_line}) "
+        f"overlaps only part of the existing {issue.symbol_kind} "
+        f"`{issue.symbol_name}`, whose complete source range is "
+        f"{issue.symbol_start_line}-{issue.symbol_end_line}.\n\n"
+        f"Your replacement payload introduces another {issue.symbol_kind} "
+        f"named `{issue.symbol_name}`. Applying it to the partial range would leave "
+        "the original definition in place and risk creating an unintended nested or "
+        "duplicate definition.\n\n"
+        "REQUIRED ACTION:\n"
+        f"1. Replace the complete existing symbol using start_line={issue.symbol_start_line} "
+        f"and end_line={issue.symbol_end_line}.\n"
+        f"2. Preserve the original definition's indentation ({indent_description}).\n"
+        "3. Retry with `replace_lines`. Do not attempt to work around this alert by "
+        "changing indentation while keeping the partial line range."
+    )
+
+    if agent_flags.consecutive_errors >= 3:
+        print(
+            "🛑 [Circuit Breaker] Repeated partial-symbol replacement attempts. "
+            "Forcing turn end."
+        )
+        state.messages.append({"role": "user", "content": alert})
+        return TurnStatus.END_TURN
+
+    print(
+        f"🛡️  [Guardrail] Rejected partial replacement of "
+        f"{issue.symbol_kind} `{issue.symbol_name}` "
+        f"({issue.requested_start_line}-{issue.requested_end_line}; "
+        f"full range {issue.symbol_start_line}-{issue.symbol_end_line})."
+    )
+    state.messages.append({"role": "user", "content": alert})
+    return TurnStatus.TRY_AGAIN
