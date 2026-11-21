@@ -454,6 +454,23 @@ def main(state, execution_state):
                         # Reset awaiting fix flag
                         if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"] and was_mod:
                             agent_flags.awaiting_fix = False
+                        # A rejected edit must remain an outstanding repair task.
+                        EDIT_TOOLS = {"write_file", "append_file", "patch_file", "replace_lines"}
+                        EDIT_FAILURE_MARKERS = (
+                            "⚠️ action reverted",
+                            "action failed",
+                            "syntaxerror",
+                            "traceback",
+                            "error:",
+                        )
+
+                        result_lower = str(tool_result).lower()
+                        if (tool_name in EDIT_TOOLS and not was_mod and any(marker in result_lower for marker in EDIT_FAILURE_MARKERS)):
+                            agent_flags.awaiting_fix = True
+                            agent_flags.record_hit(
+                                "edit_failure_requires_repair",
+                                state.track_guardrail_hits
+                            )
                         print(f"⚙️  Tool execution finished.")
 
                         # Prune stale reads from history before adding the fresh one ---
