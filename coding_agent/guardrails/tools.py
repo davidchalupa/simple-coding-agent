@@ -214,7 +214,8 @@ def check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_fla
     target_filename = os.path.basename(target_fp)
 
     # Check the last 8 messages for a read_file/read_symbol call on this file
-    recent_messages = state.messages[-8:]
+    recent_messages_threshold = 8
+    recent_messages = state.messages[-recent_messages_threshold:]
     file_was_read = False
 
     for msg in recent_messages:

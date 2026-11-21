@@ -10,6 +10,33 @@ from coding_agent.guardrails.definitions import READ_ONLY_TOOLS, TOOL_FORBIDDEN_
 from coding_agent.guardrails.symbol_integrity import detect_partial_symbol_redefinition
 from coding_agent.types import TurnStatus
 
+def record_recovery_progress(tool_name, tool_result, was_mod, agent_flags) -> bool:
+    """Reset the error streak only after a required recovery succeeds."""
+    pending = getattr(agent_flags, "recovery_pending", None)
+    if not pending:
+        return False
+
+    result_text = str(tool_result).lstrip().lower()
+    if result_text.startswith(("error:", "❌", "⚠️ action failed", "traceback")):
+        return False
+
+    successful_read = (
+        pending == "fresh_read"
+        and tool_name in {"read_file", "read_symbol"}
+    )
+    successful_edit = (
+        pending in {"apply_change", "complete_symbol_edit"}
+        and tool_name in {"write_file", "append_file", "patch_file", "replace_lines"}
+        and bool(was_mod)
+    )
+    if not (successful_read or successful_edit):
+        return False
+
+    agent_flags.consecutive_errors = 0
+    agent_flags.recovery_pending = None
+
+    return True
+
 
 def handle_automated_follow_up(state, agent_flags, execution_state, tool_args):
     """Automated follow-up trigger"""
@@ -72,6 +99,7 @@ def handle_unapplied_code_change(response_content, state, agent_flags):
     )
     if looks_like_unapplied_code_change(response_content, last_user_message=last_user_msg):
         agent_flags.consecutive_errors += 1
+        agent_flags.recovery_pending = "apply_change"
         agent_flags.record_hit("unapplied_code_change", state.track_guardrail_hits)
         if agent_flags.consecutive_errors >= 3:
             print(
@@ -297,6 +325,7 @@ def handle_partial_symbol_replacement(tool_name, tool_args, agent_flags, state) 
 
     agent_flags.record_hit("partial_symbol_replacement", state.track_guardrail_hits)
     agent_flags.consecutive_errors += 1
+    agent_flags.recovery_pending = "complete_symbol_edit"
 
     indent_description = (
         f"{issue.indentation_column} column(s)"

@@ -22,7 +22,8 @@ from coding_agent.guardrail_and_verification_handlers import (handle_automated_f
                                                               handle_unresolved_verification_alert, handle_unapplied_code_change,
                                                               validate_tool_call, handle_literal_ellipsis_anchor,
                                                               handle_content_recovery, handle_memory_regurgitation_on_read,
-                                                              manage_tool_response, handle_partial_symbol_replacement)
+                                                              manage_tool_response, handle_partial_symbol_replacement,
+                                                              record_recovery_progress)
 from common.model_switcher import ModelSwitcher
 
 from coding_agent.types import TurnStatus
@@ -71,6 +72,7 @@ class AgentFlags:
         self.file_was_modified = False  # Track if any files change during this cycle
         self.last_tool_call_signature = None  # Track the last tool run
         self.consecutive_errors = 0  # Track infinite loop traps
+        self.recovery_pending = None
         self.consecutive_lint_failures = 0  # Track repeated self-verification failures on the same turn
         self.last_verification_failure = None  # Track {filepath, content, error} of the last failed lint, to detect stale-fix reuse
         self.recent_tool_signatures = []  # Loop Guardrail: track recent signatures, not just the immediately previous one
@@ -339,6 +341,7 @@ def main(state, execution_state):
 
                     if check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_flags):
                         agent_flags.record_hit("stale_read_guard", state.track_guardrail_hits)
+                        agent_flags.recovery_pending = "fresh_read"
                         continue
 
                     intercepted, should_break = check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags)
@@ -471,6 +474,9 @@ def main(state, execution_state):
                             state.messages.append(
                                 {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
                             break
+
+                        if record_recovery_progress(tool_name, tool_result, was_mod, agent_flags):
+                            print("\n🛡️ [Recovery] Required recovery action succeeded. Consecutive error streak reset.")
 
                         tool_reinforcement += f"\n\nSystem Alert: Tool executed successfully."
 
