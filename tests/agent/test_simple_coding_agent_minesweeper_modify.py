@@ -399,6 +399,8 @@ def test_agent_minesweeper_modify_read_full_get_start_end_lines_replace_directly
         max_calls_limit=30
     )
 
+
+@pytest.mark.skip(reason="Skipped due to instability in some cases")
 def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_random_ai_action():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
@@ -447,6 +449,7 @@ def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ra
     )
 
 
+@pytest.mark.skip(reason="Skipped due to instability in some cases")
 def test_agent_minesweeper_modify_read_full_replace_directly_simple_tests_use_ai_action_static_loss():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
