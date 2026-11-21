@@ -62,7 +62,7 @@ def validate_all_python_files_importable(repo_sandbox, exclude_files=None):
             + "\n\n".join(failures)
         )
 
-    print(f"✅ All generated .py files import cleanly.", flush=True)
+    print("✅ All generated .py files import cleanly.", flush=True)
 
 
 class TeeStream:
@@ -83,6 +83,11 @@ class TeeStream:
         return self.buffer.getvalue()
 
 
+def _resolve_keep_sandbox(keep_sandbox: bool) -> bool:
+    env_keep = os.environ.get("KEEP_AGENT_SANDBOX", "").strip().lower() in ("1", "true", "yes")
+    return bool(keep_sandbox or env_keep)
+
+
 def run_automated_coding_task_test(
         input_queue,
         zip_file_path=None,
@@ -96,20 +101,33 @@ def run_automated_coding_task_test(
         run_script_file=None,
         max_calls_limit=50,
         expected_keywords=None,
-        agent_output_validator=None,      # Validates the Agent's conversational/CLI output
-        script_output_validator=None,     # Validates the stdout of the executed Python script
+        agent_output_validator=None,
+        script_output_validator=None,
         custom_file_validator=None,
-        post_run_validator=None
+        post_run_validator=None,
+        sandbox_dir=None,          # Optional explicit path for the sandbox root
+        keep_sandbox=False,        # Always keep sandbox after run if True
+        clean_existing_dir=True,   # Wipe sandbox_dir first if it already exists
 ):
     """
     Custom unified runner for agent tasks. Extracts a repo or runs a setup hook,
     runs the agent, captures agent CLI output live, validates modifications,
     unittests, and output files.
     """
-    print(f"🧪 Starting Automated Agent Coding Task Test...", flush=True)
+    print("🧪 Starting Automated Agent Coding Task Test...", flush=True)
 
     original_cwd = os.getcwd()
-    test_sandbox = tempfile.mkdtemp(prefix="agent_coding_sandbox_")
+    using_custom_dir = sandbox_dir is not None
+
+    if using_custom_dir:
+        test_sandbox = os.path.abspath(os.path.join(original_cwd, sandbox_dir))
+        if clean_existing_dir and os.path.exists(test_sandbox):
+            shutil.rmtree(test_sandbox)
+        os.makedirs(test_sandbox, exist_ok=True)
+    else:
+        test_sandbox = tempfile.mkdtemp(prefix="agent_coding_sandbox_")
+
+    repo_sandbox = os.path.join(test_sandbox, repo_name) if repo_name else test_sandbox
 
     try:
         # --- Environment Setup ---
@@ -123,11 +141,7 @@ def run_automated_coding_task_test(
         elif setup_sandbox_hook:
             setup_sandbox_hook(test_sandbox)
 
-        # Target the repo directory OR default to the root sandbox
-        if repo_name:
-            repo_sandbox = os.path.join(test_sandbox, repo_name)
-        else:
-            repo_sandbox = test_sandbox
+        os.makedirs(repo_sandbox, exist_ok=True)
 
         # Snapshot pristine file if we are checking for modifications
         pristine_contents = {}
@@ -188,7 +202,6 @@ def run_automated_coding_task_test(
             except SystemExit:
                 pass
 
-        # Complete captured stdout from the agent run
         agent_terminal_output = tee_stdout.getvalue()
 
         # Phase 0: Validate Agent Behavior/Pathologies
@@ -215,7 +228,6 @@ def run_automated_coding_task_test(
             else:
                 print(f"✅ SUCCESS: Target file '{target_file_path}' was modified.")
 
-        # Compile list of files to check for existence
         files_to_check = []
         if expected_file:
             files_to_check.append(expected_file)
@@ -284,15 +296,14 @@ def run_automated_coding_task_test(
                 if result.returncode != 0:
                     pytest.fail(f"❌ FAILED: Unittests failed:\nSTDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}")
                 else:
-                    print(f"✅ SUCCESS: Unittests passed.")
+                    print("✅ SUCCESS: Unittests passed.")
             except subprocess.TimeoutExpired:
                 pytest.fail("❌ FAILED: Unittest execution timed out.")
 
-        script_to_run = run_script_file
-        if script_to_run:
+        if run_script_file:
             try:
                 result = subprocess.run(
-                    [sys.executable, script_to_run],
+                    [sys.executable, run_script_file],
                     capture_output=True, text=True, timeout=60, cwd=repo_sandbox
                 )
 
@@ -313,6 +324,11 @@ def run_automated_coding_task_test(
             post_run_validator(repo_sandbox)
 
     finally:
+        # Always restore working directory before touching or inspecting files
         os.chdir(original_cwd)
-        shutil.rmtree(test_sandbox)
-        print(f"\n🧹 Cleaned up temporary sandbox.", flush=True)
+
+        if _resolve_keep_sandbox(keep_sandbox):
+            print(f"\n📂 Preserved sandbox for manual inspection:\n   {repo_sandbox}", flush=True)
+        else:
+            shutil.rmtree(test_sandbox, ignore_errors=True)
+            print("\n🧹 Cleaned up temporary sandbox.", flush=True)

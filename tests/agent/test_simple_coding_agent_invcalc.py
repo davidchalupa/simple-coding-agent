@@ -2,6 +2,7 @@ import os
 import shutil
 import py_compile
 import pytest
+from pathlib import Path
 
 from tests.agent.test_utils.test_runner import run_automated_coding_task_test
 
@@ -89,7 +90,9 @@ def test_agent_modify_invcalc_append_bottom():
         expected_file=output_file,
         max_calls_limit=30,
         expected_keywords=["CopyableTableWidget", "selectedIndexes", "clipboard"],
-        custom_file_validator=validate_invcalc_extended
+        custom_file_validator=validate_invcalc_extended,
+        # sandbox_dir=str(Path.home() / ".invcalc_sandbox"),
+        # keep_sandbox=True,
     )
 
 
