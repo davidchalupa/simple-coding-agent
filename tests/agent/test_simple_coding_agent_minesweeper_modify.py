@@ -4,6 +4,61 @@ import ast
 from tests.agent.test_utils.test_runner import run_automated_coding_task_test
 
 
+def _validate_run_game_loop(file_path: str) -> None:
+    """A specialized validator for the pathological run_game_loop nested inside run_game_loop."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        source = f.read()
+
+    tree = ast.parse(source, filename=file_path)
+
+    top_level_defs: list[ast.FunctionDef] = []
+    nested_same_name_defs: list[tuple[str, int]] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            for child in ast.walk(node):
+                if child is not node and isinstance(child, ast.FunctionDef) and child.name == "run_game_loop":
+                    nested_same_name_defs.append((node.name, child.lineno))
+
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "run_game_loop":
+            top_level_defs.append(node)
+
+    if nested_same_name_defs:
+        pytest.fail(
+            f"❌ FAILED: Found nested run_game_loop definition(s) at lines: {[line for _, line in nested_same_name_defs]}"
+        )
+    if len(top_level_defs) != 1:
+        pytest.fail(
+            f"❌ FAILED: Expected exactly 1 top-level run_game_loop definition, found {len(top_level_defs)}"
+        )
+
+    loop_fn = top_level_defs[0]
+    explicit_returns = [n for n in ast.walk(loop_fn) if isinstance(n, ast.Return)]
+    if not explicit_returns:
+        pytest.fail("❌ FAILED: Expected run_game_loop to contain explicit return statements")
+
+    body = loop_fn.body[:]
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(
+            body[0].value.value, str):
+        body = body[1:]
+
+    falls_off_end = True
+    if body and isinstance(body[-1], ast.Return):
+        falls_off_end = False
+    elif any(isinstance(n, ast.While) and isinstance(n.test, ast.Constant) and n.test.value is True for n in body):
+        for while_node in body:
+            if isinstance(while_node, ast.While):
+                if any(isinstance(n, ast.Break) for n in ast.walk(while_node)):
+                    falls_off_end = True
+                    break
+
+    if falls_off_end:
+        pytest.fail(
+            "❌ FAILED: run_game_loop can fall off the end without returning a boolean (e.g., 'q' breaks without returning False)"
+        )
+
+
 def test_agent_minesweeper_modify_generate_only():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
@@ -66,7 +121,7 @@ def test_agent_minesweeper_modify_read_source_file_only():
         agent_output_validator=check_no_regurgitation_and_tool_call,
     )
 
-def test_agent_minesweeper_modify_read_full_get_start_end_lines_replace_directly_modify_only():
+def test_agent_minesweeper_modify_only_with_read_symbol():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
 
@@ -77,7 +132,6 @@ def test_agent_minesweeper_modify_read_full_get_start_end_lines_replace_directly
         "Good. Now call the `read_symbol` tool on `run_game_loop` to find its exact start and end lines.",
         "/send",
 
-        # # --- ABLATED PROMPT: Tool hand-holding removed ---
         "Nice. Now I need you to change the `run_game_loop` function so that it returns True if the game was won and False otherwise. "
         "CRITICAL: use the `replace_lines` tool covering that exact line range to replace the ENTIRE function with your updated implementation. Ensure your indentation matches the original exactly.",
         "/send",
@@ -91,64 +145,12 @@ def test_agent_minesweeper_modify_read_full_get_start_end_lines_replace_directly
         repo_name="",
         target_file_path=target_file,
         check_for_change=True,
-        max_calls_limit=30
+        max_calls_limit=30,
+        custom_file_validator=_validate_run_game_loop,
     )
 
 
-def test_agent_minesweeper_modify_read_full_replace_directly_modify_only():
-    def _validate_run_game_loop(file_path: str) -> None:
-        """A specialized validator for the pathological run_game_loop nested inside run_game_loop."""
-        with open(file_path, "r", encoding="utf-8") as f:
-            source = f.read()
-
-        tree = ast.parse(source, filename=file_path)
-
-        top_level_defs: list[ast.FunctionDef] = []
-        nested_same_name_defs: list[tuple[str, int]] = []
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                for child in ast.walk(node):
-                    if child is not node and isinstance(child, ast.FunctionDef) and child.name == "run_game_loop":
-                        nested_same_name_defs.append((node.name, child.lineno))
-
-        for node in tree.body:
-            if isinstance(node, ast.FunctionDef) and node.name == "run_game_loop":
-                top_level_defs.append(node)
-
-        if nested_same_name_defs:
-            pytest.fail(
-                f"❌ FAILED: Found nested run_game_loop definition(s) at lines: {[line for _, line in nested_same_name_defs]}"
-            )
-        if len(top_level_defs) != 1:
-            pytest.fail(
-                f"❌ FAILED: Expected exactly 1 top-level run_game_loop definition, found {len(top_level_defs)}"
-            )
-
-        loop_fn = top_level_defs[0]
-        explicit_returns = [n for n in ast.walk(loop_fn) if isinstance(n, ast.Return)]
-        if not explicit_returns:
-            pytest.fail("❌ FAILED: Expected run_game_loop to contain explicit return statements")
-
-        body = loop_fn.body[:]
-        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(
-                body[0].value.value, str):
-            body = body[1:]
-
-        falls_off_end = True
-        if body and isinstance(body[-1], ast.Return):
-            falls_off_end = False
-        elif any(isinstance(n, ast.While) and isinstance(n.test, ast.Constant) and n.test.value is True for n in body):
-            for while_node in body:
-                if isinstance(while_node, ast.While):
-                    if any(isinstance(n, ast.Break) for n in ast.walk(while_node)):
-                        falls_off_end = True
-                        break
-
-        if falls_off_end:
-            pytest.fail(
-                "❌ FAILED: run_game_loop can fall off the end without returning a boolean (e.g., 'q' breaks without returning False)"
-            )
+def test_agent_minesweeper_modify_only_without_read_symbol():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
 
@@ -176,6 +178,7 @@ def test_agent_minesweeper_modify_read_full_replace_directly_modify_only():
     )
 
 
+@pytest.mark.skip(reason="Deprecated")
 def test_agent_minesweeper_modify_very_detailed():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
@@ -260,6 +263,7 @@ def test_agent_minesweeper_modify_very_detailed():
     )
 
 
+@pytest.mark.skip(reason="Deprecated")
 def test_agent_minesweeper_modify_read_function_rewrite_replace_lines():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
@@ -326,6 +330,7 @@ def test_agent_minesweeper_modify_read_function_rewrite_replace_lines():
     )
 
 
+@pytest.mark.skip(reason="Deprecated")
 def test_agent_minesweeper_modify_read_full_get_start_end_lines_replace_directly():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
