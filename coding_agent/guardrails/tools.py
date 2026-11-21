@@ -660,46 +660,88 @@ def check_and_handle_identical_write(tool_args, state, agent_flags, content_key)
 
 def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
     """
-    Checks if the same tool call has been attempted recently and blocks it.
-    Returns (intercepted: bool, should_break: bool)
+    Detects repeated identical calls and alternating read-only tool loops.
+    Returns (intercepted: bool, should_break: bool).
     """
-
     HARD_LOOP_REPEAT_COUNT = 4
 
     curr_sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
     agent_flags.recent_tool_signatures.append(curr_sig)
-    agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-6:]
 
-    repeat_count = agent_flags.recent_tool_signatures.count(curr_sig)
+    # Keep enough history to detect a repeated two-call cycle.
+    agent_flags.recent_tool_signatures = agent_flags.recent_tool_signatures[-8:]
 
+    history = agent_flags.recent_tool_signatures
+
+    # Preserve the existing identical-call detection window.
+    repeat_count = history[-6:].count(curr_sig)
+
+    if repeat_count >= HARD_LOOP_REPEAT_COUNT:
+        agent_flags.record_hit("loop_guardrail", state.track_guardrail_hits)
+
+        print(
+            "🛑 [Circuit Breaker] Persistent identical tool-call loop detected. "
+            "Forcing turn end."
+        )
+
+        state.messages.append({
+            "role": "user",
+            "content": (
+                f"CRITICAL SYSTEM INTERVENTION: You have attempted the exact same "
+                f"'{tool_name}' tool call repeatedly without making progress. "
+                "Tool execution is halted. Stop calling tools and explain what "
+                "went wrong."
+            )
+        })
+        return True, True
+
+    # Detect four repetitions of an alternating read_file/read_symbol sequence.
+    if len(history) >= 8:
+        last_eight = history[-8:]
+        first, second = last_eight[:2]
+
+        is_alternating_cycle = (first != second and last_eight == [first, second] * 4)
+
+        read_only_tools = {"read_file", "read_symbol"}
+
+        cycle_tool_names = {
+            signature.split(":", 1)[0]
+            for signature in (first, second)
+        }
+
+        if (is_alternating_cycle and cycle_tool_names.issubset(read_only_tools) and len(cycle_tool_names) == 2):
+            agent_flags.record_hit("alternating_read_loop", state.track_guardrail_hits)
+
+            print(
+                "🛑 [Circuit Breaker] Repeated alternating read-only tool cycle "
+                "detected. Forcing turn end."
+            )
+
+            state.messages.append({
+                "role": "user",
+                "content": (
+                    "CRITICAL SYSTEM INTERVENTION: You are repeatedly alternating "
+                    "between read_file and read_symbol without making progress. "
+                    "Stop repeating inspections. Review the outstanding error "
+                    "and identify the actual corrective action required. "
+                    "If you cannot determine the fix, explain the blocker in plain text."
+                )
+            })
+            return True, True
+
+    # Existing soft interception.
     if repeat_count >= 2:
         agent_flags.record_hit("loop_guardrail", state.track_guardrail_hits)
 
-        # Hard circuit breaker: only triggered by repeated identical tool calls.
-        # Do NOT use consecutive_errors here, as that counter is shared
-        # with unrelated error-handling mechanisms.
-        if repeat_count >= HARD_LOOP_REPEAT_COUNT:
-            print("🛑 [Circuit Breaker] Persistent identical tool-call loop detected. Forcing turn end.")
-
-            alert_msg = (
-                f"🛑 CRITICAL SYSTEM INTERVENTION: You have attempted the exact same '{tool_name}' tool call "
-                f"{repeat_count} times within the recent tool-call window, without changing parameters. "
-                f"Tool execution is HALTED.\n"
-                f"DO NOT issue another tool call. Stop calling tools now and explain in plain text what went wrong and what step you will take next."
+        state.messages.append({
+            "role": "user",
+            "content": (
+                f"System Alert: This exact tool call has been attempted "
+                f"{repeat_count} times recently and is not succeeding. "
+                "Do not repeat it verbatim. Fix the underlying issue or try "
+                "a genuinely different approach."
             )
-
-            state.messages.append({"role": "user", "content": alert_msg})
-            return True, True
-
-        # Soft interception: give the model another opportunity to correct itself.
-        alert_msg = (
-            f"System Alert: This exact tool call has been attempted {repeat_count} times "
-            f"recently and is not succeeding. Do not repeat it verbatim — either fix the "
-            f"underlying issue (e.g. re-check content/context requirements) or try a different approach. "
-            f"You have another opportunity to correct your approach."
-        )
-
-        state.messages.append({"role": "user", "content": alert_msg})
+        })
         return True, False
 
     return False, False
