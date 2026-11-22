@@ -192,7 +192,13 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
             agent_flags.consecutive_lint_failures += 1
             msg = "\n".join(return_warnings)
             print(f"🚨 [Self-Verification] Inconsistent return paths in {os.path.basename(fp)}:\n{msg}")
-            tool_reinforcement += f"\n\nSystem Alert: Possible inconsistent return values:\n{msg}\nFix it."
+            tool_reinforcement += (
+                "\n\nSystem Alert: Return consistency check failed:\n"
+                f"{msg}\n"
+                "Add an explicit `return` statement on any exit or fall-through path that currently "
+                "returns `None` implicitly, matching the function's return type. Apply the updated "
+                "code using an edit tool now."
+            )
 
             if agent_flags.consecutive_lint_failures >= 3:
                 print("🛑 [Circuit Breaker] Repeated return-consistency failures. Forcing turn end.")
