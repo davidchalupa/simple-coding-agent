@@ -208,4 +208,13 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
 
             return True, tool_reinforcement
 
+        else:
+            agent_flags.pending_return_consistency_files.discard(fp_key)
+            has_other_pending_returns = bool(agent_flags.pending_return_consistency_files)
+
+            agent_flags.consecutive_lint_failures = 0
+            agent_flags.last_verification_failure = None
+            agent_flags.last_action_was_unresolved_alert = has_other_pending_returns
+            agent_flags.repair_required = has_other_pending_returns
+
     return True, tool_reinforcement
