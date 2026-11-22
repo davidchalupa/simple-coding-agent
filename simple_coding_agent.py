@@ -179,6 +179,8 @@ def main(state, execution_state):
 
         agent_flags = AgentFlags()
         tool_args = {}  # Very important: this must exist in the first iteration
+        last_non_tool_text = ""
+        repeated_non_tool_turns = 0
 
         # Internal Agent Execution Loop (allows multi-step tool loops for the reasoner or coder)
         try:
@@ -200,8 +202,30 @@ def main(state, execution_state):
                     # Check for tool calls FIRST. Never let "Refactor Phase Complete"
                     # short-circuit a turn that also contains a tool call.
                     tool_request = payload_parser.extract_tool_call(response_content, allow_patch=state.allow_patch)
+                    if tool_request:
+                        last_non_tool_text = ""
+                        repeated_non_tool_turns = 0
 
                     if not tool_request:
+                        normalized_text = (response_content or "").strip()
+                        if normalized_text and normalized_text == last_non_tool_text:
+                            repeated_non_tool_turns += 1
+                            if repeated_non_tool_turns >= 2:
+                                print(
+                                    "🛑 [Circuit Breaker] Agent repeating identical non-tool response. Forcing turn end.")
+                                break
+                            agent_flags.record_hit("repeated_non_tool_response", state.track_guardrail_hits)
+                            state.messages.append({
+                                "role": "user",
+                                "content": (
+                                    "System Alert: You repeated the same response without calling a tool. "
+                                    "Either emit a valid tool call now or finish the turn."
+                                )
+                            })
+                            continue
+                        last_non_tool_text = normalized_text
+                        repeated_non_tool_turns = 0
+
                         # >>> Universal Completion Circuit Breaker <<<
                         is_completion_claim = "task complete" in response_content.lower()
                         last_user_msg = state.messages[-1].get("content", "") if state.messages else ""
@@ -216,7 +240,8 @@ def main(state, execution_state):
                         if is_completion_claim and is_error_state:
                             agent_flags.consecutive_errors += 1
                             if agent_flags.consecutive_errors >= 2:
-                                print("🛑 [Circuit Breaker] Agent repeating 'Task Complete' after failures. Halting turn.")
+                                print(
+                                    "🛑 [Circuit Breaker] Agent repeating 'Task Complete' after failures. Halting turn.")
                                 agent_flags.consecutive_errors = 0
                                 break  # Breaks the inner loop safely
 
@@ -230,7 +255,6 @@ def main(state, execution_state):
                                 )
                             })
                             continue
-                        # >>> END FIX 1 <<<
 
                         turn_status = handle_memory_regurgitation_on_read(response_content, state, agent_flags)
                         if turn_status == TurnStatus.TRY_AGAIN:
