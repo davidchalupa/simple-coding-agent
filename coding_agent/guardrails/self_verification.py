@@ -195,9 +195,9 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
             tool_reinforcement += (
                 "\n\nSystem Alert: Return consistency check failed:\n"
                 f"{msg}\n"
-                "Add an explicit `return` statement on any exit or fall-through path that currently "
-                "returns `None` implicitly, matching the function's return type. Apply the updated "
-                "code using an edit tool now."
+                "Ensure every exit or fall-through path explicitly returns a value matching "
+                "the function's intended return value and type (e.g., `False` rather than `None` "
+                "when returning booleans). Apply the updated code using an edit tool now."
             )
 
             if agent_flags.consecutive_lint_failures >= 3:

@@ -213,8 +213,8 @@ def check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_fla
     target_fp = tool_args.get("filepath", "")
     target_filename = os.path.basename(target_fp)
 
-    # Check the last 8 messages for a read_file/read_symbol call on this file
-    recent_messages_threshold = 8
+    # Check recent messages for a read_file/read_symbol call on this file
+    recent_messages_threshold = 16
     recent_messages = state.messages[-recent_messages_threshold:]
     file_was_read = False
 
@@ -229,14 +229,13 @@ def check_and_handle_unread_replace_lines(tool_name, tool_args, state, agent_fla
 
     if not file_was_read:
         print(f"🛡️  [Guardrail] Blocked replace_lines on '{target_filename}' — file was not read recently.")
-        agent_flags.consecutive_errors += 1
 
         state.messages.append({
             "role": "user",
             "content": (
                 f"System Alert: `replace_lines` on '{target_fp}' was BLOCKED because you have not inspected "
-                f"this file recently. You MUST call `read_symbol` or `read_file` first to get exact, updated "
-                f"line numbers and anchor snippets before making edits."
+                f"this file recently. Call `read_symbol` or `read_file` if you need current line numbers "
+                f"before editing."
             )
         })
         return True
