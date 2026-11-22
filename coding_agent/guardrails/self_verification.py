@@ -199,24 +199,7 @@ def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flag
                 state.messages.append(
                     {"role": "user", "content": f"Tool Result:\n{tool_result}{tool_reinforcement}"})
                 return False, tool_reinforcement
-            else:
-                if agent_flags.consecutive_lint_failures > 0:
-                    print(f"✅ {os.path.basename(fp)} now passes checks.")
 
-                agent_flags.consecutive_lint_failures = 0
-                agent_flags.last_verification_failure = None
-
-                # Clear only this file's outstanding return-consistency failure.
-                agent_flags.pending_return_consistency_files.discard(fp_key)
-
-                # Do not clear unresolved repair state while other return failures remain.
-                agent_flags.last_action_was_unresolved_alert = bool(
-                    agent_flags.pending_return_consistency_files
-                )
-                agent_flags.repair_required = bool(
-                    agent_flags.pending_return_consistency_files
-                )
-
-                return True, tool_reinforcement
+            return True, tool_reinforcement
 
     return True, tool_reinforcement

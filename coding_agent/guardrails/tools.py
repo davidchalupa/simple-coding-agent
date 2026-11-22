@@ -732,6 +732,7 @@ def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
     # Existing soft interception.
     if repeat_count >= 2:
         agent_flags.record_hit("loop_guardrail", state.track_guardrail_hits)
+        print(f"🔁 [Loop Guardrail] Blocked repeated '{tool_name}' call (seen {repeat_count}x in recent history).")
 
         state.messages.append({
             "role": "user",
