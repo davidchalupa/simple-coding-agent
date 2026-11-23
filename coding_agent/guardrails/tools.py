@@ -686,10 +686,11 @@ def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
         state.messages.append({
             "role": "user",
             "content": (
-                f"CRITICAL SYSTEM INTERVENTION: You have attempted the exact same "
-                f"'{tool_name}' tool call repeatedly without making progress. "
-                "Tool execution is halted. Stop calling tools and explain what "
-                "went wrong."
+                f"CRITICAL SYSTEM INTERVENTION: Identical '{tool_name}' calls were "
+                f"repeated {repeat_count} times and tool execution is now halted. "
+                "Do not call any more tools. Provide your final response based on "
+                "the tool outputs already in the conversation, or explain any "
+                "unresolved blocker in plain text."
             )
         })
         return True, True
@@ -728,7 +729,7 @@ def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
             })
             return True, True
 
-    # Existing soft interception.
+    # Soft interception
     if repeat_count >= 2:
         agent_flags.record_hit("loop_guardrail", state.track_guardrail_hits)
         print(f"🔁 [Loop Guardrail] Blocked repeated '{tool_name}' call (seen {repeat_count}x in recent history).")
@@ -736,10 +737,15 @@ def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
         state.messages.append({
             "role": "user",
             "content": (
-                f"System Alert: This exact tool call has been attempted "
-                f"{repeat_count} times recently and is not succeeding. "
-                "Do not repeat it verbatim. Fix the underlying issue or try "
-                "a genuinely different approach."
+                f"System Alert: This exact '{tool_name}' call has already been made "
+                f"{repeat_count} times recently and was blocked by the loop guardrail "
+                "to prevent redundant execution. This block does NOT mean the previous "
+                "run failed.\n"
+                "Review the earlier tool output already in the conversation. "
+                "If it already answers the request or shows the tests passing, "
+                "stop calling tools and respond with your final answer. Only run a "
+                "different command or edit if you have a specific, concrete reason "
+                "the prior output is incomplete or wrong."
             )
         })
         return True, False
