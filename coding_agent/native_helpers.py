@@ -160,6 +160,36 @@ def _gather_project_metadata(startpath):
     return metadata
 
 
+def _prioritize_py_files(py_files, startpath):
+    """
+    Orders Python files deterministically using generic structural signals only:
+    shallower paths first, common generic entry/module stems ahead of deeper
+    nested files, and alphabetical tie-breaking by relative path.
+    """
+    generic_entry_stems = {
+        "main", "cli", "app", "index", "server", "run", "entry", "__main__"
+    }
+
+    def priority_key(filepath):
+        rel = os.path.relpath(filepath, startpath).replace(os.sep, "/")
+        parts = rel.split("/")
+        depth = len(parts) - 1
+        stem = os.path.splitext(parts[-1])[0].lower()
+
+        if depth == 0 and stem in generic_entry_stems:
+            tier = 0
+        elif depth == 0:
+            tier = 1
+        elif depth == 1 and stem in generic_entry_stems:
+            tier = 2
+        else:
+            tier = 3 + depth
+
+        return (tier, rel)
+
+    return sorted(py_files, key=priority_key)
+
+
 def gather_deep_context(startpath, context_window):
     """
     Gathers repository context using a dynamic fair-share character budget.
@@ -188,6 +218,11 @@ def gather_deep_context(startpath, context_window):
     # so installation/usage sections don't have to be invented.
     code_summary = _gather_project_metadata(startpath)
     candidates = []
+
+    # prioritized files for targeted readme generation
+    py_files = _prioritize_py_files(py_files, startpath)
+    file_manifest = "\n".join(f"- {os.path.relpath(p, startpath)}" for p in py_files)
+    code_summary += f"\n--- PRIORITIZED PYTHON FILES ---\n{file_manifest}\n"
 
     # Dynamic tokens budget to be able to generate a good quality readme,
     # with a safe ceiling to prevent small model attention degradation,
@@ -300,7 +335,7 @@ class CommandVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def gather_deep_context_ast(startpath):
+def gather_deep_context_ast(startpath, context_window=None):
     """
     Experimental Smart Dispatcher (Currently bound to --deep-ast for A/B testing).
     Always uses AST to extract CLI flags/commands.
@@ -377,7 +412,11 @@ def gather_deep_context_ast(startpath):
     metadata_summary = _gather_project_metadata(startpath)
 
     # 3. Smart Dispatcher (Threshold: ~20,000 chars / ~5,000 tokens)
-    MAX_TOTAL_CHARS = 20000
+    py_files = _prioritize_py_files(py_files, startpath)
+    if context_window:
+        MAX_TOTAL_CHARS = min(int((context_window - 3000) * 3.5), 40000)
+    else:
+        MAX_TOTAL_CHARS = 25000
     if total_repo_chars <= MAX_TOTAL_CHARS:
         # Re-use the raw text extraction behavior of --deep to ensure a clean A/B test
         code_summary = _extract_raw_text_internal(py_files, startpath, MAX_TOTAL_CHARS)
@@ -399,9 +438,13 @@ def _extract_raw_text_internal(py_files, startpath, max_chars):
     code_summary = ""
     char_limit_per_file = max(1000, max_chars // len(py_files)) if py_files else 0
 
-    for filepath in py_files:
+    for idx, filepath in enumerate(py_files):
         if len(code_summary) >= max_chars:
-            code_summary += "\n[System: Repository too large. Code context truncated.]\n"
+            remaining = [os.path.relpath(p, startpath) for p in py_files[idx:]]
+            code_summary += (
+                f"\n[System: Context budget reached. Omitted {len(remaining)} lower-priority files: "
+                f"{', '.join(remaining[:15])}{'...' if len(remaining) > 15 else ''}]\n"
+            )
             break
         rel_path = os.path.relpath(filepath, startpath)
         try:
@@ -437,9 +480,13 @@ def _extract_ast_signatures_internal(py_files, startpath, max_chars):
             return f'"""{lines[0][:100]}"""' if lines else None
         return None
 
-    for filepath in py_files:
+    for idx, filepath in enumerate(py_files):
         if len(code_summary) >= max_chars:
-            code_summary += "\n[System: Repository context truncated.]\n"
+            remaining = [os.path.relpath(p, startpath) for p in py_files[idx:]]
+            code_summary += (
+                f"\n[System: Context budget reached. Omitted {len(remaining)} lower-priority files: "
+                f"{', '.join(remaining[:15])}{'...' if len(remaining) > 15 else ''}]\n"
+            )
             break
 
         rel_path = os.path.relpath(filepath, startpath)
