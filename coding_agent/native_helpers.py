@@ -5,6 +5,7 @@ import platform
 import ast
 import fnmatch
 import sys
+from collections import defaultdict
 
 
 # --- HELPER: .gitignore Parser ---
@@ -190,18 +191,198 @@ def _prioritize_py_files(py_files, startpath):
     return sorted(py_files, key=priority_key)
 
 
-def gather_deep_context(startpath, context_window):
+def _first_docstring_line(node, max_len=120):
+    """Extracts a concise first line from an AST node's docstring, if present."""
+    doc = ast.get_docstring(node, clean=True)
+    if not doc:
+        return ""
+    first_line = doc.splitlines()[0].strip()
+    if len(first_line) > max_len:
+        return first_line[: max_len - 3].rstrip() + "..."
+    return first_line
+
+
+def _format_signature(node):
+    """Formats a compact function/async-function signature."""
+    prefix = "async def " if isinstance(node, ast.AsyncFunctionDef) else "def "
+    args = [a.arg for a in node.args.args]
+    if node.args.vararg:
+        args.append(f"*{node.args.vararg.arg}")
+    elif node.args.kwonlyargs:
+        args.append("*")
+    for kw in node.args.kwonlyargs:
+        args.append(kw.arg)
+    if node.args.kwarg:
+        args.append(f"**{node.args.kwarg.arg}")
+    return f"{prefix}{node.name}({', '.join(args)}):"
+
+
+def _extract_ast_outline(filepath, include_method_docstrings=True):
     """
-    Gathers repository context using a dynamic fair-share character budget.
-    Small repos get deep file extraction; large repos get truncated smartly.
+    Extracts module docstring, top-level classes (with docstrings and method
+    signatures/docstrings), and top-level functions (with signatures/docstrings).
     """
-    base_ignores = {
-        '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
-        '.idea', '.vscode', 'dist', 'build', 'tests', 'test', 'migrations',
-        'alembic', 'docs', 'site-packages'
-    }
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            source = f.read()
+        tree = ast.parse(source, filename=filepath)
+    except SyntaxError as exc:
+        return f"  [SyntaxError parsing AST: {exc}]\n"
+    except OSError as exc:
+        return f"  [Error reading file: {exc}]\n"
+
+    lines_out = []
+    mod_doc = _first_docstring_line(tree)
+    if mod_doc:
+        lines_out.append(f'  """{mod_doc}"""')
+
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            cls_doc = _first_docstring_line(node)
+            cls_header = f"class {node.name}:"
+            if cls_doc:
+                cls_header += f'  # "{cls_doc}"'
+            lines_out.append(f"  {cls_header}")
+
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    sig = _format_signature(item)
+                    mdoc = _first_docstring_line(item) if include_method_docstrings else ""
+                    if mdoc:
+                        lines_out.append(f'    {sig}  # "{mdoc}"')
+                    else:
+                        lines_out.append(f"    {sig}")
+
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            sig = _format_signature(node)
+            fdoc = _first_docstring_line(node)
+            if fdoc:
+                lines_out.append(f'  {sig}  # "{fdoc}"')
+            else:
+                lines_out.append(f"  {sig}")
+
+    return "\n".join(lines_out) + ("\n" if lines_out else "")
+
+
+def _group_files_by_subsystem(py_files, startpath):
+    """
+    Groups prioritized Python files by top-level directory (or '(root)').
+    Preserves incoming priority order within each group and orders groups
+    with '(root)' first, followed by alphabetical directory names.
+    """
+    grouped = defaultdict(list)
+    for filepath in py_files:
+        rel = os.path.relpath(filepath, startpath).replace(os.sep, "/")
+        parts = rel.split("/")
+        group = "(root)" if len(parts) == 1 else parts[0]
+        grouped[group].append((rel, filepath))
+
+    ordered_groups = sorted(
+        grouped.keys(),
+        key=lambda g: (0 if g == "(root)" else 1, g.lower()),
+    )
+    return [(g, grouped[g]) for g in ordered_groups]
+
+
+def build_balanced_ast_summary(py_files, startpath, max_chars):
+    """
+    Builds a balanced multi-subsystem summary preserving docstrings and key
+    classes/functions across directories rather than letting one large group or
+    single file crowd out the rest.
+    """
+    if not py_files:
+        return ""
+
+    prioritized = _prioritize_py_files(py_files, startpath)
+    groups = _group_files_by_subsystem(prioritized, startpath)
+
+    overview_budget = min(int(max_chars * 0.20), 6000)
+    detail_budget = max(max_chars - overview_budget, 4000)
+
+    overview_lines = ["=== SUBSYSTEM OVERVIEW ==="]
+    group_entries = []
+
+    for group_name, items in groups:
+        top_symbols = []
+        group_doc = ""
+        for _, fp in items:
+            outline = _extract_ast_outline(fp, include_method_docstrings=False)
+            if not group_doc:
+                for line in outline.splitlines():
+                    s = line.strip()
+                    if s.startswith('"""') and s.endswith('"""') and len(s) > 6:
+                        group_doc = s[3:-3]
+                        break
+            for line in outline.splitlines():
+                s = line.strip()
+                if s.startswith("class ") or s.startswith("def ") or s.startswith("async def "):
+                    name_part = s.split("(", 1)[0].rstrip(":")
+                    if name_part not in top_symbols:
+                        top_symbols.append(name_part)
+
+        summary_line = f"- {group_name} ({len(items)} files)"
+        if group_doc:
+            summary_line += f": {group_doc}"
+        if top_symbols:
+            preview = ", ".join(top_symbols[:6])
+            summary_line += f" [key: {preview}]"
+        overview_lines.append(summary_line)
+        group_entries.append((group_name, items))
+
+    overview_text = "\n".join(overview_lines)
+    if len(overview_text) > overview_budget:
+        overview_text = overview_text[:overview_budget].rsplit("\n", 1)[0] + "\n... [Overview trimmed]"
+
+    num_groups = len(group_entries)
+    per_group_share = detail_budget // max(1, num_groups)
+    carryover = 0
+    detail_sections = []
+    omitted_files = []
+
+    for group_name, items in group_entries:
+        budget_for_group = per_group_share + carryover
+        used_in_group = 0
+        section_lines = [f"\n=== SUBSYSTEM: {group_name} ==="]
+        used_in_group += len(section_lines[0]) + 1
+
+        for item_idx, (rel, fp) in enumerate(items):
+            header = f"--- FILE: {rel} ---\n"
+            body = _extract_ast_outline(fp, include_method_docstrings=True)
+            block = header + body
+
+            if used_in_group + len(block) <= budget_for_group:
+                section_lines.append(block.rstrip("\n"))
+                used_in_group += len(block)
+            else:
+                remaining_space = budget_for_group - used_in_group - len(header) - 40
+                if remaining_space > 120:
+                    trimmed = body[:remaining_space].rsplit("\n", 1)[0]
+                    section_lines.append(header + trimmed + "\n  ... [Trimmed for subsystem budget]")
+                    used_in_group += len(header) + len(trimmed) + 36
+                omitted_files.extend(r for r, _ in items[item_idx:])
+                break
+
+        detail_sections.append("\n".join(section_lines))
+        unused = max(0, budget_for_group - used_in_group)
+        carryover = unused
+
+    result = overview_text + "\n" + "\n".join(detail_sections)
+    if omitted_files:
+        shown = ", ".join(omitted_files[:20])
+        more = f" (+{len(omitted_files) - 20} more)" if len(omitted_files) > 20 else ""
+        result += f"\n\n[Note: {len(omitted_files)} files had partial/omitted detail due to budget: {shown}{more}]\n"
+
+    if len(result) > max_chars:
+        result = result[:max_chars] + "\n[System: Summary capped at max_chars.]\n"
+
+    return result
+
+
+def _collect_py_files(startpath, base_ignores):
+    """Collects non-ignored .py files under startpath."""
     is_ignored = build_ignore_checker(startpath, base_ignores)
     py_files = []
+    total_repo_chars = 0
 
     for root, dirs, files in os.walk(startpath):
         rel_root = os.path.relpath(root, startpath)
@@ -212,97 +393,42 @@ def gather_deep_context(startpath, context_window):
         for f in files:
             f_rel = os.path.join(rel_root, f) if rel_root else f
             if f.endswith('.py') and not f.startswith('.') and not is_ignored(f, f_rel):
-                py_files.append(os.path.join(root, f))
+                filepath = os.path.join(root, f)
+                py_files.append(filepath)
+                try:
+                    total_repo_chars += os.path.getsize(filepath)
+                except OSError:
+                    pass
 
-    # Ground the prompt with real packaging metadata before any code extraction,
-    # so installation/usage sections don't have to be invented.
+    return py_files, total_repo_chars
+
+
+def gather_deep_context(startpath, context_window):
+    """
+    Gathers repository context using a dynamic fair-share character budget.
+    Small repos get deep file extraction; large repos use a balanced multi-subsystem summary.
+    """
+    base_ignores = {
+        '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
+        '.idea', '.vscode', 'dist', 'build', 'tests', 'test', 'migrations',
+        'alembic', 'docs', 'site-packages'
+    }
+    py_files, total_repo_chars = _collect_py_files(startpath, base_ignores)
+
     code_summary = _gather_project_metadata(startpath)
-    candidates = []
-
-    # prioritized files for targeted readme generation
     py_files = _prioritize_py_files(py_files, startpath)
     file_manifest = "\n".join(f"- {os.path.relpath(p, startpath)}" for p in py_files)
     code_summary += f"\n--- PRIORITIZED PYTHON FILES ---\n{file_manifest}\n"
 
-    # Dynamic tokens budget to be able to generate a good quality readme,
-    # with a safe ceiling to prevent small model attention degradation,
-    # leaves ~3000 tokens for system prompt & generation headroom
     # ToDo: the lower bound of 40000 should be changed to be model-specific
     MAX_TOTAL_CHARS = min(int((context_window - 3000) * 3.5), 40000)
 
-    num_files = len(py_files)
-
-    # 1. Calculate Fair-Share Budget per file
-    if num_files > 0:
-        # Divide budget equally among files, but set a floor (e.g., ~1000 chars / ~30 lines)
-        # so large repos still get meaningful signatures before hitting the global circuit breaker.
-        char_limit_per_file = max(1000, MAX_TOTAL_CHARS // num_files)
+    if total_repo_chars <= MAX_TOTAL_CHARS:
+        code_summary += "\n" + _extract_raw_text_internal(py_files, startpath, MAX_TOTAL_CHARS)
     else:
-        char_limit_per_file = 0
+        code_summary += "\n" + build_balanced_ast_summary(py_files, startpath, MAX_TOTAL_CHARS)
 
-    for filepath in py_files:
-        # 2. GLOBAL CIRCUIT BREAKER
-        if len(code_summary) >= MAX_TOTAL_CHARS:
-            code_summary += "\n[System: Repository too large. Code context truncated to safely fit context window.]\n"
-            break
-
-        rel_path = os.path.relpath(filepath, startpath)
-        try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
-                lines = file.readlines()
-
-            # 3. SMART LINE FILTERING (Character-based)
-            clean_lines = []
-            current_file_chars = 0
-
-            for line in lines:
-                stripped = line.strip()
-                if not stripped: continue
-                # REMOVED: Stripping `#` because comments/docstrings are vital for README generation!
-                if stripped.startswith(("import ", "from ")): continue
-
-                clean_lines.append(line.rstrip())
-                current_file_chars += len(line)
-
-                # 4. LOCAL FILE LIMIT
-                if current_file_chars >= char_limit_per_file:
-                    clean_lines.append("... [Code truncated for length] ...")
-                    break
-
-            content_snippet = "\n".join(clean_lines)
-            code_summary += f"\n--- FILE: {rel_path} ---\n{content_snippet}\n"
-
-            # Check for CLI candidates
-            file_text = "".join(lines)
-            if "__main__" in file_text or "argparse" in file_text or "click" in file_text or "typer" in file_text:
-                candidates.append(filepath)
-
-        except Exception as e:
-            code_summary += f"\n--- FILE: {rel_path} (Error reading: {e}) ---\n"
-
-    # CLI Help Extraction (unchanged)
-    best_help = ""
-    best_entry = None
-    for candidate in candidates:
-        rel_entry = os.path.relpath(candidate, startpath)
-        try:
-            result = subprocess.run(
-                [sys.executable, os.path.abspath(candidate), "--help"],
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                cwd=startpath,
-                timeout=5,
-                check=False,
-            )
-            if result.returncode == 0 and ("usage:" in result.stdout.lower() or "options:" in result.stdout.lower()):
-                if len(result.stdout) > len(best_help):
-                    best_help = f"Discovered Entry Point: {rel_entry}\nOutput of 'python {rel_entry} --help':\n{result.stdout}"
-                    best_entry = rel_entry
-        except Exception:
-            pass
-
-    cli_help = best_help if best_entry else "No explicit entry point with an executable help menu confidently discovered."
+    cli_help = _extract_cli_help_internal(py_files, startpath)
     return code_summary, cli_help
 
 
@@ -339,34 +465,14 @@ def gather_deep_context_ast(startpath, context_window=None):
     """
     Experimental Smart Dispatcher (Currently bound to --deep-ast for A/B testing).
     Always uses AST to extract CLI flags/commands.
-    Routes to Raw Text extraction for small repos, and AST extraction for large repos.
+    Routes to Raw Text extraction for small repos, and balanced AST summary for large repos.
     """
     base_ignores = {
         '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
         '.idea', '.vscode', 'dist', 'build', 'tests', 'test', 'migrations',
         'alembic', 'docs', 'site-packages', 'test_data'
     }
-    # Assuming build_ignore_checker is already defined in your file
-    is_ignored = build_ignore_checker(startpath, base_ignores)
-    py_files = []
-    total_repo_chars = 0
-
-    # 1. File Discovery & Sizing
-    for root, dirs, files in os.walk(startpath):
-        rel_root = os.path.relpath(root, startpath)
-        if rel_root == ".":
-            rel_root = ""
-
-        dirs[:] = [d for d in dirs if not is_ignored(d, os.path.join(rel_root, d) if rel_root else d)]
-        for f in files:
-            f_rel = os.path.join(rel_root, f) if rel_root else f
-            if f.endswith('.py') and not f.startswith('.') and not is_ignored(f, f_rel):
-                filepath = os.path.join(root, f)
-                py_files.append(filepath)
-                try:
-                    total_repo_chars += os.path.getsize(filepath)
-                except OSError:
-                    pass
+    py_files, total_repo_chars = _collect_py_files(startpath, base_ignores)
 
     # 2. Universal AST Interface Extraction
     global_commands = {}
@@ -382,11 +488,12 @@ def gather_deep_context_ast(startpath, context_window=None):
                 visitor = CommandVisitor(source_lines)
                 visitor.visit(tree)
 
-                # Merge findings
                 for k, v in visitor.commands.items():
-                    if k not in global_commands: global_commands[k] = v
+                    if k not in global_commands:
+                        global_commands[k] = v
                 for k, v in visitor.flags.items():
-                    if k not in global_flags: global_flags[k] = v
+                    if k not in global_flags:
+                        global_flags[k] = v
         except Exception:
             pass  # Skip syntax errors during broad scan
 
@@ -411,18 +518,22 @@ def gather_deep_context_ast(startpath, context_window=None):
     # Ground the prompt with real packaging metadata, same as gather_deep_context.
     metadata_summary = _gather_project_metadata(startpath)
 
-    # 3. Smart Dispatcher (Threshold: ~20,000 chars / ~5,000 tokens)
+    # 3. Smart Dispatcher
     py_files = _prioritize_py_files(py_files, startpath)
     if context_window:
         MAX_TOTAL_CHARS = min(int((context_window - 3000) * 3.5), 40000)
     else:
         MAX_TOTAL_CHARS = 25000
+
     if total_repo_chars <= MAX_TOTAL_CHARS:
-        # Re-use the raw text extraction behavior of --deep to ensure a clean A/B test
         code_summary = _extract_raw_text_internal(py_files, startpath, MAX_TOTAL_CHARS)
     else:
-        # Use AST signature compression to save the context window
-        code_summary = _extract_ast_signatures_internal(py_files, startpath, MAX_TOTAL_CHARS)
+        code_summary = build_balanced_ast_summary(py_files, startpath, MAX_TOTAL_CHARS)
+
+    # print("======")
+    # print("code_summary")
+    # print("======")
+    # print(code_summary)
 
     full_context = command_header + metadata_summary + code_summary
 
@@ -471,83 +582,8 @@ def _extract_raw_text_internal(py_files, startpath, max_chars):
 
 
 def _extract_ast_signatures_internal(py_files, startpath, max_chars):
-    code_summary = ""
-
-    def get_brief_doc(node):
-        doc = ast.get_docstring(node)
-        if doc:
-            lines = [line.strip() for line in doc.strip().split('\n') if line.strip()]
-            return f'"""{lines[0][:100]}"""' if lines else None
-        return None
-
-    for idx, filepath in enumerate(py_files):
-        if len(code_summary) >= max_chars:
-            remaining = [os.path.relpath(p, startpath) for p in py_files[idx:]]
-            code_summary += (
-                f"\n[System: Context budget reached. Omitted {len(remaining)} lower-priority files: "
-                f"{', '.join(remaining[:15])}{'...' if len(remaining) > 15 else ''}]\n"
-            )
-            break
-
-        rel_path = os.path.relpath(filepath, startpath)
-        try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                file_text = f.read()
-
-            try:
-                tree = ast.parse(file_text)
-                signatures = []
-                has_funcs = False
-
-                mod_doc = get_brief_doc(tree)
-                if mod_doc: signatures.append(f'"""Module: {mod_doc}"""')
-
-                for node in tree.body:
-                    if isinstance(node, (ast.Import, ast.ImportFrom)):
-                        try:
-                            signatures.append(ast.unparse(node))
-                        except Exception:
-                            pass
-                    elif isinstance(node, ast.Assign):
-                        try:
-                            code_str = ast.unparse(node)
-                            if len(code_str) < 100: signatures.append(code_str)
-                        except Exception:
-                            pass
-                    elif isinstance(node, ast.ClassDef):
-                        has_funcs = True
-                        signatures.append(f"class {node.name}:")
-                        if cls_doc := get_brief_doc(node): signatures.append(f"    {cls_doc}")
-                        for item in node.body:
-                            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                                try:
-                                    # FIX: Compute signature header outside the f-string interpolation
-                                    sig_header = ast.unparse(item).split(':\n')[0]
-                                    signatures.append(f"    {sig_header}:")
-                                except Exception:
-                                    signatures.append(f"    def {item.name}(...):")
-                    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        has_funcs = True
-                        try:
-                            signatures.append(ast.unparse(node).split(':\n')[0] + ":")
-                        except Exception:
-                            signatures.append(f"def {node.name}(...):")
-                        if func_doc := get_brief_doc(node): signatures.append(f"    {func_doc}")
-
-                if not has_funcs:
-                    lines = [l for l in file_text.split('\n') if l.strip() and not l.strip().startswith('#')][:25]
-                    content = "\n".join(lines)
-                else:
-                    content = "\n".join(signatures)
-
-            except SyntaxError:
-                content = "(Syntax Error parsing file)"
-
-            code_summary += f"\n--- FILE: {rel_path} ---\n{content}\n"
-        except Exception as e:
-            code_summary += f"\n--- FILE: {rel_path} (Error: {e}) ---\n"
-
-    return code_summary
+    """Kept for backward compatibility with any external callers."""
+    return build_balanced_ast_summary(py_files, startpath, max_chars)
 
 
 def _extract_cli_help_internal(py_files, startpath):
