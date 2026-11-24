@@ -284,6 +284,28 @@ def _group_files_by_subsystem(py_files, startpath):
     return [(g, grouped[g]) for g in ordered_groups]
 
 
+def _select_key_symbols(outline, limit=6):
+    """
+    Selects top-level symbols for subsystem overview previews, preferring
+    public symbols (not starting with '_') ahead of private ones.
+    """
+    public_symbols = []
+    private_symbols = []
+
+    for line in outline.splitlines():
+        s = line.strip()
+        if s.startswith("class ") or s.startswith("def ") or s.startswith("async def "):
+            name_part = s.split("(", 1)[0].rstrip(":")
+            parts = name_part.split(" ", 1)
+            symbol_name = parts[1].strip() if len(parts) > 1 else name_part
+            target_list = private_symbols if symbol_name.startswith("_") else public_symbols
+            if name_part not in target_list:
+                target_list.append(name_part)
+
+    ordered = public_symbols + [sym for sym in private_symbols if sym not in public_symbols]
+    return ordered[:limit]
+
+
 def build_balanced_ast_summary(py_files, startpath, max_chars):
     """
     Builds a balanced multi-subsystem summary preserving docstrings and key
@@ -303,28 +325,20 @@ def build_balanced_ast_summary(py_files, startpath, max_chars):
     group_entries = []
 
     for group_name, items in groups:
-        top_symbols = []
-        group_doc = ""
+        group_symbols = []
         for _, fp in items:
             outline = _extract_ast_outline(fp, include_method_docstrings=False)
-            if not group_doc:
-                for line in outline.splitlines():
-                    s = line.strip()
-                    if s.startswith('"""') and s.endswith('"""') and len(s) > 6:
-                        group_doc = s[3:-3]
-                        break
-            for line in outline.splitlines():
-                s = line.strip()
-                if s.startswith("class ") or s.startswith("def ") or s.startswith("async def "):
-                    name_part = s.split("(", 1)[0].rstrip(":")
-                    if name_part not in top_symbols:
-                        top_symbols.append(name_part)
+            for sym in _select_key_symbols(outline, limit=6):
+                if sym not in group_symbols:
+                    group_symbols.append(sym)
+                if len(group_symbols) >= 6:
+                    break
+            if len(group_symbols) >= 6:
+                break
 
         summary_line = f"- {group_name} ({len(items)} files)"
-        if group_doc:
-            summary_line += f": {group_doc}"
-        if top_symbols:
-            preview = ", ".join(top_symbols[:6])
+        if group_symbols:
+            preview = ", ".join(group_symbols[:6])
             summary_line += f" [key: {preview}]"
         overview_lines.append(summary_line)
         group_entries.append((group_name, items))
@@ -586,7 +600,7 @@ def _extract_ast_signatures_internal(py_files, startpath, max_chars):
     return build_balanced_ast_summary(py_files, startpath, max_chars)
 
 
-def _extract_cli_help_internal(py_files, startpath):
+def _extract_cli_help_internal(py_files, startpath, max_entrypoints=3, max_total_chars=6000):
     candidates = []
     for filepath in py_files:
         try:
@@ -597,9 +611,12 @@ def _extract_cli_help_internal(py_files, startpath):
         except Exception:
             pass
 
-    best_help = ""
-    best_entry = None
+    captured = []
+    total_chars = 0
+
     for candidate in candidates:
+        if len(captured) >= max_entrypoints:
+            break
         rel_entry = os.path.relpath(candidate, startpath)
         try:
             result = subprocess.run(
@@ -612,10 +629,17 @@ def _extract_cli_help_internal(py_files, startpath):
                 check=False,
             )
             if result.returncode == 0 and ("usage:" in result.stdout.lower() or "options:" in result.stdout.lower()):
-                if len(result.stdout) > len(best_help):
-                    best_help = f"Discovered Entry Point: {rel_entry}\nOutput:\n{result.stdout}"
-                    best_entry = rel_entry
+                help_text = result.stdout.strip()
+                entry_block = f"Discovered Entry Point: {rel_entry}\nOutput:\n{help_text}\n"
+                if total_chars + len(entry_block) <= max_total_chars:
+                    captured.append(entry_block)
+                    total_chars += len(entry_block)
+                else:
+                    remaining = max_total_chars - total_chars
+                    if remaining > 200:
+                        captured.append(entry_block[:remaining] + "\n... [Help output truncated]")
+                    break
         except Exception:
             pass
 
-    return best_help if best_entry else "No explicit CLI --help output captured."
+    return "\n---\n".join(captured) if captured else "No explicit CLI --help output captured."
