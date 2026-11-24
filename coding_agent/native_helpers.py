@@ -600,11 +600,17 @@ def _extract_ast_signatures_internal(py_files, startpath, max_chars):
     return build_balanced_ast_summary(py_files, startpath, max_chars)
 
 
-def _extract_cli_help_internal(py_files, startpath, max_entrypoints=3, max_total_chars=6000):
+def _extract_cli_help_internal(
+    py_files,
+    startpath,
+    max_entrypoints=6,
+    max_total_chars=8000,
+    max_per_entry=2400,
+):
     candidates = []
     for filepath in py_files:
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 text = f.read()
                 if any(x in text for x in ["__main__", "argparse", "click", "typer"]):
                     candidates.append(filepath)
@@ -612,12 +618,13 @@ def _extract_cli_help_internal(py_files, startpath, max_entrypoints=3, max_total
             pass
 
     captured = []
+    seen_help_texts = set()
     total_chars = 0
 
     for candidate in candidates:
-        if len(captured) >= max_entrypoints:
+        if len(captured) >= max_entrypoints or total_chars >= max_total_chars:
             break
-        rel_entry = os.path.relpath(candidate, startpath)
+        rel_entry = os.path.relpath(candidate, startpath).replace(os.sep, "/")
         try:
             result = subprocess.run(
                 [sys.executable, os.path.abspath(candidate), "--help"],
@@ -628,16 +635,26 @@ def _extract_cli_help_internal(py_files, startpath, max_entrypoints=3, max_total
                 timeout=5,
                 check=False,
             )
-            if result.returncode == 0 and ("usage:" in result.stdout.lower() or "options:" in result.stdout.lower()):
+            out_lower = result.stdout.lower()
+            if result.returncode == 0 and ("usage:" in out_lower or "options:" in out_lower):
                 help_text = result.stdout.strip()
+                normalized_key = re.sub(r"\s+", " ", help_text)
+                if normalized_key in seen_help_texts:
+                    continue
+                seen_help_texts.add(normalized_key)
+
+                if len(help_text) > max_per_entry:
+                    help_text = help_text[:max_per_entry].rsplit("\n", 1)[0] + "\n... [Help truncated]"
+
                 entry_block = f"Discovered Entry Point: {rel_entry}\nOutput:\n{help_text}\n"
-                if total_chars + len(entry_block) <= max_total_chars:
+                remaining_total = max_total_chars - total_chars
+                if len(entry_block) <= remaining_total:
                     captured.append(entry_block)
                     total_chars += len(entry_block)
-                else:
-                    remaining = max_total_chars - total_chars
-                    if remaining > 200:
-                        captured.append(entry_block[:remaining] + "\n... [Help output truncated]")
+                elif remaining_total > 200:
+                    trimmed = entry_block[:remaining_total].rsplit("\n", 1)[0] + "\n... [Help output truncated]"
+                    captured.append(trimmed)
+                    total_chars += len(trimmed)
                     break
         except Exception:
             pass
