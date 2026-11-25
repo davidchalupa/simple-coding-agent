@@ -119,7 +119,7 @@ def test_self_readme_generation_deep():
         repo_name="simple-coding-agent",
         setup_sandbox_hook=prepare_self_repo_sandbox,
         expected_file="README.md",
-        expected_keywords=["agent"],
+        expected_keywords=["agent", "consultant"],
         max_calls_limit=40,
         custom_file_validator=validate_self_readme
     )
@@ -138,7 +138,7 @@ def test_self_readme_generation_deep_ast():
         repo_name="simple-coding-agent",
         setup_sandbox_hook=prepare_self_repo_sandbox,
         expected_file="README.md",
-        expected_keywords=["agent"],
+        expected_keywords=["agent", "consultant"],
         max_calls_limit=40,
         custom_file_validator=validate_self_readme
     )
