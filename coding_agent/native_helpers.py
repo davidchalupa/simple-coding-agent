@@ -285,25 +285,43 @@ def _group_files_by_subsystem(py_files, startpath):
 
 
 def _select_key_symbols(outline, limit=6):
-    """
-    Selects top-level symbols for subsystem overview previews, preferring
-    public symbols (not starting with '_') ahead of private ones.
-    """
-    public_symbols = []
-    private_symbols = []
+    if not outline:
+        return []
 
-    for line in outline.splitlines():
-        s = line.strip()
-        if s.startswith("class ") or s.startswith("def ") or s.startswith("async def "):
-            name_part = s.split("(", 1)[0].rstrip(":")
-            parts = name_part.split(" ", 1)
-            symbol_name = parts[1].strip() if len(parts) > 1 else name_part
-            target_list = private_symbols if symbol_name.startswith("_") else public_symbols
-            if name_part not in target_list:
-                target_list.append(name_part)
+    entrypoint_names = {"main", "main_loop", "cli", "app"}
+    scored = []
+    for idx, sym in enumerate(outline):
+        if isinstance(sym, dict):
+            name = sym.get("name", "")
+            kind = sym.get("kind", "")
+            doc = (sym.get("doc") or "").strip()
+            label = f"{kind} {name}".strip() if (kind or name) else ""
+        else:
+            label = str(sym).strip()
+            if not label:
+                continue
+            parts = label.split(None, 1)
+            kind = parts[0] if len(parts) > 1 and parts[0] in {"class", "def", "async"} else ""
+            raw_sig = parts[1] if kind else label
+            name = raw_sig.split("(", 1)[0].split(":", 1)[0].strip()
+            doc = ""
 
-    ordered = public_symbols + [sym for sym in private_symbols if sym not in public_symbols]
-    return ordered[:limit]
+        if not label:
+            continue
+
+        score = 0
+        if kind == "class" or label.startswith("class "):
+            score += 3
+        if name in entrypoint_names or name.startswith("run_"):
+            score += 3
+        if doc:
+            score += 2
+        score -= idx * 0.05
+
+        scored.append((score, idx, label))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [label for _, _, label in scored[:limit]]
 
 
 def build_balanced_ast_summary(py_files, startpath, max_chars):
@@ -442,6 +460,11 @@ def gather_deep_context(startpath, context_window):
     else:
         code_summary += "\n" + build_balanced_ast_summary(py_files, startpath, MAX_TOTAL_CHARS)
 
+    print("======")
+    print("code_summary")
+    print("======")
+    print(code_summary)
+
     cli_help = _extract_cli_help_internal(py_files, startpath)
     return code_summary, cli_help
 
@@ -514,7 +537,12 @@ def gather_deep_context_ast(startpath, context_window=None):
     command_header = ""
     if global_commands or global_flags:
         command_header = "=== AST DISCOVERED INTERFACES ===\n"
-        command_header += "CRITICAL ARCHITECTURE NOTE: This application operates via an interactive chat loop. Users must start the application first, and THEN type these commands into the prompt.\n\n"
+        command_header += (
+            "CRITICAL ARCHITECTURE NOTE: This application operates via an interactive chat loop. "
+            "Users must start the application first, and THEN type these commands into the prompt.\n"
+            "Scope rule: Cover all distinct components and entrypoints shown in the provided context "
+            "using their actual codebase terms, rather than centering the README on a single subset.\n\n"
+        )
 
         if global_commands:
             command_header += "Interactive Chat Macros detected:\n"
