@@ -752,9 +752,17 @@ def gather_readme_context(startpath, context_window=None):
     max_total_chars = _compute_max_context_chars(context_window)
     use_raw_mode = total_repo_chars <= max_total_chars
 
-    if py_files and non_py_files:
-        py_budget = int(max_total_chars * 0.70)
-        non_py_budget = max(max_total_chars - py_budget, 2000)
+    non_py_raw_bytes = 0
+    for fp in non_py_files:
+        try:
+            non_py_raw_bytes += os.path.getsize(fp)
+        except OSError:
+            pass
+
+    if py_files and non_py_files and non_py_raw_bytes > 0:
+        max_non_py_share = int(max_total_chars * 0.20)
+        non_py_budget = min(max_non_py_share, non_py_raw_bytes)
+        py_budget = max(max_total_chars - non_py_budget, 0)
     elif py_files:
         py_budget = max_total_chars
         non_py_budget = 0

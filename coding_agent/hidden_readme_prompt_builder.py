@@ -6,6 +6,8 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
     Builds a grounded README prompt from repository structure, manifests,
     extracted code/AST context, and runtime CLI help output.
     """
+    workspace_label = os.path.basename(abs_target_dir.rstrip("/\\")) or abs_target_dir
+
     deep_section = ""
     deep_guardrail = ""
     if code_summary or cli_help:
@@ -19,24 +21,26 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
             "I have ALREADY gathered repository manifests, code/AST context, and interface details above. "
             "DO NOT write scripts to scan or analyze the repository. "
             "DO NOT write code to simulate file reading. "
-            "Your ONLY task is to draft the README content grounded in the provided context, "
+            "Your ONLY task is to draft the README content grounded strictly in the provided context, "
             "and output a valid `<tool_call>` using the `write_file` tool to save it to disk.\n\n"
         )
 
     installation_guardrail = (
-        "\n\nINSTALLATION SECTION RULES (CRITICAL):\n"
-        "- Do NOT invent a git remote URL (e.g. 'https://github.com/your-repo/...'). You do not know the real repository URL.\n"
-        "- Base installation and dependency instructions on actual manifest/packaging files shown in the context "
-        "(such as requirements.txt, pyproject.toml, setup.py, package.json, Cargo.toml, or go.mod).\n"
-        "- If no packaging metadata is present, describe setup simply based on copying the repository and having the "
-        "relevant runtime/toolchain installed. Do NOT fabricate a `git clone` URL or package name.\n"
+        "\n\nINSTALLATION & SETUP RULES (CRITICAL):\n"
+        "- Do NOT invent a git remote URL (e.g. 'https://github.com/your-repo/...'), clone commands, or temporary /tmp paths.\n"
+        "- Do NOT invent virtual environment creation or activation steps (such as `venv`, `source .../activate`, "
+        "`Scripts\\activate`, `conda`, or OS-specific shell commands) unless explicitly shown in the provided context.\n"
+        "- Base installation and dependency notes ONLY on actual manifest/packaging files shown in the context "
+        "(such as requirements.txt, pyproject.toml, setup.py, setup.cfg, package.json, Cargo.toml, or go.mod).\n"
+        "- If no packaging manifest is present, state only that the files are used directly with the relevant language "
+        "runtime, without fabricating install commands or package names.\n"
         "- Write each instruction line ONCE. Do not repeat similar lines multiple times."
     )
 
     return (
         f"The user wants to evaluate and maintain a clean, high-quality documentation README file.\n\n"
         f"--- CONTEXT ---\n"
-        f"Target Directory: '{abs_target_dir}'\n"
+        f"Project Workspace: '{workspace_label}'\n"
         f"Target File: README.md (Use exactly this relative filename in your tool calls)\n\n"
         f"--- CURRENT REPOSITORY STRUCTURE ---\n{repo_tree}\n--------------------------\n\n"
         f"{deep_section}"
@@ -52,9 +56,14 @@ def build_hidden_readme_prompt(abs_target_dir, repo_tree, existing_readme, strat
 def build_strategy_steps(readme_path, allow_patch):
     focus_rule = (
         "\n\nSTRICT FORMATTING CONSTRAINTS:\n"
-        "- AVOID GENERIC BOILERPLATE: Do NOT generate generic 'Contributing' or standard Git workflows unless explicitly found in the codebase.\n"
-        "- GROUNDED CONTENT ONLY: Only document features, modules, classes, functions, commands, or CLI flags proven by the provided context and CLI output.\n"
-        "- REQUIRED STRUCTURE: Organize the README with clear headers: Project Overview, Core Architecture (based on actual files and subsystems), and Usage."
+        "- AVOID GENERIC BOILERPLATE: Do NOT generate generic 'Contributing', standard Git workflows, "
+        "boilerplate setup/activation instructions, or `<angle_bracket>` placeholders.\n"
+        "- EXACT SYMBOLS & FILES ONLY: Every file name, module, class, function, CLI flag, or command you mention "
+        "MUST appear verbatim in the provided context or CLI output. Never guess or infer filenames.\n"
+        "- DENSE, FACTUAL COVERAGE: In Core Architecture and Usage, cite the actual files, classes/functions, "
+        "entrypoints, commands, and flags present in the context without inventing shell commands or environment setup.\n"
+        "- REQUIRED STRUCTURE: Organize the README with clear headers: Project Overview, Core Architecture "
+        "(based on actual files and subsystems), and Usage."
     )
 
     grounding_source = "the repository structure, manifests, extracted code/AST context, and CLI help output provided"
