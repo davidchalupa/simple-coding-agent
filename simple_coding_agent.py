@@ -113,8 +113,7 @@ def main(state, execution_state):
 
     if state.reasoning_model_key:
         reasoning_display = MODEL_REGISTRY[state.reasoning_model_key]["display_name"]
-        print(
-            f"💡 Multi-Model Agent mode enabled: Using Reasoner ({reasoning_display}) when complex reasoning is required.")
+        print(f"💡 Multi-Model Agent mode enabled: Using Reasoner ({reasoning_display}) when complex reasoning is required.")
     print()
 
     while True:

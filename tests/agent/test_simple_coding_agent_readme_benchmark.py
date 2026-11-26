@@ -1,11 +1,11 @@
 import os
-import tempfile
 import shutil
+import tempfile
 import zipfile
 import pytest
 
-from tests.agent.test_utils.test_runner import run_automated_coding_task_test
 from tests.agent.test_utils.grounding_verifier import GroundingVerifier
+from tests.agent.test_utils.test_runner import run_automated_coding_task_test
 
 
 # Project root directory (parent of the tests/ folder)
@@ -39,7 +39,31 @@ def prepare_self_repo_sandbox(target_dir):
     shutil.copytree(PROJECT_ROOT, repo_dest, ignore=ignore_patterns)
 
 
-def run_readme_and_capture(zip_file_path, repo_name, mode_flag):
+def _format_readme_command(mode_flag=None):
+    """Builds '/readme .' for default mode or '/readme <flag> .' when a flag is given."""
+    flag = (mode_flag or "").strip()
+    return f"/readme {flag} ." if flag else "/readme ."
+
+
+def _build_input_queue(mode_flag=None):
+    return [
+        "Keep the generated README concise. Do not repeat sections or dummy bash commands.", "/send",
+        # Fix: The runner already `cd`s into repo_name, so we target "." instead of "./repo_name"
+        _format_readme_command(mode_flag), "/send",
+        "Looks good, task complete.", "/send", "/quit",
+    ]
+
+
+def _print_mode_score(label, score, include_ref_count=False):
+    print(f"\nMode [{label}]:")
+    print(f"  • Groundedness Precision: {score['groundedness_score']}%")
+    print(f"  • Info Density:           {score['density_score']}")
+    if include_ref_count:
+        print(f"  • Total Code References:  {score['total_code_references']}")
+    print(f"  • Suspected Hallucinations:\n    {score['hallucination_candidates']}")
+
+
+def run_readme_and_capture(zip_file_path, repo_name, mode_flag=None):
     """Executes the agent via unified runner and captures generated README content."""
     captured = {}
 
@@ -47,15 +71,8 @@ def run_readme_and_capture(zip_file_path, repo_name, mode_flag):
         with open(file_path, "r", encoding="utf-8") as f:
             captured["content"] = f.read()
 
-    input_queue = [
-        "Keep the generated README concise. Do not repeat sections or dummy bash commands.", "/send",
-        # Fix: The runner already `cd`s into repo_name, so we target "." instead of "./repo_name"
-        f"/readme {mode_flag} .", "/send",
-        "Looks good, task complete.", "/send", "/quit"
-    ]
-
     run_automated_coding_task_test(
-        input_queue=input_queue,
+        input_queue=_build_input_queue(mode_flag),
         zip_file_path=resolve_zip_path(zip_file_path),
         repo_name=repo_name,
         expected_file="README.md",
@@ -66,7 +83,7 @@ def run_readme_and_capture(zip_file_path, repo_name, mode_flag):
     return captured.get("content", "")
 
 
-def run_self_readme_and_capture(repo_name, mode_flag):
+def run_self_readme_and_capture(repo_name, mode_flag=None):
     """Executes the agent against the live repository via unified runner and captures README content."""
     captured = {}
 
@@ -74,15 +91,8 @@ def run_self_readme_and_capture(repo_name, mode_flag):
         with open(file_path, "r", encoding="utf-8") as f:
             captured["content"] = f.read()
 
-    input_queue = [
-        "Keep the generated README concise. Do not repeat sections or dummy bash commands.", "/send",
-        # Fix: The runner already `cd`s into repo_name, so we target "." instead of "./repo_name"
-        f"/readme {mode_flag} .", "/send",
-        "Looks good, task complete.", "/send", "/quit"
-    ]
-
     run_automated_coding_task_test(
-        input_queue=input_queue,
+        input_queue=_build_input_queue(mode_flag),
         setup_sandbox_hook=prepare_self_repo_sandbox,
         repo_name=repo_name,
         expected_file="README.md",
@@ -93,57 +103,50 @@ def run_self_readme_and_capture(repo_name, mode_flag):
     return captured.get("content", "")
 
 
-@pytest.mark.skip(reason="Run only on-demand if benchmarking needed")
+# @pytest.mark.skip(reason="Run only on-demand if benchmarking needed")
 def test_minesweeper_macro_benchmark():
     """
-    Pilots the benchmark comparison between --deep and --deep-ast
-    on the Minesweeper repository (generating both READMEs in a sandbox and comparing
-    their quality with GroundingVerifier).
+    Benchmarks default /readme against --deep and --deep-ast on the Minesweeper
+    repository using GroundingVerifier.
     """
     zip_target = "test_data/minesweeper-solve.zip"
     repo_name = "minesweeper-solve"
 
     print("\n" + "=" * 60)
-    print("🚀 STARTING BENCHMARK: --deep vs --deep-ast")
+    print("🚀 STARTING BENCHMARK: default /readme vs --deep vs --deep-ast")
     print("=" * 60)
 
-    # 1. Setup Ground Truth Verifier
     ground_truth_sandbox = tempfile.mkdtemp(prefix="ground_truth_")
     source_zip_path = resolve_zip_path(zip_target)
 
-    with zipfile.ZipFile(source_zip_path, 'r') as zip_ref:
+    with zipfile.ZipFile(source_zip_path, "r") as zip_ref:
         zip_ref.extractall(ground_truth_sandbox)
 
     verifier = GroundingVerifier(os.path.join(ground_truth_sandbox, repo_name))
 
     try:
-        # 2. Run both modes and capture output
+        print("\n⏳ Running agent with default /readme...")
+        readme_default = run_readme_and_capture(zip_target, repo_name, mode_flag=None)
+
         print("\n⏳ Running agent with --deep...")
-        readme_deep = run_readme_and_capture(zip_target, repo_name, "--deep")
+        readme_deep = run_readme_and_capture(zip_target, repo_name, mode_flag="--deep")
 
         print("⏳ Running agent with --deep-ast...")
-        readme_ast = run_readme_and_capture(zip_target, repo_name, "--deep-ast")
+        readme_ast = run_readme_and_capture(zip_target, repo_name, mode_flag="--deep-ast")
 
-        # 3. Evaluate
+        score_default = verifier.evaluate_readme(readme_default)
         score_deep = verifier.evaluate_readme(readme_deep)
         score_ast = verifier.evaluate_readme(readme_ast)
 
-        # 4. Print Report
         print("\n" + "=" * 60)
         print("📊 MINESWEEPER BENCHMARK REPORT")
         print("=" * 60)
-
-        print("Mode [--deep]:")
-        print(f"  • Groundedness Precision: {score_deep['groundedness_score']}%")
-        print(f"  • Info Density:           {score_deep['density_score']}")
-        print(f"  • Suspected Hallucinations:\n    {score_deep['hallucination_candidates']}")
-
-        print("\nMode [--deep-ast]:")
-        print(f"  • Groundedness Precision: {score_ast['groundedness_score']}%")
-        print(f"  • Info Density:           {score_ast['density_score']}")
-        print(f"  • Suspected Hallucinations:\n    {score_ast['hallucination_candidates']}")
+        _print_mode_score("default (/readme .)", score_default)
+        _print_mode_score("--deep", score_deep)
+        _print_mode_score("--deep-ast", score_ast)
         print("=" * 60)
 
+        assert len(readme_default) > 50, "default /readme failed to generate meaningful text"
         assert len(readme_deep) > 50, "--deep failed to generate meaningful text"
         assert len(readme_ast) > 50, "--deep-ast failed to generate meaningful text"
 
@@ -151,54 +154,45 @@ def test_minesweeper_macro_benchmark():
         shutil.rmtree(ground_truth_sandbox)
 
 
-@pytest.mark.skip(reason="Run only on-demand if benchmarking needed")
+# @pytest.mark.skip(reason="Run only on-demand if benchmarking needed")
 def test_self_macro_benchmark():
     """
-    Pilots the benchmark comparison between --deep and --deep-ast
-    on the live Simple Coding Agent repository to measure performance on a larger codebase.
+    Benchmarks default /readme against --deep and --deep-ast on the live
+    Simple Coding Agent repository.
     """
     repo_name = "simple-coding-agent"
 
     print("\n" + "=" * 60)
-    print("🚀 STARTING SELF-REPO BENCHMARK: --deep vs --deep-ast")
+    print("🚀 STARTING SELF-REPO BENCHMARK: default /readme vs --deep vs --deep-ast")
     print("=" * 60)
 
-    # 1. Setup Ground Truth Verifier from the live codebase
     ground_truth_sandbox = tempfile.mkdtemp(prefix="ground_truth_self_")
-
     prepare_self_repo_sandbox(ground_truth_sandbox)
     verifier = GroundingVerifier(os.path.join(ground_truth_sandbox, repo_name))
 
     try:
-        # 2. Run both modes and capture output
+        print("\n⏳ Running agent with default /readme...")
+        readme_default = run_self_readme_and_capture(repo_name, mode_flag=None)
+
         print("\n⏳ Running agent with --deep (Line-by-Line Regex)...")
-        readme_deep = run_self_readme_and_capture(repo_name, "--deep")
+        readme_deep = run_self_readme_and_capture(repo_name, mode_flag="--deep")
 
         print("⏳ Running agent with --deep-ast (AST Structure/Signatures)...")
-        readme_ast = run_self_readme_and_capture(repo_name, "--deep-ast")
+        readme_ast = run_self_readme_and_capture(repo_name, mode_flag="--deep-ast")
 
-        # 3. Evaluate using the verifier
+        score_default = verifier.evaluate_readme(readme_default)
         score_deep = verifier.evaluate_readme(readme_deep)
         score_ast = verifier.evaluate_readme(readme_ast)
 
-        # 4. Print Report
         print("\n" + "=" * 60)
         print("📊 SELF-REPO BENCHMARK REPORT (AGENT CODEBASE)")
         print("=" * 60)
-
-        print("Mode [--deep]:")
-        print(f"  • Groundedness Precision: {score_deep['groundedness_score']}%")
-        print(f"  • Info Density:           {score_deep['density_score']}")
-        print(f"  • Total Code References:  {score_deep['total_code_references']}")
-        print(f"  • Suspected Hallucinations:\n    {score_deep['hallucination_candidates']}")
-
-        print("\nMode [--deep-ast]:")
-        print(f"  • Groundedness Precision: {score_ast['groundedness_score']}%")
-        print(f"  • Info Density:           {score_ast['density_score']}")
-        print(f"  • Total Code References:  {score_ast['total_code_references']}")
-        print(f"  • Suspected Hallucinations:\n    {score_ast['hallucination_candidates']}")
+        _print_mode_score("default (/readme .)", score_default, include_ref_count=True)
+        _print_mode_score("--deep", score_deep, include_ref_count=True)
+        _print_mode_score("--deep-ast", score_ast, include_ref_count=True)
         print("=" * 60)
 
+        assert len(readme_default) > 50, "default /readme failed to generate meaningful text on self-repo"
         assert len(readme_deep) > 50, "--deep failed to generate meaningful text on self-repo"
         assert len(readme_ast) > 50, "--deep-ast failed to generate meaningful text on self-repo"
 

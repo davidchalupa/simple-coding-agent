@@ -1,59 +1,85 @@
-import os
-import subprocess
-import re
-import platform
 import ast
-import fnmatch
-import sys
 from collections import defaultdict
+import fnmatch
+import os
+import platform
+import re
+import subprocess
+import sys
+
+
+SUPPORTED_SOURCE_EXTENSIONS = {
+    ".py",
+    ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+    ".go", ".rs", ".java", ".kt", ".kts", ".cs", ".cpp", ".cc", ".c", ".h", ".hpp",
+    ".rb", ".php", ".swift", ".sh", ".bash", ".zsh", ".ps1",
+    ".sql", ".yaml", ".yml", ".toml", ".json",
+}
+
+MANIFEST_FILENAMES = (
+    "pyproject.toml", "requirements.txt", "setup.py", "setup.cfg",
+    "package.json", "Cargo.toml", "go.mod", "Gemfile", "composer.json",
+)
+
+DEFAULT_TREE_IGNORES = {
+    ".git", ".venv", "venv", "env", "node_modules", "__pycache__",
+    ".idea", ".vscode", "dist", "build",
+}
+
+DEFAULT_CONTEXT_IGNORES = DEFAULT_TREE_IGNORES | {
+    "target", "vendor", "tests", "test", "migrations",
+    "alembic", "docs", "site-packages", "test_data",
+}
+
+_NON_PY_DECL_RE = re.compile(
+    r"^\s*(export\s+)?(async\s+)?(function|class|interface|type|enum|struct|trait|impl|fn|def|mod)\b[^\n{;]+"
+)
 
 
 # --- HELPER: .gitignore Parser ---
 def build_ignore_checker(startpath, extra_ignores=None):
     """
-    Parses .gitignore and returns a fast lookup function to check if a file/dir should be ignored.
+    Parses .gitignore and returns a lookup function to check if a file/dir should be ignored.
     Combines hardcoded exclusions with dynamic gitignore rules.
     """
-    patterns = set(extra_ignores or [])
-    gitignore_path = os.path.join(startpath, '.gitignore')
+    patterns = set(extra_ignores or ())
+    gitignore_path = os.path.join(startpath, ".gitignore")
 
     if os.path.exists(gitignore_path):
         try:
-            with open(gitignore_path, 'r', encoding='utf-8') as f:
+            with open(gitignore_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
-                    # Ignore comments and empty lines
-                    if line and not line.startswith('#'):
-                        # Strip trailing slash for directory matching
-                        if line.endswith('/'):
-                            line = line[:-1]
-                        # Remove leading slash for relative matching against the project root
-                        if line.startswith('/'):
-                            line = line[1:]
-                        # Normalize slashes for cross-platform fnmatch compatibility
-                        line = line.replace('/', os.sep)
-                        patterns.add(line)
-        except Exception:
+                    if not line or line.startswith("#"):
+                        continue
+                    if line.endswith("/"):
+                        line = line[:-1]
+                    if line.startswith("/"):
+                        line = line[1:]
+                    line = line.replace("/", os.sep)
+                    patterns.add(line)
+        except OSError:
             pass
 
     def is_ignored(name, path=None):
         for p in patterns:
-            # Match direct file/folder name or basic wildcards (*.pyc)
             if name == p or fnmatch.fnmatch(name, p):
                 return True
-            # Match relative path structures (e.g., config/*.json or frontend/node_modules)
-            if path and (path == p or fnmatch.fnmatch(path, p) or path.startswith(p + os.sep) or fnmatch.fnmatch(path,
-                                                                                                                 p + os.sep + '*')):
+            if path and (
+                path == p
+                or fnmatch.fnmatch(path, p)
+                or path.startswith(p + os.sep)
+                or fnmatch.fnmatch(path, p + os.sep + "*")
+            ):
                 return True
         return False
 
     return is_ignored
 
 
-# --- NATIVE MAPPER: /readme ---
+# --- NATIVE MAPPER: Repository Tree ---
 def get_repo_structure(startpath, max_depth=3):
-    base_ignores = {'.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__', '.idea', '.vscode', 'dist', 'build'}
-    is_ignored = build_ignore_checker(startpath, base_ignores)
+    is_ignored = build_ignore_checker(startpath, DEFAULT_TREE_IGNORES)
 
     tree_str = ""
     start_sep = startpath.count(os.path.sep)
@@ -63,21 +89,22 @@ def get_repo_structure(startpath, max_depth=3):
         if rel_root == ".":
             rel_root = ""
 
-        # Filter directories in-place to stop os.walk from entering ignored folders
-        dirs[:] = [d for d in dirs if not is_ignored(d, os.path.join(rel_root, d) if rel_root else d)]
+        dirs[:] = [
+            d for d in dirs
+            if not is_ignored(d, os.path.join(rel_root, d) if rel_root else d)
+        ]
 
         depth = root.count(os.path.sep) - start_sep
-
         if depth > max_depth:
             del dirs[:]
             continue
 
-        indent = ' ' * 4 * depth
+        indent = " " * 4 * depth
         tree_str += f"{indent}{os.path.basename(root)}/\n"
-        subindent = ' ' * 4 * (depth + 1)
+        subindent = " " * 4 * (depth + 1)
         for f in files:
             f_rel = os.path.join(rel_root, f) if rel_root else f
-            if not f.startswith('.') and not is_ignored(f, f_rel):
+            if not f.startswith(".") and not is_ignored(f, f_rel):
                 tree_str += f"{subindent}{f}\n"
 
     return tree_str[:1200]
@@ -93,14 +120,14 @@ def generate_requirements_native(target_dir, no_version=False):
         is_windows = platform.system() == "Windows"
         pip_bin = None
 
-        for venv_name in [".venv", "venv", "env"]:
+        for venv_name in (".venv", "venv", "env"):
             potential_path = os.path.join(abs_target_dir, venv_name)
             if os.path.isdir(potential_path):
-                if is_windows:
-                    test_pip = os.path.join(potential_path, "Scripts", "pip.exe")
-                else:
-                    test_pip = os.path.join(potential_path, "bin", "pip")
-
+                test_pip = (
+                    os.path.join(potential_path, "Scripts", "pip.exe")
+                    if is_windows
+                    else os.path.join(potential_path, "bin", "pip")
+                )
                 if os.path.isfile(test_pip):
                     pip_bin = test_pip
                     break
@@ -112,7 +139,12 @@ def generate_requirements_native(target_dir, no_version=False):
         print(f"   [Backend] Executing: '{pip_bin}' freeze")
 
         result = subprocess.run(
-            f'"{pip_bin}" freeze', shell=True, capture_output=True, text=True, cwd=abs_target_dir, timeout=15
+            f'"{pip_bin}" freeze',
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=abs_target_dir,
+            timeout=15,
         )
 
         if result.returncode != 0:
@@ -128,12 +160,12 @@ def generate_requirements_native(target_dir, no_version=False):
                 if not line_strip or line_strip.startswith("#"):
                     processed_lines.append(line_strip)
                     continue
-                pkg_name = re.split(r'==|>=|<=| @ ', line_strip)[0].strip()
+                pkg_name = re.split(r"==|>=|<=| @ ", line_strip)[0].strip()
                 if pkg_name:
                     processed_lines.append(pkg_name)
             raw_packages = "\n".join(processed_lines)
 
-        with open(final_output_path, 'w', encoding='utf-8') as f:
+        with open(final_output_path, "w", encoding="utf-8") as f:
             f.write(raw_packages + "\n")
 
         return f"SUCCESS: Natively generated target file: '{final_output_path}'"
@@ -142,33 +174,68 @@ def generate_requirements_native(target_dir, no_version=False):
         return f"Error executing native requirements handler: {e}"
 
 
+# --- FILE DISCOVERY & PRIORITIZATION ---
 def _gather_project_metadata(startpath):
-    """
-    Reads real packaging/dependency metadata so the README prompt has grounded
-    facts to work with instead of being forced to invent install instructions
-    (e.g. hallucinating a fake git remote URL).
-    """
+    """Reads packaging and dependency manifests across Python and other ecosystems."""
     metadata = ""
-    for fname in ("requirements.txt", "pyproject.toml", "setup.py", "setup.cfg"):
+    for fname in MANIFEST_FILENAMES:
         fpath = os.path.join(startpath, fname)
         if os.path.isfile(fpath):
             try:
-                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()[:2000]  # cap length -- this is metadata, not code
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()[:2000]
                 metadata += f"\n--- FILE: {fname} ---\n{content}\n"
-            except Exception:
+            except OSError:
                 pass
     return metadata
 
 
-def _prioritize_py_files(py_files, startpath):
+def _collect_source_files(startpath, base_ignores=None, extensions=None):
+    """Collects non-ignored source/config files and measures total byte/char size."""
+    ignores = base_ignores if base_ignores is not None else DEFAULT_CONTEXT_IGNORES
+    allowed_exts = extensions if extensions is not None else SUPPORTED_SOURCE_EXTENSIONS
+    is_ignored = build_ignore_checker(startpath, ignores)
+
+    collected = []
+    total_repo_chars = 0
+
+    for root, dirs, files in os.walk(startpath):
+        rel_root = os.path.relpath(root, startpath)
+        if rel_root == ".":
+            rel_root = ""
+
+        dirs[:] = [
+            d for d in dirs
+            if not is_ignored(d, os.path.join(rel_root, d) if rel_root else d)
+        ]
+
+        for f in files:
+            f_rel = os.path.join(rel_root, f) if rel_root else f
+            ext = os.path.splitext(f)[1].lower()
+            if ext in allowed_exts and not f.startswith(".") and not is_ignored(f, f_rel):
+                filepath = os.path.join(root, f)
+                collected.append(filepath)
+                try:
+                    total_repo_chars += os.path.getsize(filepath)
+                except OSError:
+                    pass
+
+    return collected, total_repo_chars
+
+
+def _collect_py_files(startpath, base_ignores=None):
+    """Collects non-ignored .py files under startpath."""
+    ignores = base_ignores if base_ignores is not None else DEFAULT_CONTEXT_IGNORES
+    return _collect_source_files(startpath, base_ignores=ignores, extensions={".py"})
+
+
+def _prioritize_files(filepaths, startpath):
     """
-    Orders Python files deterministically using generic structural signals only:
-    shallower paths first, common generic entry/module stems ahead of deeper
-    nested files, and alphabetical tie-breaking by relative path.
+    Orders files deterministically by shallow depth, common entry/module stems,
+    and relative path.
     """
     generic_entry_stems = {
-        "main", "cli", "app", "index", "server", "run", "entry", "__main__"
+        "main", "cli", "app", "index", "server", "run", "entry", "__main__",
     }
 
     def priority_key(filepath):
@@ -188,9 +255,21 @@ def _prioritize_py_files(py_files, startpath):
 
         return (tier, rel)
 
-    return sorted(py_files, key=priority_key)
+    return sorted(filepaths, key=priority_key)
 
 
+def _prioritize_py_files(py_files, startpath):
+    """Backward-compatible alias for prioritizing files."""
+    return _prioritize_files(py_files, startpath)
+
+
+def _compute_max_context_chars(context_window):
+    if context_window:
+        return min(int((context_window - 3000) * 3.5), 40000)
+    return 25000
+
+
+# --- PYTHON AST EXTRACTION & BALANCED SUBSYSTEM SUMMARY ---
 def _first_docstring_line(node, max_len=120):
     """Extracts a concise first line from an AST node's docstring, if present."""
     doc = ast.get_docstring(node, clean=True)
@@ -266,9 +345,8 @@ def _extract_ast_outline(filepath, include_method_docstrings=True):
 
 def _group_files_by_subsystem(py_files, startpath):
     """
-    Groups prioritized Python files by top-level directory (or '(root)').
-    Preserves incoming priority order within each group and orders groups
-    with '(root)' first, followed by alphabetical directory names.
+    Groups prioritized files by top-level directory (or '(root)').
+    Preserves priority order within each group and puts '(root)' first.
     """
     grouped = defaultdict(list)
     for filepath in py_files:
@@ -326,14 +404,13 @@ def _select_key_symbols(outline, limit=6):
 
 def build_balanced_ast_summary(py_files, startpath, max_chars):
     """
-    Builds a balanced multi-subsystem summary preserving docstrings and key
-    classes/functions across directories rather than letting one large group or
-    single file crowd out the rest.
+    Builds a balanced multi-subsystem AST summary preserving docstrings and key
+    classes/functions across directories.
     """
     if not py_files:
         return ""
 
-    prioritized = _prioritize_py_files(py_files, startpath)
+    prioritized = _prioritize_files(py_files, startpath)
     groups = _group_files_by_subsystem(prioritized, startpath)
 
     overview_budget = min(int(max_chars * 0.20), 6000)
@@ -395,8 +472,7 @@ def build_balanced_ast_summary(py_files, startpath, max_chars):
                 break
 
         detail_sections.append("\n".join(section_lines))
-        unused = max(0, budget_for_group - used_in_group)
-        carryover = unused
+        carryover = max(0, budget_for_group - used_in_group)
 
     result = overview_text + "\n" + "\n".join(detail_sections)
     if omitted_files:
@@ -410,71 +486,12 @@ def build_balanced_ast_summary(py_files, startpath, max_chars):
     return result
 
 
-def _collect_py_files(startpath, base_ignores):
-    """Collects non-ignored .py files under startpath."""
-    is_ignored = build_ignore_checker(startpath, base_ignores)
-    py_files = []
-    total_repo_chars = 0
-
-    for root, dirs, files in os.walk(startpath):
-        rel_root = os.path.relpath(root, startpath)
-        if rel_root == ".":
-            rel_root = ""
-
-        dirs[:] = [d for d in dirs if not is_ignored(d, os.path.join(rel_root, d) if rel_root else d)]
-        for f in files:
-            f_rel = os.path.join(rel_root, f) if rel_root else f
-            if f.endswith('.py') and not f.startswith('.') and not is_ignored(f, f_rel):
-                filepath = os.path.join(root, f)
-                py_files.append(filepath)
-                try:
-                    total_repo_chars += os.path.getsize(filepath)
-                except OSError:
-                    pass
-
-    return py_files, total_repo_chars
-
-
-def gather_deep_context(startpath, context_window):
-    """
-    Gathers repository context using a dynamic fair-share character budget.
-    Small repos get deep file extraction; large repos use a balanced multi-subsystem summary.
-    """
-    base_ignores = {
-        '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
-        '.idea', '.vscode', 'dist', 'build', 'tests', 'test', 'migrations',
-        'alembic', 'docs', 'site-packages'
-    }
-    py_files, total_repo_chars = _collect_py_files(startpath, base_ignores)
-
-    code_summary = _gather_project_metadata(startpath)
-    py_files = _prioritize_py_files(py_files, startpath)
-    file_manifest = "\n".join(f"- {os.path.relpath(p, startpath)}" for p in py_files)
-    code_summary += f"\n--- PRIORITIZED PYTHON FILES ---\n{file_manifest}\n"
-
-    # ToDo: the lower bound of 40000 should be changed to be model-specific
-    MAX_TOTAL_CHARS = min(int((context_window - 3000) * 3.5), 40000)
-
-    if total_repo_chars <= MAX_TOTAL_CHARS:
-        code_summary += "\n" + _extract_raw_text_internal(py_files, startpath, MAX_TOTAL_CHARS)
-    else:
-        code_summary += "\n" + build_balanced_ast_summary(py_files, startpath, MAX_TOTAL_CHARS)
-
-    print("======")
-    print("code_summary")
-    print("======")
-    print(code_summary)
-
-    cli_help = _extract_cli_help_internal(py_files, startpath)
-    return code_summary, cli_help
-
-
 class CommandVisitor(ast.NodeVisitor):
-    """Universal visitor to extract string constants and their surrounding code context."""
+    """Extracts slash commands and CLI flags with surrounding source context."""
 
     def __init__(self, source_lines):
-        self.commands = {}  # Map: command -> code snippet
-        self.flags = {}  # Map: flag -> code snippet
+        self.commands = {}
+        self.flags = {}
         self.source_lines = source_lines
 
     def visit_Constant(self, node):
@@ -483,13 +500,12 @@ class CommandVisitor(ast.NodeVisitor):
             is_cmd = re.match(r"^/[a-zA-Z0-9_-]+$", val)
             is_flag = re.match(r"^--[a-zA-Z0-9_-]+$", val)
 
-            # If it's a command/flag and we know its line number
-            if (is_cmd or is_flag) and hasattr(node, 'lineno'):
-                # Grab the exact line and one line of lookahead for context
+            if (is_cmd or is_flag) and hasattr(node, "lineno"):
                 start_idx = max(0, node.lineno - 1)
                 end_idx = min(len(self.source_lines), node.lineno + 1)
-                snippet = " ".join([line.strip() for line in self.source_lines[start_idx:end_idx] if line.strip()])
-
+                snippet = " ".join(
+                    line.strip() for line in self.source_lines[start_idx:end_idx] if line.strip()
+                )
                 if is_cmd and val not in self.commands:
                     self.commands[val] = snippet
                 elif is_flag and val not in self.flags:
@@ -498,110 +514,72 @@ class CommandVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def gather_deep_context_ast(startpath, context_window=None):
-    """
-    Experimental Smart Dispatcher (Currently bound to --deep-ast for A/B testing).
-    Always uses AST to extract CLI flags/commands.
-    Routes to Raw Text extraction for small repos, and balanced AST summary for large repos.
-    """
-    base_ignores = {
-        '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
-        '.idea', '.vscode', 'dist', 'build', 'tests', 'test', 'migrations',
-        'alembic', 'docs', 'site-packages', 'test_data'
-    }
-    py_files, total_repo_chars = _collect_py_files(startpath, base_ignores)
-
-    # 2. Universal AST Interface Extraction
+def _extract_python_ast_interfaces(py_files):
+    """Extracts slash commands and CLI flags from Python files via AST."""
     global_commands = {}
     global_flags = {}
 
     for filepath in py_files:
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
-                text = file.read()
-                source_lines = text.splitlines()
-                tree = ast.parse(text)
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read()
+            source_lines = text.splitlines()
+            tree = ast.parse(text)
+            visitor = CommandVisitor(source_lines)
+            visitor.visit(tree)
 
-                visitor = CommandVisitor(source_lines)
-                visitor.visit(tree)
-
-                for k, v in visitor.commands.items():
-                    if k not in global_commands:
-                        global_commands[k] = v
-                for k, v in visitor.flags.items():
-                    if k not in global_flags:
-                        global_flags[k] = v
+            for k, v in visitor.commands.items():
+                global_commands.setdefault(k, v)
+            for k, v in visitor.flags.items():
+                global_flags.setdefault(k, v)
         except Exception:
-            pass  # Skip syntax errors during broad scan
+            pass
 
-    command_header = ""
-    if global_commands or global_flags:
-        command_header = "=== AST DISCOVERED INTERFACES ===\n"
-        command_header += (
-            "CRITICAL ARCHITECTURE NOTE: This application operates via an interactive chat loop. "
-            "Users must start the application first, and THEN type these commands into the prompt.\n"
-            "Scope rule: Cover all distinct components and entrypoints shown in the provided context "
-            "using their actual codebase terms, rather than centering the README on a single subset.\n\n"
+    if not global_commands and not global_flags:
+        return ""
+
+    header = "=== AST DISCOVERED INTERFACES ===\n"
+    if global_commands:
+        header += (
+            "Interactive Chat Macros detected (users type these inside the running interactive prompt, "
+            "not as shell arguments):\n"
         )
+        for cmd, snippet in sorted(global_commands.items()):
+            header += f"  - {cmd}  (Context: `{snippet}`)\n"
+        header += "\n"
 
-        if global_commands:
-            command_header += "Interactive Chat Macros detected:\n"
-            for cmd, snippet in sorted(global_commands.items()):
-                command_header += f"  - {cmd}  (Found in code context: `{snippet}`)\n"
-            command_header += "\nUsage rule: Do NOT document these as command-line arguments (e.g., 'python app.py /command' is WRONG). Document that the user types them into the running app.\n\n"
+    if global_flags:
+        header += "CLI Flags detected:\n"
+        for flag, snippet in sorted(global_flags.items()):
+            header += f"  - {flag}  (Context: `{snippet}`)\n"
+        header += "\n"
 
-        if global_flags:
-            command_header += "Standard CLI Flags detected:\n"
-            for flag, snippet in sorted(global_flags.items()):
-                command_header += f"  - {flag}  (Found in code context: `{snippet}`)\n"
-
-        command_header += "=================================\n\n"
-
-    # Ground the prompt with real packaging metadata, same as gather_deep_context.
-    metadata_summary = _gather_project_metadata(startpath)
-
-    # 3. Smart Dispatcher
-    py_files = _prioritize_py_files(py_files, startpath)
-    if context_window:
-        MAX_TOTAL_CHARS = min(int((context_window - 3000) * 3.5), 40000)
-    else:
-        MAX_TOTAL_CHARS = 25000
-
-    if total_repo_chars <= MAX_TOTAL_CHARS:
-        code_summary = _extract_raw_text_internal(py_files, startpath, MAX_TOTAL_CHARS)
-    else:
-        code_summary = build_balanced_ast_summary(py_files, startpath, MAX_TOTAL_CHARS)
-
-    # print("======")
-    # print("code_summary")
-    # print("======")
-    # print(code_summary)
-
-    full_context = command_header + metadata_summary + code_summary
-
-    # 4. CLI Help Extraction
-    cli_help = _extract_cli_help_internal(py_files, startpath)
-
-    return full_context, cli_help
+    header += "=================================\n\n"
+    return header
 
 
-# --- Internal Helpers for the Dispatcher ---
-
-def _extract_raw_text_internal(py_files, startpath, max_chars):
+# --- NON-PYTHON & RAW EXTRACTION HELPERS ---
+def _extract_raw_text_internal(filepaths, startpath, max_chars, max_per_file=None):
     code_summary = ""
-    char_limit_per_file = max(1000, max_chars // len(py_files)) if py_files else 0
+    if not filepaths or max_chars <= 0:
+        return code_summary
 
-    for idx, filepath in enumerate(py_files):
+    per_file = max(1000, max_chars // len(filepaths))
+    if max_per_file is not None:
+        per_file = min(per_file, max_per_file)
+
+    for idx, filepath in enumerate(filepaths):
         if len(code_summary) >= max_chars:
-            remaining = [os.path.relpath(p, startpath) for p in py_files[idx:]]
+            remaining = [os.path.relpath(p, startpath).replace(os.sep, "/") for p in filepaths[idx:]]
             code_summary += (
                 f"\n[System: Context budget reached. Omitted {len(remaining)} lower-priority files: "
                 f"{', '.join(remaining[:15])}{'...' if len(remaining) > 15 else ''}]\n"
             )
             break
-        rel_path = os.path.relpath(filepath, startpath)
+
+        rel_path = os.path.relpath(filepath, startpath).replace(os.sep, "/")
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
 
             clean_lines = []
@@ -612,7 +590,7 @@ def _extract_raw_text_internal(py_files, startpath, max_chars):
                     continue
                 clean_lines.append(line.rstrip())
                 current_chars += len(line)
-                if current_chars >= char_limit_per_file:
+                if current_chars >= per_file:
                     clean_lines.append("... [Code truncated for length] ...")
                     break
 
@@ -623,9 +601,70 @@ def _extract_raw_text_internal(py_files, startpath, max_chars):
     return code_summary
 
 
-def _extract_ast_signatures_internal(py_files, startpath, max_chars):
-    """Kept for backward compatibility with any external callers."""
-    return build_balanced_ast_summary(py_files, startpath, max_chars)
+def _extract_non_py_outline(filepath, max_lines=60):
+    """Extracts high-signal declarations and headings from non-Python files."""
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError as exc:
+        return f"  [Error reading file: {exc}]\n"
+
+    outline = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _NON_PY_DECL_RE.match(line) or stripped.startswith(("#!", "## ", "### ")):
+            outline.append(f"  {stripped[:140]}")
+        if len(outline) >= max_lines:
+            outline.append("  ... [Outline trimmed]")
+            break
+
+    return "\n".join(outline) + ("\n" if outline else "")
+
+
+def _build_non_py_summary(non_py_files, startpath, max_chars, raw_mode=False):
+    """Summarizes non-Python source/config files via bounded raw snippets or outlines."""
+    if not non_py_files or max_chars <= 0:
+        return ""
+
+    prioritized = _prioritize_files(non_py_files, startpath)
+    per_file_cap = 8000 if raw_mode else None
+    sections = ["\n=== NON-PYTHON SOURCE & CONFIG CONTEXT ==="]
+    used = len(sections[0]) + 1
+
+    for idx, filepath in enumerate(prioritized):
+        if used >= max_chars:
+            omitted = len(prioritized) - idx
+            sections.append(f"\n[System: Non-Python context budget reached; {omitted} files omitted.]")
+            break
+
+        rel_path = os.path.relpath(filepath, startpath).replace(os.sep, "/")
+        remaining = max_chars - used
+
+        if raw_mode:
+            block = _extract_raw_text_internal(
+                [filepath],
+                startpath,
+                remaining,
+                max_per_file=per_file_cap,
+            ).strip()
+            if block:
+                block += "\n"
+        else:
+            header = f"--- FILE: {rel_path} ---\n"
+            body = _extract_non_py_outline(filepath)
+            block = header + (body if body.strip() else "  [No top-level declarations extracted]\n")
+
+        if not block:
+            continue
+        if len(block) > remaining:
+            block = block[:remaining].rsplit("\n", 1)[0] + "\n... [Trimmed for budget]\n"
+
+        sections.append(block.rstrip("\n"))
+        used += len(block)
+
+    return "\n".join(sections) + "\n"
 
 
 def _extract_cli_help_internal(
@@ -640,9 +679,9 @@ def _extract_cli_help_internal(
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 text = f.read()
-                if any(x in text for x in ["__main__", "argparse", "click", "typer"]):
+                if any(x in text for x in ("__main__", "argparse", "click", "typer")):
                     candidates.append(filepath)
-        except Exception:
+        except OSError:
             pass
 
     captured = []
@@ -688,3 +727,70 @@ def _extract_cli_help_internal(
             pass
 
     return "\n---\n".join(captured) if captured else "No explicit CLI --help output captured."
+
+
+# --- UNIFIED README CONTEXT PIPELINE ---
+def gather_readme_context(startpath, context_window=None):
+    """
+    Unified, language-agnostic README context builder with deep focus by default.
+    Preserves high-density Python AST outlines and CLI introspection while supporting
+    manifests and non-Python source/config files.
+    """
+    source_files, total_repo_chars = _collect_source_files(startpath, DEFAULT_CONTEXT_IGNORES)
+    prioritized = _prioritize_files(source_files, startpath)
+
+    py_files = [p for p in prioritized if p.lower().endswith(".py")]
+    non_py_files = [p for p in prioritized if not p.lower().endswith(".py")]
+
+    metadata_summary = _gather_project_metadata(startpath)
+    manifest_lines = "\n".join(
+        f"- {os.path.relpath(p, startpath).replace(os.sep, '/')}" for p in prioritized
+    )
+    file_manifest = f"\n--- PRIORITIZED SOURCE FILES ---\n{manifest_lines}\n"
+    ast_interfaces = _extract_python_ast_interfaces(py_files) if py_files else ""
+
+    max_total_chars = _compute_max_context_chars(context_window)
+    use_raw_mode = total_repo_chars <= max_total_chars
+
+    if py_files and non_py_files:
+        py_budget = int(max_total_chars * 0.70)
+        non_py_budget = max(max_total_chars - py_budget, 2000)
+    elif py_files:
+        py_budget = max_total_chars
+        non_py_budget = 0
+    else:
+        py_budget = 0
+        non_py_budget = max_total_chars
+
+    py_section = ""
+    if py_files and py_budget > 0:
+        if use_raw_mode:
+            py_section = "\n=== PYTHON SOURCE CONTEXT ===\n" + _extract_raw_text_internal(
+                py_files, startpath, py_budget
+            )
+        else:
+            py_section = "\n=== PYTHON AST CONTEXT ===\n" + build_balanced_ast_summary(
+                py_files, startpath, py_budget
+            )
+
+    non_py_section = _build_non_py_summary(non_py_files, startpath, non_py_budget, raw_mode=use_raw_mode)
+
+    full_context = ast_interfaces + metadata_summary + file_manifest + py_section + non_py_section
+    cli_help = _extract_cli_help_internal(py_files, startpath) if py_files else "No Python CLI entrypoints detected."
+    return full_context, cli_help
+
+
+# --- BACKWARD-COMPATIBLE ENTRYPOINTS ---
+def gather_deep_context(startpath, context_window):
+    """Backward-compatible wrapper delegating to the unified README context pipeline."""
+    return gather_readme_context(startpath, context_window)
+
+
+def gather_deep_context_ast(startpath, context_window=None):
+    """Backward-compatible wrapper delegating to the unified README context pipeline."""
+    return gather_readme_context(startpath, context_window)
+
+
+def _extract_ast_signatures_internal(py_files, startpath, max_chars):
+    """Backward-compatible wrapper for balanced AST signature extraction."""
+    return build_balanced_ast_summary(py_files, startpath, max_chars)

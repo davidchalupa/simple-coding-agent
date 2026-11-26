@@ -6,7 +6,7 @@ from common.tool_definitions import read_file
 from common.guardrail_tools import is_pure_load_request, is_pure_load_or_inspect_request
 
 from coding_agent.native_helpers import (get_repo_structure, generate_requirements_native, gather_deep_context,
-                                         gather_deep_context_ast)
+                                         gather_deep_context_ast, gather_readme_context)
 
 from coding_agent.guardrails.tools import verify_sandbox_health
 from coding_agent import hidden_readme_prompt_builder
@@ -131,17 +131,9 @@ def handle_macros(user_input, state, execution_state, system_prompt, context_win
 
     # --- MACRO: /readme ---
     elif user_input.startswith("/readme"):
-        # 1. Split input into whole-word tokens to avoid substring match bugs
         tokens = user_input.split()
-
-        deep_focus = "--deep" in tokens or "-d" in tokens
-        deep_ast_focus = "--deep-ast" in tokens
-
-        # 2. Filter out the command and the flags
-        flags_to_remove = {"/readme", "--deep", "-d", "--deep-ast"}
-        path_tokens = [t for t in tokens if t not in flags_to_remove]
-
-        # 3. Join the remaining tokens to form the path (handles unquoted paths with spaces)
+        flags_to_strip = {"/readme", "--deep", "-d", "--deep-ast"}
+        path_tokens = [t for t in tokens if t not in flags_to_strip]
         target_dir = " ".join(path_tokens) if path_tokens else "."
 
         abs_target_dir = os.path.abspath(os.path.expanduser(target_dir))
@@ -160,33 +152,32 @@ def handle_macros(user_input, state, execution_state, system_prompt, context_win
             existing_readme = read_file(readme_path, start_line=1, max_lines=1000)
             print("   [Notice] Existing README.md found. Forcing structural analysis.")
         else:
-            existing_readme = "STATUS: No README.md exists yet. DO NOT call read_file. You must create it from scratch using write_file."
+            existing_readme = (
+                "STATUS: No README.md exists yet. DO NOT call read_file. "
+                "You must create it from scratch using write_file."
+            )
             print("   [Notice] No README.md found. Agent will draft a new one.")
 
-        # Deep Mode Trigger Interceptor
-        code_summary = None
-        cli_help = None
-        if deep_ast_focus:
-            print(
-                "👀 [Mode Change] Experimental Dispatcher: Extracting AST interfaces and auto-routing based on size...")
-            code_summary, cli_help = gather_deep_context_ast(abs_target_dir, context_window)
-        elif deep_focus:
-            print("👀 [Mode Change] Deep Scan: Extracting script code segments and querying CLI help hooks...")
-            code_summary, cli_help = gather_deep_context(abs_target_dir, context_window)
+        print("👀 [Mode Change] Gathering unified repository context (manifests, AST/source, CLI help)...")
+        context_summary, cli_help = gather_readme_context(abs_target_dir, context_window)
 
         strategy_steps = hidden_readme_prompt_builder.build_strategy_steps(
-            readme_path, state.allow_patch,
-            deep_focus=(deep_focus or deep_ast_focus)
+            readme_path,
+            state.allow_patch,
         )
 
         hidden_readme_prompt = hidden_readme_prompt_builder.build_hidden_readme_prompt(
-            abs_target_dir, repo_tree, existing_readme, strategy_steps, code_summary=code_summary,
-            cli_help=cli_help
+            abs_target_dir,
+            repo_tree,
+            existing_readme,
+            strategy_steps,
+            code_summary=context_summary,
+            cli_help=cli_help,
         )
 
         state.messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": hidden_readme_prompt}
+            {"role": "user", "content": hidden_readme_prompt},
         ]
 
         return False
