@@ -5,10 +5,11 @@ import shutil
 from common.tool_definitions import read_file
 from common.guardrail_tools import is_pure_load_request, is_pure_load_or_inspect_request
 
-from coding_agent.native_helpers import get_repo_structure, generate_requirements_native, gather_readme_context
+from coding_agent.readme_tools.readme_helper import get_repo_structure, gather_readme_context
+from coding_agent.requirements_tools import generate_requirements_native
 
 from coding_agent.guardrails.tools import verify_sandbox_health
-from coding_agent import hidden_readme_prompt_builder
+from coding_agent.readme_tools import hidden_readme_prompt_builder
 from coding_agent import split_tools
 
 def is_file_copy_request(user_input):
