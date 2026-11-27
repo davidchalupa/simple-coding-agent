@@ -103,17 +103,13 @@ def run_self_readme_and_capture(repo_name, mode_flag=None):
     return captured.get("content", "")
 
 
-# @pytest.mark.skip(reason="Run only on-demand if benchmarking needed")
+@pytest.mark.skip(reason="Run only on-demand if benchmarking needed")
 def test_minesweeper_macro_benchmark():
-    """
-    Benchmarks default /readme against --deep and --deep-ast on the Minesweeper
-    repository using GroundingVerifier.
-    """
     zip_target = "test_data/minesweeper-solve.zip"
     repo_name = "minesweeper-solve"
 
     print("\n" + "=" * 60)
-    print("🚀 STARTING BENCHMARK: default /readme vs --deep vs --deep-ast")
+    print("🚀 STARTING BENCHMARK: /readme")
     print("=" * 60)
 
     ground_truth_sandbox = tempfile.mkdtemp(prefix="ground_truth_")
@@ -128,42 +124,26 @@ def test_minesweeper_macro_benchmark():
         print("\n⏳ Running agent with default /readme...")
         readme_default = run_readme_and_capture(zip_target, repo_name, mode_flag=None)
 
-        print("\n⏳ Running agent with --deep...")
-        readme_deep = run_readme_and_capture(zip_target, repo_name, mode_flag="--deep")
-
-        print("⏳ Running agent with --deep-ast...")
-        readme_ast = run_readme_and_capture(zip_target, repo_name, mode_flag="--deep-ast")
-
         score_default = verifier.evaluate_readme(readme_default)
-        score_deep = verifier.evaluate_readme(readme_deep)
-        score_ast = verifier.evaluate_readme(readme_ast)
 
         print("\n" + "=" * 60)
         print("📊 MINESWEEPER BENCHMARK REPORT")
         print("=" * 60)
         _print_mode_score("default (/readme .)", score_default)
-        _print_mode_score("--deep", score_deep)
-        _print_mode_score("--deep-ast", score_ast)
         print("=" * 60)
 
         assert len(readme_default) > 50, "default /readme failed to generate meaningful text"
-        assert len(readme_deep) > 50, "--deep failed to generate meaningful text"
-        assert len(readme_ast) > 50, "--deep-ast failed to generate meaningful text"
 
     finally:
         shutil.rmtree(ground_truth_sandbox)
 
 
-# @pytest.mark.skip(reason="Run only on-demand if benchmarking needed")
+@pytest.mark.skip(reason="Run only on-demand if benchmarking needed")
 def test_self_macro_benchmark():
-    """
-    Benchmarks default /readme against --deep and --deep-ast on the live
-    Simple Coding Agent repository.
-    """
     repo_name = "simple-coding-agent"
 
     print("\n" + "=" * 60)
-    print("🚀 STARTING SELF-REPO BENCHMARK: default /readme vs --deep vs --deep-ast")
+    print("🚀 STARTING SELF-REPO BENCHMARK: /readme")
     print("=" * 60)
 
     ground_truth_sandbox = tempfile.mkdtemp(prefix="ground_truth_self_")
@@ -174,27 +154,15 @@ def test_self_macro_benchmark():
         print("\n⏳ Running agent with default /readme...")
         readme_default = run_self_readme_and_capture(repo_name, mode_flag=None)
 
-        print("\n⏳ Running agent with --deep (Line-by-Line Regex)...")
-        readme_deep = run_self_readme_and_capture(repo_name, mode_flag="--deep")
-
-        print("⏳ Running agent with --deep-ast (AST Structure/Signatures)...")
-        readme_ast = run_self_readme_and_capture(repo_name, mode_flag="--deep-ast")
-
         score_default = verifier.evaluate_readme(readme_default)
-        score_deep = verifier.evaluate_readme(readme_deep)
-        score_ast = verifier.evaluate_readme(readme_ast)
 
         print("\n" + "=" * 60)
         print("📊 SELF-REPO BENCHMARK REPORT (AGENT CODEBASE)")
         print("=" * 60)
         _print_mode_score("default (/readme .)", score_default, include_ref_count=True)
-        _print_mode_score("--deep", score_deep, include_ref_count=True)
-        _print_mode_score("--deep-ast", score_ast, include_ref_count=True)
         print("=" * 60)
 
         assert len(readme_default) > 50, "default /readme failed to generate meaningful text on self-repo"
-        assert len(readme_deep) > 50, "--deep failed to generate meaningful text on self-repo"
-        assert len(readme_ast) > 50, "--deep-ast failed to generate meaningful text on self-repo"
 
     finally:
         shutil.rmtree(ground_truth_sandbox)

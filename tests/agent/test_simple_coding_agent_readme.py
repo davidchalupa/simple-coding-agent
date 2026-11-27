@@ -61,28 +61,6 @@ def test_agent_readme_generation():
     )
 
 
-def test_agent_readme_generation_deep():
-    """Tests the /readme macro with deep generation flag."""
-    zip_target = resolve_zip_path("test_data/minesweeper-solve.zip")
-    repo_name = "minesweeper-solve"
-    input_queue = [
-        "/readme --deep .",
-        "/send",
-        "Looks good, task complete.",
-        "/send",
-        "/quit"
-    ]
-
-    run_automated_coding_task_test(
-        input_queue=input_queue,
-        zip_file_path=zip_target,
-        repo_name=repo_name,
-        expected_file="README.md",
-        max_calls_limit=40,
-        custom_file_validator=validate_minesweeper_readme
-    )
-
-
 def prepare_self_repo_sandbox(target_dir):
     """Copies the actual repository into a sandbox, ignoring cache and git history."""
     ignore_patterns = shutil.ignore_patterns(
@@ -106,35 +84,16 @@ def validate_self_readme(file_path):
         pytest.fail(f"README is too shallow ({word_count} words).")
 
 
-def test_self_readme_generation_deep():
-    """Tests /readme --deep against the current live state of the agent codebase."""
+def test_self_readme_generation():
+    """Tests /readme against the current live state of the agent codebase."""
     input_queue = [
-        "/readme --deep .", "/send",
+        "/readme .", "/send",
         "Looks good, task complete.", "/send", "/quit"
     ]
 
     run_automated_coding_task_test(
         input_queue=input_queue,
         zip_file_path=None,  # We are hooking into the directory copy directly!
-        repo_name="simple-coding-agent",
-        setup_sandbox_hook=prepare_self_repo_sandbox,
-        expected_file="README.md",
-        expected_keywords=["agent", "consultant"],
-        max_calls_limit=40,
-        custom_file_validator=validate_self_readme
-    )
-
-
-def test_self_readme_generation_deep_ast():
-    """Tests /readme --deep-ast against the current live state of the agent codebase."""
-    input_queue = [
-        "/readme --deep-ast .", "/send",
-        "Looks good, task complete.", "/send", "/quit"
-    ]
-
-    run_automated_coding_task_test(
-        input_queue=input_queue,
-        zip_file_path=None,
         repo_name="simple-coding-agent",
         setup_sandbox_hook=prepare_self_repo_sandbox,
         expected_file="README.md",

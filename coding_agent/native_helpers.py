@@ -729,7 +729,6 @@ def _extract_cli_help_internal(
     return "\n---\n".join(captured) if captured else "No explicit CLI --help output captured."
 
 
-# --- UNIFIED README CONTEXT PIPELINE ---
 def gather_readme_context(startpath, context_window=None):
     """
     Unified, language-agnostic README context builder with deep focus by default.
@@ -786,19 +785,3 @@ def gather_readme_context(startpath, context_window=None):
     full_context = ast_interfaces + metadata_summary + file_manifest + py_section + non_py_section
     cli_help = _extract_cli_help_internal(py_files, startpath) if py_files else "No Python CLI entrypoints detected."
     return full_context, cli_help
-
-
-# --- BACKWARD-COMPATIBLE ENTRYPOINTS ---
-def gather_deep_context(startpath, context_window):
-    """Backward-compatible wrapper delegating to the unified README context pipeline."""
-    return gather_readme_context(startpath, context_window)
-
-
-def gather_deep_context_ast(startpath, context_window=None):
-    """Backward-compatible wrapper delegating to the unified README context pipeline."""
-    return gather_readme_context(startpath, context_window)
-
-
-def _extract_ast_signatures_internal(py_files, startpath, max_chars):
-    """Backward-compatible wrapper for balanced AST signature extraction."""
-    return build_balanced_ast_summary(py_files, startpath, max_chars)
