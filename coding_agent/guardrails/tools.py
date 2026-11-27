@@ -657,11 +657,29 @@ def check_and_handle_identical_write(tool_args, state, agent_flags, content_key)
     return False, False
 
 
+def _normalise_verification_path(filepath, state):
+    if not isinstance(filepath, str) or not filepath.strip():
+        return None
+
+    absolute = (
+        filepath
+        if os.path.isabs(filepath)
+        else os.path.join(state.session_cwd, filepath)
+    )
+    return os.path.normcase(os.path.realpath(absolute))
+
+
 def check_and_handle_loop_guardrail(tool_name, tool_args, state, agent_flags):
     """
     Detects repeated identical calls and alternating read-only tool loops.
     Returns (intercepted: bool, should_break: bool).
     """
+    if tool_name in {"read_file", "read_symbol"}:
+        norm_path = _normalise_verification_path(tool_args.get("filepath"), state)
+        pending = getattr(agent_flags, "post_edit_verification_pending", set())
+        if norm_path and norm_path in pending:
+            return False, False
+
     HARD_LOOP_REPEAT_COUNT = 4
 
     curr_sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"

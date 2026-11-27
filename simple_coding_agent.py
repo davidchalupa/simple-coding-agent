@@ -474,6 +474,18 @@ def main(state, execution_state):
                         tool_result, tool_reinforcement, was_mod = execute_tool(tool_name, tool_args, execution_state.is_split_mode)
                         agent_flags.tool_calls_this_turn += 1
                         agent_flags.file_was_modified = agent_flags.file_was_modified or was_mod
+
+                        if was_mod and tool_name in {"write_file", "append_file", "patch_file", "replace_lines"}:
+                            edited_path = tool_args.get("filepath")
+                            if edited_path:
+                                agent_flags.recent_tool_signatures = [
+                                    sig for sig in agent_flags.recent_tool_signatures
+                                    if not (
+                                            sig.startswith(("read_file:", "read_symbol:"))
+                                            and edited_path in sig
+                                    )
+                                ]
+
                         # Reset awaiting fix flag
                         if tool_name in ["write_file", "append_file", "patch_file", "replace_lines"] and was_mod:
                             agent_flags.awaiting_fix = False

@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from coding_agent.guardrails.tools import (find_last_code_block, looks_like_unapplied_code_change,
-                                           looks_like_memory_regurgitation_on_read_request)
+                                           looks_like_memory_regurgitation_on_read_request, _normalise_verification_path)
 from coding_agent.guardrails.definitions import READ_ONLY_TOOLS, TOOL_FORBIDDEN_FIELDS, TOOL_REQUIRED_FIELDS
 from coding_agent.guardrails.symbol_integrity import detect_partial_symbol_redefinition
 from coding_agent.types import TurnStatus
@@ -36,18 +36,6 @@ def record_recovery_progress(tool_name, tool_result, was_mod, agent_flags) -> bo
     agent_flags.recovery_pending = None
 
     return True
-
-
-def _normalise_verification_path(filepath, state):
-    if not isinstance(filepath, str) or not filepath.strip():
-        return None
-
-    absolute = (
-        filepath
-        if os.path.isabs(filepath)
-        else os.path.join(state.session_cwd, filepath)
-    )
-    return os.path.normcase(os.path.realpath(absolute))
 
 
 def mark_post_edit_verification_required(
