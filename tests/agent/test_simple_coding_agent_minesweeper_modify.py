@@ -178,7 +178,7 @@ def test_agent_minesweeper_modify_only_without_read_symbol():
     )
 
 
-@pytest.mark.skip(reason="Deprecated")
+@pytest.mark.skip(reason="Skipped for efficiency")
 def test_agent_minesweeper_modify_very_detailed():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
@@ -263,7 +263,7 @@ def test_agent_minesweeper_modify_very_detailed():
     )
 
 
-@pytest.mark.skip(reason="Deprecated")
+@pytest.mark.skip(reason="Skipped for efficiency")
 def test_agent_minesweeper_modify_read_function_rewrite_replace_lines():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
@@ -330,7 +330,7 @@ def test_agent_minesweeper_modify_read_function_rewrite_replace_lines():
     )
 
 
-@pytest.mark.skip(reason="Deprecated")
+@pytest.mark.skip(reason="Skipped for efficiency")
 def test_agent_minesweeper_modify_read_full_get_start_end_lines_replace_directly():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"

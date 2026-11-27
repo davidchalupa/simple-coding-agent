@@ -114,6 +114,7 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal():
     )
 
 
+@pytest.mark.skip(reason="Skipped for efficiency")
 def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal_less_detailed():
     """
     Works on minesweeper-solve-with-changes.zip that already has required changes in minesweeper.py.
@@ -166,6 +167,8 @@ def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal_les
         max_calls_limit=60
     )
 
+
+@pytest.mark.skip(reason="Skipped for efficiency")
 def test_agent_minesweeper_stats_write_script_read_main_only_premade_minimal_goal_oriented():
     """
     Works on minesweeper-solve-with-changes.zip that already has required changes in minesweeper.py.

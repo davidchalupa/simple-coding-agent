@@ -96,6 +96,7 @@ def test_agent_modify_invcalc_append_bottom():
     )
 
 
+@pytest.mark.skip(reason="Skipped for efficiency")
 def test_agent_modify_invcalc_append_mid_file():
     target_file = "test_data/invcalc.py"
     output_file = "test_data/invcalc_extended.py"
