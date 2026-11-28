@@ -18,18 +18,20 @@ from coding_agent.types import TurnStatus
 from coding_agent.input_and_macro_handlers import (handle_user_input, handle_macros, handle_ast_extraction_interception,
                                                    handle_sandbox_guardrail)
 
-from coding_agent.guardrails.tools import (check_and_handle_unread_replace_lines, check_and_handle_drastic_shrinkage,
+from coding_agent.guardrails.tools import (check_and_handle_drastic_shrinkage,
                                            check_and_handle_identical_write, check_and_handle_loop_guardrail)
-from coding_agent.guardrails.self_verification import handle_self_verification_and_healing
+from coding_agent.guardrails.verification.self_verification import handle_self_verification_and_healing
 from coding_agent.guardrails.detectors import should_route_to_reasoner
 from coding_agent.guardrail_and_verification_handlers import (handle_automated_follow_up, handle_empty_generation,
                                                               handle_unresolved_verification_alert, handle_unapplied_code_change,
-                                                              validate_tool_call, handle_literal_ellipsis_anchor,
+                                                              handle_literal_ellipsis_anchor,
                                                               handle_content_recovery, handle_memory_regurgitation_on_read,
                                                               manage_tool_response, handle_partial_symbol_replacement,
                                                               record_recovery_progress, handle_pending_post_edit_readback,
                                                               mark_post_edit_verification_required,
                                                               record_post_edit_readback)
+from coding_agent.guardrails.execution_guardrails.schema_validation import validate_tool_call
+from coding_agent.guardrails.execution_guardrails.read_guards import check_and_handle_unread_replace_lines
 
 from cli import parse_cli_arguments
 # the agent currently supports: Qwen2.5-Coder-7B-Instruct-Q4_K_M/Q5_K_M

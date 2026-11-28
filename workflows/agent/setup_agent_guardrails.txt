@@ -1,0 +1,8 @@
+load simple_coding_agent.py into context
+/send
+
+load coding_agent/guardrail_and_verification_handlers.py into context
+/send
+
+load coding_agent/guardrails/definitions.py, coding_agent/guardrails/detectors.py, coding_agent/guardrails/self_verification.py, coding_agent/guardrails/symbol_integrity.py, coding_agent/guardrails/tools.py into context
+/send

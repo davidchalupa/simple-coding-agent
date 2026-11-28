@@ -8,20 +8,11 @@ from common.guardrail_tools import is_pure_load_request, is_pure_load_or_inspect
 from coding_agent.readme_tools.readme_helper import get_repo_structure, gather_readme_context
 from coding_agent.requirements_tools import generate_requirements_native
 
+from coding_agent.guardrails.detectors import is_file_copy_request
+from coding_agent.guardrails.execution_guardrails.read_guards import inject_pure_load_request_nudge, inject_pure_load_or_inspect_request_nudge
 from coding_agent.guardrails.tools import verify_sandbox_health
 from coding_agent.readme_tools import hidden_readme_prompt_builder
 from coding_agent import split_tools
-
-def is_file_copy_request(user_input):
-    """
-    Detects if the user is asking to copy or duplicate a file (e.g., 'copy a.py to b.py').
-    """
-    text = user_input.lower()
-    # Matches patterns like 'copy X to Y', 'duplicate X as Y', 'back up X to Y'
-    copy_keywords = ["copy ", "duplicate ", "backup ", "back up "]
-    has_keyword = any(keyword in text for keyword in copy_keywords)
-    has_target = " to " in text or " as " in text
-    return has_keyword and has_target
 
 
 def handle_user_input(state, user_input, system_prompt):
@@ -45,31 +36,11 @@ def handle_user_input(state, user_input, system_prompt):
 
     # Add nudge for pure load requests
     if is_pure_load_request(user_input):
-        state.messages.append({
-            "role": "user",
-            "content": (
-                f"System Alert: Pure file loading request detected.\n\n"
-                f"User said: '{user_input}'\n\n"
-                "You MUST use `read_file` or `read_symbol` tool to load this content. \n"
-                "- For entire files: Use read_file with filepath and max_lines=-1\n"
-                "- For specific symbols/functions: Use read_symbol with filepath and symbol_name\n"
-                f"\nDO NOT output generic instructions like 'I can help you...' without first making a tool call."
-            )
-        })
+        inject_pure_load_request_nudge(state, user_input)
 
     # Add anti-rewrite nudge for pure inspection / read requests
     if is_pure_load_or_inspect_request(user_input):
-        state.messages.append({
-            "role": "user",
-            "content": (
-                f"System Alert: Read-only inspection request detected.\n\n"
-                f"User said: '{user_input}'\n\n"
-                "You MUST call the requested tool (`read_file` or `read_symbol`) to inspect the target.\n"
-                "CRITICAL: This is a strictly read-only request. Once you receive the tool output, "
-                "acknowledge it with a brief summary or confirmation. **DO NOT** output code blocks, "
-                "unsolicited code rewrites, or refactoring solutions."
-            )
-        })
+        inject_pure_load_or_inspect_request_nudge(state, user_input)
         return False
 
     if is_file_copy_request(user_input):
@@ -88,8 +59,6 @@ def handle_user_input(state, user_input, system_prompt):
             )
         })
         return False
-
-    return False
 
     return False
 

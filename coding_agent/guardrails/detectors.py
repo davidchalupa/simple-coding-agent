@@ -1,6 +1,18 @@
 import re
 
 
+def is_file_copy_request(user_input):
+    """
+    Detects if the user is asking to copy or duplicate a file (e.g., 'copy a.py to b.py').
+    """
+    text = user_input.lower()
+    # Matches patterns like 'copy X to Y', 'duplicate X as Y', 'back up X to Y'
+    copy_keywords = ["copy ", "duplicate ", "backup ", "back up "]
+    has_keyword = any(keyword in text for keyword in copy_keywords)
+    has_target = " to " in text or " as " in text
+    return has_keyword and has_target
+
+
 def should_route_to_reasoner(prompt: str) -> tuple[bool, str]:
     """
     Balanced routing heuristic for the execution agent:

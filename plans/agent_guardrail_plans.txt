@@ -1,0 +1,104 @@
+Based on my analysis of your current codebase, I can see several opportunities for a cleaner structure. Let me propose an organized categorization:
+
+Proposed Guardrail Structure
+1. definitions.py (Keep as-is)
+Tool schema definitions (TOOL_REQUIRED_FIELDS, TOOL_FORBIDDEN_FIELDS)
+Read-only tool categories (READ_ONLY_TOOLS)
+2. routing/detectors.py
+Model routing decisions based on prompt analysis
+
+PYTHON
+Copy
+def should_route_to_reasoner(prompt: str) -> tuple[bool, str]
+Currently in detectors.py - move to subdirectory for clarity
+
+3. execution_guardrails/ (Pre-execution validation)
+Guardrails that run BEFORE a tool is executed:
+
+schema_validation.py
+
+validate_tool_call() - Schema/field validation
+Currently mixed with other handlers in guardrail_and_verification_handlers.py
+read_guards.py
+
+check_and_handle_unread_replace_lines() - Must read file before editing
+looks_like_memory_regurgitation_on_read_request() - Don't recite from memory when user asked to READ
+Currently in tools.py
+4. structural_integrity/ (AST-based structural checks)
+symbol_replacement.py
+
+detect_partial_symbol_redefinition() - Prevent partial symbol overwrites
+Currently in symbol_integrity.py
+file_modification_guards.py
+
+check_and_handle_identical_write() - Block no-op writes
+check_and_handle_drastic_shrinkage() - Block excessive deletions
+check_and_handle_loop_guardrail() - Detect repeated tool calls
+Currently in tools.py
+5. verification/self_verification.py (Post-write verification)
+Runs AFTER a file is written to disk
+
+PYTHON
+Copy
+def handle_self_verification_and_healing(...)
+def run_self_verification(filepath)
+def check_import_resolution()
+def check_callback_arity()
+def check_constant_closures()
+def check_test_coverage_regression()
+def check_return_consistency()
+Currently in self_verification.py - keep but rename to be more explicit
+
+6. recovery/healing/ (Recovery and healing functions)
+auto_heal.py
+
+auto_heal_newline_escaping() - Fix JSON escaping artifacts
+Currently in tools.py
+progress_tracking.py
+
+record_recovery_progress() - Reset error streaks after successful recovery
+mark_post_edit_verification_required() / record_post_edit_readback()
+Currently mixed between multiple files
+7. turn_handlers/ (Turn-level response processing)
+Process LLM responses before/after tool execution within a turn
+
+completion_guards.py
+
+handle_empty_generation() - Catch empty/near-empty generations
+Circuit breaker for repeated failures
+alert_handling.py
+
+handle_unresolved_verification_alert() - Don't complete with unresolved alerts
+handle_unapplied_code_change() - Force tool call when code shown but not applied
+handle_pending_post_edit_readback() - Require read-back after edits
+Currently in guardrail_and_verification_handlers.py
+follow_ups.py
+
+handle_automated_follow_up() - Test file prompts, etc.
+Currently in guardrail_and_verification_handlers.py
+8. tool_response_enhancers/ (Post-tool-response processing)
+Enhances tool results with system notes before showing to agent
+
+reinforcement_messages.py
+
+manage_tool_response() - Add context-aware reminders after tool execution
+Currently in guardrail_and_verification_handlers.py
+9. content_recovery/ (Content recovery utilities)
+PYTHON
+Copy
+def find_last_code_block(messages)
+def handle_content_recovery()
+Currently mixed between tools.py and other files
+
+Summary of Benefits
+Current Issue	Proposed Solution
+Mixed concerns in single file (guardrail_and_verification_handlers.py)	Split by lifecycle stage (pre-execution, verification, recovery)
+Tool-level guardrails mixed with turn handlers	Separate execution_guardrails/ from turn_handlers/
+Recovery logic scattered across files	Consolidate into recovery/healing/
+Unclear ownership of functions	Clear naming: _validation.py, _healing.py, etc.
+Migration Plan (Suggested Order)
+Phase 1: Move definitions and routing to subdirectories
+Phase 2: Split guardrail_and_verification_handlers.py into turn handlers + verification
+Phase 3: Extract execution guardrails from tools.py
+Phase 4: Consolidate recovery logic
+Phase 5: Update imports in simple_coding_agent.py
