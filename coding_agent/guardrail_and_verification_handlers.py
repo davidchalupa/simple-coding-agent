@@ -1,15 +1,14 @@
 import sys
 import os
-import re
 
 from pathlib import Path
 
-from coding_agent.guardrails.tools import (find_last_code_block, looks_like_unapplied_code_change,
-                                           _normalise_verification_path)
-from coding_agent.guardrails.definitions import READ_ONLY_TOOLS, TOOL_FORBIDDEN_FIELDS, TOOL_REQUIRED_FIELDS
-from coding_agent.guardrails.symbol_integrity import detect_partial_symbol_redefinition
+from coding_agent.guardrails.tools import looks_like_unapplied_code_change
+from coding_agent.guardrails.common import normalise_verification_path
+from coding_agent.guardrails.structural_integrity.symbol_replacement import detect_partial_symbol_redefinition
 from coding_agent.guardrails.execution_guardrails.read_guards import looks_like_memory_regurgitation_on_read_request
 from coding_agent.types import TurnStatus
+
 
 def record_recovery_progress(tool_name, tool_result, was_mod, agent_flags) -> bool:
     """Reset the error streak only after a required recovery succeeds."""
@@ -50,7 +49,7 @@ def mark_post_edit_verification_required(
     if tool_name not in modifying_tools or not was_mod:
         return
 
-    filepath = _normalise_verification_path(
+    filepath = normalise_verification_path(
         tool_args.get("filepath"), state
     )
 
@@ -65,7 +64,7 @@ def record_post_edit_readback(
     if tool_name not in {"read_file", "read_symbol"}:
         return None
 
-    filepath = _normalise_verification_path(
+    filepath = normalise_verification_path(
         tool_args.get("filepath"), state
     )
     if not filepath:
@@ -231,37 +230,6 @@ def handle_literal_ellipsis_anchor(tool_name, tool_args, agent_flags, state):
     return TurnStatus.OK
 
 
-def handle_content_recovery(state, agent_flags, tool_args, content_key, tool_name):
-    content_clean = re.sub(r'```[a-zA-Z]*\s*```', '', tool_args.get(content_key, '')).strip()
-
-    if not content_clean:
-        recovered = find_last_code_block(state.messages)
-        is_stale = bool(recovered and agent_flags.last_verification_failure and
-                        agent_flags.last_verification_failure.get("filepath") == tool_args.get("filepath") and
-                        recovered.strip() == agent_flags.last_verification_failure.get("content", "").strip())
-
-        if recovered and recovered.strip() and not is_stale:
-            agent_flags.record_hit("content_recovery", state.track_guardrail_hits)
-            print(f"🔧 [Recovery] Reusing last drafted code block for {tool_name}.")
-            tool_args[content_key] = recovered
-        else:
-            agent_flags.record_hit(
-                "stale_fix_guard" if is_stale else "empty_content_block",
-                state.track_guardrail_hits
-            )
-            msg = (f"System Alert: Blocked empty {tool_name}." if not is_stale else
-                   f"System Alert: Stale-Fix Guard. You provided the SAME failing code again.\n{agent_flags.last_verification_failure.get('error', '')}")
-            msg += f"\nYou MUST provide the corrected code inside a <payload> block. Retry {tool_name}."
-
-            agent_flags.consecutive_errors += 1
-            if agent_flags.consecutive_errors >= 3:
-                print("🛑 [Circuit Breaker] Agent stuck in syntax loop. Forcing exit.")
-                return TurnStatus.END_TURN
-            state.messages.append({"role": "user", "content": msg})
-            return TurnStatus.TRY_AGAIN
-        return TurnStatus.OK
-
-
 def handle_memory_regurgitation_on_read(response_content, state, agent_flags):
     last_user_msg = next(
         (m["content"] for m in reversed(state.messages) if m.get("role") == "user"),
@@ -282,67 +250,6 @@ def handle_memory_regurgitation_on_read(response_content, state, agent_flags):
             "contents yet. Call read_file now to see the real content before saying anything about it."})
         return TurnStatus.TRY_AGAIN
     return TurnStatus.OK
-
-
-def manage_tool_response(tool_name, tool_args, tool_result, agent_flags, state, tool_reinforcement):
-    FAILURE_SIGNALS = ("Traceback", "Error", "FAILED", "SyntaxError", "Exception", "FAIL:")
-
-    if tool_name in READ_ONLY_TOOLS:
-        if agent_flags.awaiting_fix:
-            agent_flags.record_hit("fix_context_reminder", state.track_guardrail_hits)
-            FIX_CONTEXT_REMINDER = (
-                "\n\n[System note: you are still resolving the command failure from earlier in this "
-                "turn. If this read confirmed the cause, apply the fix now with a real "
-                "write_file/patch_file/replace_lines call — target whichever file actually has the "
-                "bug (the source file or a test file you wrote). Then re-run the command to verify.]"
-            )
-            tool_reinforcement += FIX_CONTEXT_REMINDER
-        else:
-            agent_flags.record_hit("inspect_reminder", state.track_guardrail_hits)
-            INSPECT_REMINDER = (
-                "\n\n[System note: the above was a read-only inspection result. Only call "
-                "write_file, append_file, patch_file, or replace_lines if the user explicitly "
-                "asked for a code change in their most recent message. Otherwise, respond now "
-                "in plain text summarizing what you found — do not emit a tool call.]"
-            )
-            tool_reinforcement += INSPECT_REMINDER
-
-    elif tool_name == "run_cmd" and any(sig in str(tool_result) for sig in FAILURE_SIGNALS):
-        agent_flags.record_hit("run_cmd_failure_reminder", state.track_guardrail_hits)
-
-        command_run = tool_args.get("command", "").lower()
-        test_keywords = ["pytest", "unittest", "test.py", "test_"]
-        is_test_run = any(kw in command_run for kw in test_keywords)
-
-        if is_test_run:
-            tool_reinforcement += (
-                "\n\n[System note: The test suite failed. Because you likely just wrote or modified "
-                "this test, the test setup itself is often flawed. Consider these common testing principles:\n"
-                "1. Global Scope: Local variables declared in a test function do not override module-level "
-                "globals in imported files. Override imported module attributes directly (e.g., "
-                "`import target_module; target_module.CONFIG_VAR = test_val`).\n"
-                "2. Determinism: Avoid relying on randomized data generators or dynamic setup functions. "
-                "Hardcode explicit, minimal static fixtures/states so test execution is 100% predictable.\n"
-                "3. State Isolation: Ensure mock objects or test state mutations are completely reset "
-                "between test cases to prevent cascading failures.\n\n"
-                "Do NOT assume the production code is broken. Fix the test file first before modifying production code."
-            )
-        else:
-            tool_reinforcement += (
-                "\n\n[System note: The command failed. If you know the fix, apply it now to the source code."
-            )
-
-        # Enforce direct tool execution regardless of failure type
-        tool_reinforcement += (
-            " Apply the fix with a real write_file/patch_file/replace_lines tool call — do not describe "
-            "the fix in a markdown code block. Do not call run_cmd again until the fix has actually been "
-            "applied via a tool call.]"
-        )
-
-        agent_flags.awaiting_fix = True
-        agent_flags.last_run_cmd_error = tool_result
-
-    return tool_reinforcement
 
 
 def handle_partial_symbol_replacement(tool_name, tool_args, agent_flags, state) -> TurnStatus:

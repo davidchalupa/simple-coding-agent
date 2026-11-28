@@ -1,8 +1,9 @@
 import os
 
-from coding_agent.guardrails.tools import (auto_heal_newline_escaping,run_self_verification,
+from coding_agent.guardrails.tools import (run_self_verification,
                                            check_return_consistency, check_import_resolution, check_callback_arity,
                                            check_constant_closures, check_test_coverage_regression)
+from coding_agent.guardrails.recovery.auto_heal import auto_heal_newline_escaping
 
 
 def handle_self_verification_and_healing(state, tool_name, tool_args, agent_flags,
