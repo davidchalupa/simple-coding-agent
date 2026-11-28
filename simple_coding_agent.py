@@ -97,13 +97,40 @@ state = AgentState(parsed_args)
 execution_state = AgentExecutionState()
 
 
+def switch_model_based_on_recovery(state, switcher, llm, context_window):
+    current_flags = locals().get("agent_flags")
+    current_model_key = locals().get("active_model_key")
+    in_recovery = bool(
+        current_flags
+        and (current_flags.consecutive_errors >= 1 or current_flags.awaiting_fix)
+    )
+
+    if current_model_key:
+        desired_model_key = (
+            state.primary_model_key
+            if in_recovery and current_model_key != state.primary_model_key
+            else current_model_key
+        )
+
+        if desired_model_key != current_model_key:
+            active_model_key = desired_model_key
+            llm, context_window = switcher.load(active_model_key)
+
+            if current_flags:
+                current_flags.record_hit("demoted_reasoner_on_retry", state.track_guardrail_hits)
+
+            print(f"\n💻 [Model Router] Recovery retry -> switched to coder ({switcher.display_name})")
+
+    return llm, context_window
+
+
 def main(state, execution_state):
     if state.light_system_prompt:
         system_prompt = system_prompt_builder_light.build_system_prompt(allow_patch=state.allow_patch)
     else:
         system_prompt = system_prompt_builder.build_system_prompt(allow_patch=state.allow_patch)
 
-    # === Initialize ModelSwitcher ===
+    # Initialize ModelSwitcher
     switcher = ModelSwitcher(state.kv_quantization_type, state.models_dir)
     llm, context_window = switcher.load(state.primary_model_key)
 
@@ -119,24 +146,7 @@ def main(state, execution_state):
     while True:
         # Preventative step: once in a retry/repair state, drop back to the primary
         # coder model so the reasoner doesn't over-elaborate or brute-force fixes.
-        current_flags = locals().get("agent_flags")
-        current_model_key = locals().get("active_model_key")
-        in_recovery = bool(
-            current_flags
-            and (current_flags.consecutive_errors >= 1 or current_flags.awaiting_fix)
-        )
-        if current_model_key:
-            desired_model_key = (
-                state.primary_model_key
-                if in_recovery and current_model_key != state.primary_model_key
-                else current_model_key
-            )
-            if desired_model_key != current_model_key:
-                active_model_key = desired_model_key
-                llm, context_window = switcher.load(active_model_key)
-                if current_flags:
-                    current_flags.record_hit("demoted_reasoner_on_retry", state.track_guardrail_hits)
-                print(f"\n💻 [Model Router] Recovery retry -> switched to coder ({switcher.display_name})")
+        llm, context_window = switch_model_based_on_recovery(state, switcher, llm, context_window)
 
         check_context_guardrail(state.messages, llm, context_window)
 
