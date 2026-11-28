@@ -121,6 +121,7 @@ def test_agent_minesweeper_modify_read_source_file_only():
         agent_output_validator=check_no_regurgitation_and_tool_call,
     )
 
+
 def test_agent_minesweeper_modify_only_with_read_symbol():
     target_file = "minesweeper-solve/minesweeper.py"
     zip_source = "test_data/minesweeper-solve.zip"
@@ -172,6 +173,54 @@ def test_agent_minesweeper_modify_only_without_read_symbol():
         repo_name="",
         target_file_path=target_file,
         expected_file=target_file,
+        check_for_change=True,
+        max_calls_limit=30,
+        custom_file_validator=_validate_run_game_loop,
+    )
+
+
+def test_agent_minesweeper_modify_with_read_symbol_tests_using_ai_and_random_action():
+    target_file = "minesweeper-solve/minesweeper.py"
+    zip_source = "test_data/minesweeper-solve.zip"
+
+    input_queue = [
+        "Use the `read_file` tool to inspect the contents of `minesweeper-solve/minesweeper.py` in full.",
+        "/send",
+
+        "Good. Now call the `read_symbol` tool on `run_game_loop` to find its exact start and end lines.",
+        "/send",
+
+        "Nice. Now I need you to change the `run_game_loop` function so that it returns True if the game was won and False otherwise. "
+        "CRITICAL: use the `replace_lines` tool covering that exact line range to replace the ENTIRE function with your updated implementation. Ensure your indentation matches the original exactly.",
+        "/send",
+
+        "Use the `read_symbol` tool to inspect the `ai_get_action` function of `minesweeper-solve/action_ai_agent.py`.",
+        "/send",
+
+        "Use the `read_symbol` tool to inspect the `random_get_action` function of `minesweeper-solve/action_ai_agent.py`.",
+        "/send",
+
+        "Write a test file `minesweeper-solve/test_run_game_loop.py` using `unittest` that checks if `run_game_loop` returns "
+        "a boolean for win and loss outcomes. "
+        "CRITICAL: make sure that the board_size and mines_count in your test match `minesweeper-solve/minesweeper.py`! "
+        "Do NOT attempt to test the interactive quit ('q') condition. Quit is strictly for human terminal workflows and does not apply to automated AI game loops.\n\n"
+        "HINTS: ",
+        "For the loss test, you must place mines_count mines on the board and use `random_get_action` you have read to lose the game for you. "
+        "For the win test, you must make sure that the board has exactly one mine and use `ai_get_action` to win the game for you.",
+        "/send",
+
+        "Run the new tests using `run_cmd` and fix any errors if they fail. CRITICAL: You must cd to the same directory "
+        "where `minesweeper-solve/minesweeper.py` is, for the imports to resolve correctly (e.g., cd minesweeper-solve && python -m unittest test_run_game_loop.py).",
+        "/send",
+
+        "/quit"
+    ]
+
+    run_automated_coding_task_test(
+        input_queue=input_queue,
+        zip_file_path=zip_source,
+        repo_name="",
+        target_file_path=target_file,
         check_for_change=True,
         max_calls_limit=30,
         custom_file_validator=_validate_run_game_loop,
